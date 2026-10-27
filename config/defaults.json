@@ -3,6 +3,19 @@
     "menubar": false,
     "single_instance": true
   },
+  "audio": {
+    "backend": "auto",
+    "layout": "split",
+    "mic": {
+      "device": "",
+      "enabled": true
+    },
+    "record_dir": "",
+    "system": {
+      "device": "",
+      "enabled": true
+    }
+  },
   "config": {
     "hot_reload": true
   },

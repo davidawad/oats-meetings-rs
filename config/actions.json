@@ -123,25 +123,43 @@
       "status": "implemented"
     },
     {
-      "doc": "Start recording a session.",
-      "effect": "control",
-      "name": "record-start",
+      "doc": "List audio capture devices (loopback and mic) for the selected backend.",
+      "effect": "read",
+      "name": "devices-list",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Stop recording.",
+      "doc": "Start recording a session (system loopback + mic to one WAV).",
+      "effect": "control",
+      "name": "record-start",
+      "params": [
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Stop recording and save the session.",
       "effect": "control",
       "name": "record-stop",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Pause or resume recording.",
       "effect": "control",
       "name": "record-pause",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "List sessions.",
@@ -151,7 +169,7 @@
       "status": "planned"
     },
     {
-      "doc": "One session.",
+      "doc": "One session with its metadata and duration.",
       "effect": "read",
       "name": "session-get",
       "params": [
@@ -161,7 +179,7 @@
           "type": "String"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Rename a session.",
@@ -294,6 +312,8 @@
     "window-changed",
     "config-reloaded",
     "recording-started",
+    "recording-paused",
+    "recording-stopped",
     "segment",
     "session-saved",
     "quit"
