@@ -16,6 +16,8 @@ bash ci/icons.sh
 for p in cargo-xwin llvmPackages.lld llvmPackages.llvm msitools; do PATH="$(nixp "$p")/bin:$PATH"; done
 export PATH
 rustup target add x86_64-pc-windows-msvc
+# Static CRT: the exe must not need the VC++ redistributable (absent on a fresh Windows).
+export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static"
 export XWIN_ACCEPT_LICENSE=1 XWIN_CACHE_DIR="${XWIN_CACHE_DIR:-$HOME/.xwin-cache}"
 case "$variant" in
   headless)
@@ -36,6 +38,8 @@ llvm-readobj --file-headers dist/oats-meetings-rs.exe | grep -E "Machine|Subsyst
 # icon resource present in the PE: a .rsrc section exists and holds RT_GROUP_ICON/RT_ICON entries
 llvm-objdump -h dist/oats-meetings-rs.exe | grep -E '\.rsrc'
 llvm-readobj --coff-resources dist/oats-meetings-rs.exe | grep -E 'ICON|VERSION' || true
+imports=$(llvm-readobj --coff-imports dist/oats-meetings-rs.exe | grep -i "Name:" | sort -u); echo "$imports"
+if grep -qi -E "vcruntime|msvcp|ucrtbase" <<< "$imports"; then echo "exe imports a CRT DLL" >&2; exit 1; fi
 ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 msi="dist/oats-meetings-rs-$ver-x64.msi"
 OATS_VERSION="$ver" OATS_EXE="$PWD/dist/oats-meetings-rs.exe" OATS_ICO="$PWD/assets/icon/derived/oats-meetings-rs.ico" \
