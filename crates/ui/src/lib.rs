@@ -1,6 +1,6 @@
 //! GPUI front end (viewer). Hello window only in the skeleton.
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, SharedString, Window,
+    div, prelude::*, px, rgb, size, App, Bounds, Context, SharedString, Window,
     WindowBounds, WindowOptions,
 };
 
@@ -23,7 +23,7 @@ impl Render for Hello {
 }
 
 pub fn run_hello() {
-    Application::new().run(|cx: &mut App| {
+    gpui_platform::application().run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(480.), px(240.)), cx);
         cx.open_window(
             WindowOptions {
