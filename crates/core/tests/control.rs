@@ -20,6 +20,7 @@ struct Rig {
     _dir: tempfile::TempDir,
     rt: PathBuf,
     cfg: PathBuf,
+    sessions: PathBuf,
     handle: Option<server::ServerHandle>,
 }
 
@@ -42,10 +43,12 @@ impl Rig {
             os: "linux".into(),
             arch: "x86_64".into(),
             machine: "default".into(),
+            sessions_dir: dir.path().join("sessions"),
         })
         .unwrap();
         let handle = server::serve_with_poll(engine, &rt, Duration::from_millis(40)).unwrap();
-        Rig { _dir: dir, rt, cfg, handle: Some(handle) }
+        let sessions = dir.path().join("sessions");
+        Rig { _dir: dir, rt, cfg, sessions, handle: Some(handle) }
     }
 
     fn client(&self) -> Client {
@@ -348,6 +351,7 @@ fn single_instance_lock() {
         os: "linux".into(),
         arch: "x86_64".into(),
         machine: "default".into(),
+        sessions_dir: rig.cfg.parent().unwrap().join("sessions"),
     })
     .unwrap();
     let e = server::serve(engine2.clone(), &rig.rt).err().expect("second engine refused");
@@ -365,4 +369,102 @@ fn quit_stops_the_engine_and_removes_the_socket() {
     assert_eq!(c.call("quit", Map::new()).unwrap()["data"]["stopping"], true);
     rig.handle.take().unwrap().wait();
     assert!(Client::connect(&rig.rt).is_err());
+}
+
+fn fixture() -> String {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/openoats").to_string()
+}
+
+fn session_ids(c: &mut Client) -> Vec<String> {
+    let r = c.call("session-list", Map::new()).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    r["data"]["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn session_import_then_list_equals_fixture_ids_over_the_api() {
+    let rig = Rig::new();
+    let mut c = rig.client();
+    assert_eq!(session_ids(&mut c), Vec::<String>::new());
+    let r = c.call("session-import", p(&[("from", json!(fixture()))])).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(session_ids(&mut c), vec!["session_2026-10-20_09-00-00", "session_2026-10-21_15-00-00"]);
+    // The store on disk is the OpenOats layout.
+    assert!(rig.sessions.join("session_2026-10-20_09-00-00/session.json").is_file());
+    let r = c.call("session-get", p(&[("session", json!("session_2026-10-20_09-00-00"))])).unwrap();
+    assert_eq!(r["data"]["title"], "Acme sync");
+    let r = c.call("transcript-get", p(&[("session", json!("session_2026-10-21_15-00-00"))])).unwrap();
+    assert_eq!(r["data"]["source"], "live");
+}
+
+#[test]
+fn session_edit_actions_publish_events_and_delete_needs_confirm() {
+    let rig = Rig::new();
+    let mut c = rig.client();
+    c.call("session-import", p(&[("from", json!(fixture()))])).unwrap();
+    let mut sub = rig.client();
+    sub.call("subscribe", p(&[("topics", json!(["session-saved", "session-deleted"]))])).unwrap();
+    let rx = events(sub);
+    let id = "session_2026-10-20_09-00-00";
+    let r = c.call("session-rename", p(&[("session", json!(id)), ("name", json!("Renamed"))])).unwrap();
+    assert_eq!(r["data"]["title"], "Renamed");
+    let r = c.call("session-tag", p(&[("session", json!(id)), ("tag", json!("sales"))])).unwrap();
+    assert_eq!(r["data"]["tags"], json!(["sales"]));
+    let r = c.call("session-tag", p(&[("session", json!(id)), ("tag", json!("sales")), ("remove", json!(true))])).unwrap();
+    assert_eq!(r["data"]["tags"], json!([]));
+    for change in ["rename", "tag", "tag"] {
+        let ev = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!((ev["event"].as_str(), ev["data"]["change"].as_str()), (Some("session-saved"), Some(change)));
+    }
+    // Default (sessions.confirm_delete = true): refused without confirm, nothing deleted.
+    let r = c.call("session-delete", p(&[("session", json!(id))])).unwrap();
+    assert_eq!(r["error"]["code"], "confirmation_required");
+    let r = c.call("session-delete", p(&[("session", json!(id)), ("confirm", json!(false))])).unwrap();
+    assert_eq!(r["error"]["code"], "confirmation_required");
+    assert_eq!(session_ids(&mut c).len(), 2);
+    let r = c.call("session-delete", p(&[("session", json!(id)), ("confirm", json!(true))])).unwrap();
+    assert_eq!(r["ok"], true);
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap()["event"], "session-deleted");
+    assert_eq!(session_ids(&mut c), vec!["session_2026-10-21_15-00-00"]);
+    let r = c.call("session-get", p(&[("session", json!(id))])).unwrap();
+    assert_eq!(r["error"]["code"], "not_found");
+}
+
+#[test]
+fn sessions_confirm_delete_off_allows_delete_without_confirm() {
+    let rig = Rig::with_config(Some("[sessions]\nconfirm_delete = false\n"));
+    let mut c = rig.client();
+    c.call("session-import", p(&[("from", json!(fixture()))])).unwrap();
+    let r = c.call("session-delete", p(&[("session", json!("session_2026-10-20_09-00-00"))])).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(session_ids(&mut c).len(), 1);
+}
+
+#[test]
+fn sessions_root_config_key_moves_the_store() {
+    let other = tempfile::tempdir().unwrap();
+    let toml = format!("[sessions]\nroot = {:?}\n", other.path().join("elsewhere").to_str().unwrap());
+    let rig = Rig::with_config(Some(&toml));
+    let mut c = rig.client();
+    c.call("session-import", p(&[("from", json!(fixture()))])).unwrap();
+    assert!(other.path().join("elsewhere/session_2026-10-20_09-00-00/session.json").is_file());
+    assert!(!rig.sessions.exists());
+}
+
+#[test]
+fn config_set_keeps_user_comments_and_layout() {
+    let original = "# my settings\n[app]\nmenubar = false # tray later\n\n# models\n[stt.local]\nmodel = \"base.en\"\n";
+    let rig = Rig::with_config(Some(original));
+    let mut c = rig.client();
+    let r = c.call("config-set", p(&[("key", json!("app.menubar")), ("value", json!(true))])).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    let r = c.call("config-set", p(&[("key", json!("privacy.hide_method")), ("value", json!("none"))])).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    let text = std::fs::read_to_string(&rig.cfg).unwrap();
+    assert!(text.contains("# my settings"), "{text}");
+    assert!(text.contains("menubar = true # tray later"), "{text}");
+    assert!(text.contains("# models\n[stt.local]"), "{text}");
+    assert!(text.contains("model = \"base.en\""), "{text}");
+    assert!(text.contains("hide_method = \"none\""), "{text}");
+    assert!(!text.contains("[privacy]\n[privacy]"), "{text}");
 }

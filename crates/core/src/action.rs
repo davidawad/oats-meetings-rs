@@ -54,15 +54,16 @@ actions! {
     WindowHide, "window-hide", "Hide the main window.", "implemented", "control", {};
     WindowToggle, "window-toggle", "Toggle the main window.", "implemented", "control", {};
     PrivacyToggle, "privacy-toggle", "Toggle hiding the window from screen capture.", "implemented", "write", {};
+    SessionImport, "session-import", "Import sessions from an OpenOats sessions root or one session dir.", "implemented", "write", { from: String, overwrite: Option<bool> };
     RecordStart, "record-start", "Start recording a session.", "planned", "control", {};
     RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
     RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};
-    SessionList, "session-list", "List sessions.", "planned", "read", {};
-    SessionGet, "session-get", "One session.", "planned", "read", { session: String };
-    SessionRename, "session-rename", "Rename a session.", "planned", "write", { session: String, name: String };
-    SessionTag, "session-tag", "Tag a session.", "planned", "write", { session: String, tag: String };
-    SessionDelete, "session-delete", "Delete a session; needs confirm.", "planned", "write", { session: String, confirm: Option<bool> };
-    TranscriptGet, "transcript-get", "A session transcript.", "planned", "read", { session: String };
+    SessionList, "session-list", "List sessions, optionally in a time window (RFC 3339).", "implemented", "read", { from: Option<String>, to: Option<String> };
+    SessionGet, "session-get", "One session with its metadata.", "implemented", "read", { session: String };
+    SessionRename, "session-rename", "Rename (retitle) a session.", "implemented", "write", { session: String, name: String };
+    SessionTag, "session-tag", "Add a tag to a session, or remove it with remove=true.", "implemented", "write", { session: String, tag: String, remove: Option<bool> };
+    SessionDelete, "session-delete", "Delete a session; needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: String, confirm: Option<bool> };
+    TranscriptGet, "transcript-get", "A session transcript (final, else live).", "implemented", "read", { session: String };
     TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
     NotesGenerate, "notes-generate", "Generate notes from a template.", "planned", "write", { session: String, template: String };
     TemplateList, "template-list", "List note templates.", "planned", "read", {};
@@ -77,6 +78,7 @@ pub const EVENTS: &[&str] = &[
     "recording-started",
     "segment",
     "session-saved",
+    "session-deleted",
     "quit",
 ];
 

@@ -38,7 +38,28 @@ fn param_type(wire: &str, param: &str) -> &'static str {
         .unwrap_or("String")
 }
 
+/// Parameters of type Option<bool> across all actions: `--confirm` alone means true.
+fn is_bool_flag(name: &str) -> bool {
+    SPECS
+        .iter()
+        .any(|s| s.4.iter().any(|p| p.0 == name && p.1.replace(' ', "") == "Option<bool>"))
+}
+
+/// The engine is a different process with a different cwd: send absolute paths.
+fn absolutize(raw: &str) -> String {
+    let p = std::path::Path::new(raw);
+    if p.is_absolute() {
+        return raw.to_string();
+    }
+    std::env::current_dir()
+        .map(|d| d.join(p).to_string_lossy().into_owned())
+        .unwrap_or_else(|_| raw.to_string())
+}
+
 fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
+    if wire == "session-import" && param == "from" {
+        return Value::String(absolutize(raw));
+    }
     let t = param_type(wire, param).replace(' ', "");
     if t == "String" || t == "Option<String>" {
         return Value::String(raw.to_string());
@@ -70,6 +91,16 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                     "--timeout-ms" => timeout_ms = v.parse().unwrap_or(timeout_ms),
                     _ => topics.push(v.clone()),
                 }
+            }
+            f if f.starts_with("--") && is_bool_flag(f.trim_start_matches("--")) => {
+                let v = match args.get(i + 1).map(String::as_str) {
+                    Some(b @ ("true" | "false")) => {
+                        i += 1;
+                        b.to_string()
+                    }
+                    _ => "true".to_string(),
+                };
+                flags.push((f.trim_start_matches("--").to_string(), v));
             }
             f if f.starts_with("--") => {
                 i += 1;
@@ -223,6 +254,21 @@ mod tests {
         assert_eq!(p.params["value"], json!(123));
         let p = parse(&s(&["session", "get", "42"])).unwrap();
         assert_eq!(p.params["session"], json!("42"));
+    }
+
+    #[test]
+    fn bool_flags_and_absolute_import_path() {
+        let p = parse(&s(&["session", "delete", "abc", "--confirm"])).unwrap();
+        assert_eq!(p.action, "session-delete");
+        assert_eq!(p.params["session"], json!("abc"));
+        assert_eq!(p.params["confirm"], json!(true));
+        let p = parse(&s(&["session", "delete", "--confirm", "false", "abc"])).unwrap();
+        assert_eq!(p.params["confirm"], json!(false));
+        assert_eq!(p.params["session"], json!("abc"));
+        let p = parse(&s(&["session", "import", "--from", "rel/dir"])).unwrap();
+        assert!(std::path::Path::new(p.params["from"].as_str().unwrap()).is_absolute());
+        let p = parse(&s(&["session", "tag", "abc", "t", "--remove"])).unwrap();
+        assert_eq!(p.params["remove"], json!(true));
     }
 
     #[test]

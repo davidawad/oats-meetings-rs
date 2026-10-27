@@ -12,6 +12,7 @@ use crate::action::{self, Action};
 use crate::config::keys::{self, Kind};
 use crate::config::resolve::{self, Flat, Inputs, Resolved};
 use crate::config::{cli, ConfigError, Result, SCHEMA_VERSION};
+use crate::sessions::Store;
 
 use super::bus::Bus;
 
@@ -22,6 +23,8 @@ pub struct EngineOpts {
     pub os: String,
     pub arch: String,
     pub machine: String,
+    /// Used when `sessions.root` is empty.
+    pub sessions_dir: PathBuf,
 }
 
 type Stamp = Option<(SystemTime, u64)>;
@@ -53,7 +56,63 @@ fn read_user(path: &std::path::Path) -> Result<Option<String>> {
     }
 }
 
+/// Set `key` (dotted) in a TOML document, keeping every comment and the layout around it.
+fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Result<()> {
+    use toml_edit::{Item, Table, TableLike};
+    let new_val: toml_edit::Value = match value {
+        Value::Bool(b) => (*b).into(),
+        Value::String(s) => s.as_str().into(),
+        other => {
+            return Err(ConfigError::new("type_mismatch", format!("cannot store {other} in TOML")))
+        }
+    };
+    let parts: Vec<&str> = key.split('.').collect();
+    let (leaf, parents) = parts.split_last().expect("non-empty key");
+    let mut cur: &mut dyn TableLike = doc.as_table_mut();
+    for part in parents {
+        if !cur.contains_key(part) {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            cur.insert(part, Item::Table(t));
+        }
+        cur = cur
+            .get_mut(part)
+            .and_then(Item::as_table_like_mut)
+            .ok_or_else(|| ConfigError::new("type_mismatch", format!("'{part}' in user config is not a table")))?;
+    }
+    match cur.get_mut(leaf) {
+        Some(Item::Value(old)) => {
+            let mut nv = new_val;
+            *nv.decor_mut() = old.decor().clone();
+            *old = nv;
+        }
+        _ => {
+            cur.insert(leaf, Item::Value(new_val));
+        }
+    }
+    Ok(())
+}
+
 impl Engine {
+    fn store(&self) -> Store {
+        let root = match self.state.read().expect("state").resolved.flat.get("sessions.root") {
+            Some(Value::String(s)) if !s.is_empty() => PathBuf::from(s),
+            _ => self.opts.sessions_dir.clone(),
+        };
+        Store::new(root)
+    }
+
+    fn confirm_delete(&self) -> bool {
+        !matches!(
+            self.state.read().expect("state").resolved.flat.get("sessions.confirm_delete"),
+            Some(Value::Bool(false))
+        )
+    }
+
+    fn session_event(&self, id: &str, change: &str) {
+        self.bus.publish("session-saved", json!({"id": id, "change": change}));
+    }
+
     pub fn new(opts: EngineOpts) -> Result<Arc<Engine>> {
         let text = read_user(&opts.user_config)?;
         let resolved = Self::resolve_with(&opts, text.as_deref())?;
@@ -79,6 +138,7 @@ impl Engine {
             os,
             arch,
             machine,
+            sessions_dir: crate::sessions::default_sessions_dir(env),
         })
     }
 
@@ -168,23 +228,11 @@ impl Engine {
         let value = Self::coerce(key, value)?;
         let _g = self.write_lock.lock().expect("write lock");
         let text = read_user(&self.opts.user_config)?.unwrap_or_default();
-        let mut table: toml::Table = toml::from_str(&text)
+        let mut doc: toml_edit::DocumentMut = text
+            .parse()
             .map_err(|e| ConfigError::new("parse_error", format!("user config: {e}")))?;
-        let tv: toml::Value = serde_json::from_value(value.clone())
-            .map_err(|e| ConfigError::new("type_mismatch", e.to_string()))?;
-        let parts: Vec<&str> = key.split('.').collect();
-        let mut cur = &mut table;
-        for part in &parts[..parts.len() - 1] {
-            let next = cur
-                .entry((*part).to_string())
-                .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-            cur = next.as_table_mut().ok_or_else(|| {
-                ConfigError::new("type_mismatch", format!("'{part}' in user config is not a table"))
-            })?;
-        }
-        cur.insert(parts[parts.len() - 1].to_string(), tv);
-        let new_text = toml::to_string(&table)
-            .map_err(|e| ConfigError::new("parse_error", e.to_string()))?;
+        set_in_doc(&mut doc, key, &value)?;
+        let new_text = doc.to_string();
         let resolved = Self::resolve_with(&self.opts, Some(&new_text))?;
         if let Some(dir) = self.opts.user_config.parent() {
             std::fs::create_dir_all(dir)
@@ -263,6 +311,37 @@ impl Engine {
             Action::PrivacyToggle {} => {
                 let cur = matches!(self.get("privacy.hide_from_capture")?, Value::Bool(true));
                 self.set("privacy.hide_from_capture", &Value::Bool(!cur), "privacy-toggle")
+            }
+            Action::SessionList { from, to } => self.store().list(from.as_deref(), to.as_deref()),
+            Action::SessionGet { session } => self.store().get(session),
+            Action::TranscriptGet { session } => self.store().transcript(session),
+            Action::SessionRename { session, name } => {
+                let v = self.store().rename(session, name)?;
+                self.session_event(session, "rename");
+                Ok(v)
+            }
+            Action::SessionTag { session, tag, remove } => {
+                let v = self.store().tag(session, tag, remove.unwrap_or(false))?;
+                self.session_event(session, "tag");
+                Ok(v)
+            }
+            Action::SessionDelete { session, confirm } => {
+                if self.confirm_delete() && *confirm != Some(true) {
+                    return Err(ConfigError::new(
+                        "confirmation_required",
+                        "deleting a session needs confirm=true (--confirm); sessions.confirm_delete is on",
+                    ));
+                }
+                let v = self.store().delete(session)?;
+                self.bus.publish("session-deleted", json!({"id": session}));
+                Ok(v)
+            }
+            Action::SessionImport { from, overwrite } => {
+                let v = self.store().import(std::path::Path::new(from), overwrite.unwrap_or(false))?;
+                for id in v["imported"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    self.session_event(id, "import");
+                }
+                Ok(v)
             }
             other => {
                 let name = serde_json::to_value(other)
