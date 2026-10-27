@@ -19,6 +19,7 @@ echo "OATS_VM kvm=$([ -e /dev/kvm ] && echo yes || echo no) cpus=$(nproc)"
 TASK=${TASK:-version}
 # 1. the payload exe, built without wine
 if [ "$TASK" = shaders ]; then
+  cargo fetch --locked
   bash ci/windows-shaders-build.sh
   exe=$PWD/dist/oats-shadergen.exe
   hlsl_dir=$(dirname "$(find "${CARGO_HOME:-/usr/local/cargo}" "$HOME/.cargo" -path '*gpui_windows/src/shaders.hlsl' 2> /dev/null | head -1)")
