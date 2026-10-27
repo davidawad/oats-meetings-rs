@@ -2,7 +2,7 @@
 //! `Recorder` that mixes a system-loopback channel and a mic channel into one WAV.
 //!
 //! Backends: `pulse` (Pulse or PipeWire's pulse server: `pactl` + `parec`), `pipewire` (`pw-dump` +
-//! `pw-record`), `cpal` (WASAPI loopback + mic on Windows; ALSA on Linux). macOS is dot-4uzgol.6.
+//! `pw-record`), `cpal` (WASAPI loopback + mic, Windows only). macOS is dot-4uzgol.6.
 //! All backends deliver mono f32 at the recorder's sample rate through a callback.
 
 pub mod backend;

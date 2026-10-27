@@ -73,7 +73,7 @@ pub fn select_for(
         (BackendChoice::Pulse, _) => unsupported("pulse"),
         (BackendChoice::Pipewire, "linux") => Ok(Box::new(crate::pipewire::PipewireBackend::new())),
         (BackendChoice::Pipewire, _) => unsupported("pipewire"),
-        (BackendChoice::Cpal, "linux" | "windows") => cpal_boxed(),
+        (BackendChoice::Cpal, "windows") => cpal_boxed(),
         (BackendChoice::Cpal, _) => unsupported("cpal"),
         (BackendChoice::Auto, "windows") => cpal_boxed(),
         (BackendChoice::Auto, "linux") => {
@@ -82,21 +82,24 @@ pub fn select_for(
             } else if probe("pw-dump", "--version") {
                 Ok(Box::new(crate::pipewire::PipewireBackend::new()))
             } else {
-                cpal_boxed()
+                Err(AudioError::new(
+                    "tool_missing",
+                    "no audio server tools on PATH: install pulseaudio-utils (pactl, parec) or pipewire (pw-dump, pw-record)",
+                ))
             }
         }
         (BackendChoice::Auto, _) => unsupported("auto"),
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(windows)]
 fn cpal_boxed() -> Result<Box<dyn CaptureBackend>> {
     Ok(Box::new(crate::cpal_backend::CpalBackend::new()))
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(windows))]
 fn cpal_boxed() -> Result<Box<dyn CaptureBackend>> {
-    Err(AudioError::new("unsupported_platform", "cpal backend is built on Linux and Windows only"))
+    Err(AudioError::new("unsupported_platform", "cpal (WASAPI) backend is built on Windows only"))
 }
 
 #[cfg(test)]
@@ -123,10 +126,13 @@ mod tests {
         }
         assert_eq!(name(select_for(BackendChoice::Auto, "linux", &all)), "pulse");
         assert_eq!(name(select_for(BackendChoice::Auto, "linux", &only_pw)), "pipewire");
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &none)), "cpal");
+        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &none)), "tool_missing");
+        assert_eq!(name(select_for(BackendChoice::Cpal, "linux", &all)), "unsupported_platform");
+        #[cfg(windows)]
         assert_eq!(name(select_for(BackendChoice::Auto, "windows", &none)), "cpal");
         assert_eq!(name(select_for(BackendChoice::Pulse, "linux", &none)), "pulse");
         assert_eq!(name(select_for(BackendChoice::Pipewire, "linux", &none)), "pipewire");
+        #[cfg(windows)]
         assert_eq!(name(select_for(BackendChoice::Cpal, "windows", &none)), "cpal");
         assert_eq!(name(select_for(BackendChoice::Pulse, "windows", &all)), "unsupported_platform");
         assert_eq!(name(select_for(BackendChoice::Pipewire, "windows", &all)), "unsupported_platform");

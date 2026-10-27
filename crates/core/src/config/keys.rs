@@ -62,7 +62,7 @@ pub const KEYS: &[Key] = &[
         path: "audio.backend",
         kind: Kind::Enum(AUDIO_BACKENDS),
         default: Def::S("auto"),
-        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire, else cpal; Windows: cpal/WASAPI).",
+        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).",
         ui: true,
     },
     Key {

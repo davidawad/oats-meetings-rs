@@ -1,10 +1,11 @@
 //! cpal: WASAPI on Windows (a loopback is an output device opened as an input stream, which
-//! cpal's WASAPI host turns into a loopback capture; the mic is an input device) and ALSA on Linux
-//! (inputs only; an input whose name says monitor/loopback is listed as a loopback).
+//! cpal's WASAPI host turns into a loopback capture; the mic is an input device). Windows only:
+//! on Linux cpal means ALSA, and linking nix's libasound into the binary pulls a second glibc into
+//! the pod build (symbol lookup error at run time), while the pulse and pipewire backends cover Linux.
 //!
 //! The cpal stream is not `Send`, so it lives on its own thread until stopped.
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(windows)]
 mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
@@ -213,5 +214,5 @@ mod imp {
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(windows)]
 pub use imp::CpalBackend;
