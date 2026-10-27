@@ -41,7 +41,8 @@ CTL
 deb="dist/oats-meetings-rs_${ver}_${debarch}.deb"
 dpkg-deb --root-owner-group --build "$d" "$deb"
 dpkg-deb -f "$deb"
-dpkg-deb -c "$deb" | grep -q 'usr/share/icons/hicolor/256x256/apps/oats-meetings-rs.png'
+listing=$(dpkg-deb -c "$deb"); echo "$listing"
+grep -q 'usr/share/icons/hicolor/256x256/apps/oats-meetings-rs.png' <<< "$listing"
 dpkg-deb -x "$deb" "$d.x"
 grep -q '^Icon=oats-meetings-rs$' "$d.x/usr/share/applications/oats-meetings-rs.desktop"
 
@@ -65,6 +66,6 @@ img="dist/oats-meetings-rs-$(uname -m).AppImage"
 cat "$rt" "$a.sqfs" > "$img"; chmod +x "$img"
 # Proof: the squashfs unpacks and carries the desktop file and icon.
 off=$(stat -c %s "$rt")
-unsquashfs -o "$off" -l "$img" | grep -E 'oats-meetings-rs\.(desktop|png)$'
-unsquashfs -o "$off" -cat "$img" oats-meetings-rs.desktop | grep -q '^Icon=oats-meetings-rs$'
+sqlist=$(unsquashfs -o "$off" -l "$img"); grep -E 'oats-meetings-rs\.(desktop|png)$' <<< "$sqlist"
+dtop=$(unsquashfs -o "$off" -cat "$img" oats-meetings-rs.desktop); grep -q '^Icon=oats-meetings-rs$' <<< "$dtop"
 (cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS)
