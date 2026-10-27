@@ -1,38 +1,26 @@
 # Free shared Linux runners only. macOS/Windows real builds are manual and need paid runners:
-# do not enable without David.
+# do not enable without David. macOS cross-check cannot run off-macOS (dot-4uzgol.15 owns macOS).
 stages: [check, build]
 
-.rust: &rust
-  image: rust:latest
-  variables: {CARGO_HOME: "$CI_PROJECT_DIR/.cargo", CARGO_NET_GIT_FETCH_WITH_CLI: "true"}
-  cache: {key: "$CI_JOB_NAME", paths: [.cargo, target]}
-
-.gui-deps: &gui-deps
+.nix: &nix
+  # nixos/nix pinned by digest (2.31.3); system libs come from the pinned nixpkgs in ci/linux-nix.sh.
+  image: nixos/nix@sha256:d49538facc7757890eccfa5f57869ad18c823c24903e3b8ac6ca8a301d84a9b6
+  variables: {CARGO_NET_GIT_FETCH_WITH_CLI: "true"}
   before_script:
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends clang cmake pkg-config libxkbcommon-x11-dev libxkbcommon-dev libwayland-dev libxcb1-dev libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan-dev libasound2-dev libssl-dev libzstd-dev
+    - nix-env -iA nixpkgs.git nixpkgs.bash nixpkgs.coreutils || true
 
 linux-build:
-  <<: *rust
+  <<: *nix
   stage: build
   script:
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends curl xz-utils
-    - bash ci/linux-nix.sh   # needs nix on the runner; see script
+    - bash ci/linux-nix.sh
 
-linux-headless:
-  <<: *rust
+windows-check:
+  <<: *nix
   stage: check
+  variables: {CROSS_TARGET: x86_64-pc-windows-msvc}
   script:
-    - cargo build -p oats-meetings-rs --no-default-features
-    - cargo run -q --no-default-features -- --headless --version
-
-cross-check:
-  <<: [*rust, *gui-deps]
-  stage: check
-  parallel: {matrix: [{TARGET: [x86_64-pc-windows-gnu, aarch64-apple-darwin]}]}
-  script:
-    - rustup target add $TARGET
-    - cargo check --workspace --target $TARGET
-  allow_failure: true
+    - bash ci/linux-nix.sh
 
 macos-build:
   stage: build

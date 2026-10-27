@@ -6,6 +6,16 @@ NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
 nixf=(--extra-experimental-features "nix-command flakes")
 pkgs=(llvmPackages.llvm libxkbcommon wayland libxcb libx11 fontconfig freetype vulkan-loader alsa-lib openssl zstd pkg-config cmake zlib bzip2 libpng brotli expat libxau libxdmcp xorgproto libxkbcommon libxcb)
 paths=""
+# Bare nix images (nixos/nix) have no Rust or C toolchain: provide them. Pods already have both.
+if ! command -v cc > /dev/null; then
+  gcc_out=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#gcc" | head -1)
+  export PATH="$gcc_out/bin:$PATH"
+fi
+if ! command -v cargo > /dev/null; then
+  rustup_out=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#rustup" | head -1)
+  export PATH="$rustup_out/bin:$PATH"
+  rustup toolchain install stable --profile minimal
+fi
 pc=""
 ld=""
 roots=""
