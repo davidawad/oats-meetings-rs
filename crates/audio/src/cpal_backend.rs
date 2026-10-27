@@ -12,7 +12,7 @@ mod imp {
     use std::time::Duration;
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
+    use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 
     use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
     use crate::error::{AudioError, Result};
@@ -53,14 +53,14 @@ mod imp {
         for d in host.input_devices().map_err(|e| err("backend_unavailable", "cpal inputs", e))? {
             let Ok(name) = d.name() else { continue };
             let kind = if is_loopback_name(&name) { DeviceKind::Loopback } else { DeviceKind::Mic };
-            let default = kind == DeviceKind::Mic && default_in.as_deref() == Some(&name);
+            let default = kind == DeviceKind::Mic && default_in.as_deref() == Some(name.as_str());
             v.push((DeviceInfo { id: format!("{IN}{name}"), name, kind, backend: "cpal", default }, false));
         }
         if cfg!(windows) {
             let default_out = host.default_output_device().and_then(|d| d.name().ok());
             for d in host.output_devices().map_err(|e| err("backend_unavailable", "cpal outputs", e))? {
                 let Ok(name) = d.name() else { continue };
-                let default = default_out.as_deref() == Some(&name);
+                let default = default_out.as_deref() == Some(name.as_str());
                 v.push((
                     DeviceInfo { id: format!("{OUT}{name}"), name, kind: DeviceKind::Loopback, backend: "cpal", default },
                     true,
@@ -152,13 +152,13 @@ mod imp {
             let th = std::thread::spawn(move || {
                 let started = (|| -> Result<cpal::Stream> {
                     let host = cpal::default_host();
-                    let dev = if is_output {
-                        host.output_devices().map_err(|e| err("backend_unavailable", "cpal outputs", e))?.find(|d| d.name().ok().as_deref() == Some(&name))
+                    let found = if is_output {
+                        host.output_devices().map_err(|e| err("backend_unavailable", "cpal outputs", e))?.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
                     } else {
-                        host.input_devices().map_err(|e| err("backend_unavailable", "cpal inputs", e))?.find(|d| d.name().ok().as_deref() == Some(&name))
-                    }
-                    .ok_or_else(|| AudioError::new("device_not_found", format!("cpal device '{name}' vanished")))?;
-                    let supported = if is_output { dev.default_output_config() } else { dev.default_input_config() }
+                        host.input_devices().map_err(|e| err("backend_unavailable", "cpal inputs", e))?.find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                    };
+                    let dev = found.ok_or_else(|| AudioError::new("device_not_found", format!("cpal device '{name}' vanished")))?;
+                    let supported = (if is_output { dev.default_output_config() } else { dev.default_input_config() })
                         .map_err(|e| err("capture_failed", &name, e))?;
                     let fmt = supported.sample_format();
                     let cfg: StreamConfig = supported.into();

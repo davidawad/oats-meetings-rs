@@ -52,8 +52,8 @@ pub fn parse_dump(json: &str) -> Result<Vec<DeviceInfo>> {
             let name = p["node.name"].as_str()?.to_string();
             let class = p["media.class"].as_str()?;
             let (kind, default) = match class {
-                "Audio/Sink" => (DeviceKind::Loopback, dsink.as_deref() == Some(&name)),
-                "Audio/Source" => (DeviceKind::Mic, dsource.as_deref() == Some(&name)),
+                "Audio/Sink" => (DeviceKind::Loopback, dsink.as_deref() == Some(name.as_str())),
+                "Audio/Source" => (DeviceKind::Mic, dsource.as_deref() == Some(name.as_str())),
                 _ => return None,
             };
             let desc = p["node.description"].as_str().unwrap_or(&name).to_string();
