@@ -32,7 +32,7 @@ case "$variant" in
     ;;
 esac
 mkdir -p dist && cp "$exe" dist/oats-meetings-rs.exe
-file dist/oats-meetings-rs.exe
+llvm-readobj --file-headers dist/oats-meetings-rs.exe | grep -E "Machine|Subsystem|Characteristics"
 # icon resource present in the PE: a .rsrc section exists and holds RT_GROUP_ICON/RT_ICON entries
 llvm-objdump -h dist/oats-meetings-rs.exe | grep -E '\.rsrc'
 llvm-readobj --coff-resources dist/oats-meetings-rs.exe | grep -E 'ICON|VERSION' || true
@@ -43,3 +43,15 @@ OATS_VERSION="$ver" OATS_EXE="$PWD/dist/oats-meetings-rs.exe" OATS_ICO="$PWD/ass
 msiinfo suminfo "$msi"
 msiinfo tables "$msi"
 (cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS)
+# msi contents: extract and compare against the inputs (msiextract is read-only unpacking of the msi tables + cab)
+x=$(mktemp -d)
+msiextract -C "$x" "$msi"
+find "$x" -type f
+cmp "$x"/*/*/oats-meetings-rs.exe dist/oats-meetings-rs.exe 2>/dev/null || cmp "$(find "$x" -name oats-meetings-rs.exe | head -1)" dist/oats-meetings-rs.exe
+find "$x" -name oats-meetings-rs.ico | head -1 | xargs -I{} cmp {} assets/icon/derived/oats-meetings-rs.ico
+# WINE ONLY (not real Windows): smoke run of the exe. The real-Windows proof is separate (dot-4uzgol.16 VM step).
+if [ -z "${NO_WINE:-}" ]; then
+  PATH="$(nixp wine64)/bin:$PATH"
+  export WINEPREFIX="$(mktemp -d)/pfx" WINEDEBUG=-all WINEARCH=win64
+  wine64 dist/oats-meetings-rs.exe --headless --version; echo "WINE_RC=$?"
+fi
