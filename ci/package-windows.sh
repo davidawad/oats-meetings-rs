@@ -53,5 +53,5 @@ find "$x" -name oats-meetings-rs.ico | head -1 | xargs -I{} cmp {} assets/icon/d
 if [ -z "${NO_WINE:-}" ]; then
   PATH="$(nixp wine64)/bin:$PATH"
   export WINEPREFIX="$(mktemp -d)/pfx" WINEDEBUG=-all WINEARCH=win64
-  wine64 dist/oats-meetings-rs.exe --headless --version; echo "WINE_RC=$?"
+  wine dist/oats-meetings-rs.exe --headless --version; echo "WINE_RC=$?"
 fi
