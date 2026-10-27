@@ -12,6 +12,7 @@
 pub mod bus;
 pub mod client;
 pub mod engine;
+pub mod half;
 pub mod paths;
 pub mod server;
 

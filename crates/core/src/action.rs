@@ -5,6 +5,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+const fn is_option(t: &str) -> bool {
+    let b = t.as_bytes();
+    b.len() >= 6
+        && b[0] == b'O'
+        && b[1] == b'p'
+        && b[2] == b't'
+        && b[3] == b'i'
+        && b[4] == b'o'
+        && b[5] == b'n'
+}
+
 macro_rules! actions {
     ($(
         $name:ident, $wire:literal, $doc:literal, $status:literal, $effect:literal,
@@ -19,7 +30,7 @@ macro_rules! actions {
         /// (wire name, doc, status, effect, [(param, type, required)])
         #[allow(clippy::type_complexity)]
         pub const SPECS: &[(&str, &str, &str, &str, &[(&str, &str, bool)])] = &[
-            $( ($wire, $doc, $status, $effect, &[ $( (stringify!($f), stringify!($t), !stringify!($t).starts_with("Option")) ),* ]) ),*
+            $( ($wire, $doc, $status, $effect, &[ $( (stringify!($f), stringify!($t), !is_option(stringify!($t))) ),* ]) ),*
         ];
     };
 }

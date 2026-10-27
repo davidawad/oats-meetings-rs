@@ -12,12 +12,13 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use interprocess::local_socket::{
-    traits::{Listener as _, Stream as _},
-    GenericFilePath, ListenerNonblockingMode, ListenerOptions, SendHalf, Stream, ToFsName,
+    traits::Listener as _,
+    GenericFilePath, ListenerNonblockingMode, ListenerOptions, Stream, ToFsName,
 };
 use serde_json::{json, Value};
 
 use super::engine::Engine;
+use super::half::Half;
 use super::{paths, MAX_LINE, PROTOCOL};
 use crate::action::{self, Action, EVENTS};
 use crate::config::{ConfigError, Result, SCHEMA_VERSION};
@@ -165,7 +166,7 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
 }
 
 struct Conn {
-    tx: Mutex<SendHalf>,
+    tx: Mutex<Half>,
 }
 
 impl Conn {
@@ -194,7 +195,7 @@ fn hello() -> Value {
 }
 
 fn handle(engine: Arc<Engine>, stream: Stream) {
-    let (rx, tx) = stream.split();
+    let (rx, tx) = Half::pair(stream);
     let conn = Arc::new(Conn { tx: Mutex::new(tx) });
     if conn.send(&hello()).is_err() {
         return;

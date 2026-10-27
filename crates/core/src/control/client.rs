@@ -4,17 +4,16 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use interprocess::local_socket::{
-    traits::Stream as _, GenericFilePath, RecvHalf, SendHalf, Stream, ToFsName,
-};
+use interprocess::local_socket::{traits::Stream as _, GenericFilePath, Stream, ToFsName};
 use serde_json::{json, Map, Value};
 
+use super::half::Half;
 use super::{paths, PROTOCOL};
 use crate::config::{ConfigError, Result};
 
 pub struct Client {
-    rx: BufReader<RecvHalf>,
-    tx: SendHalf,
+    rx: BufReader<Half>,
+    tx: Half,
     pub hello: Value,
     next_id: u64,
 }
@@ -30,7 +29,7 @@ impl Client {
         let stream = Stream::connect(name).map_err(|e| {
             ConfigError::new("not_running", format!("cannot connect to {}: {e}", sock.display()))
         })?;
-        let (rx, tx) = stream.split();
+        let (rx, tx) = Half::pair(stream);
         let mut c = Client {
             rx: BufReader::new(rx),
             tx,
