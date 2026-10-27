@@ -18,9 +18,8 @@ bash ci/icons.sh
 icons=assets/icon/derived/hicolor
 mkdir -p dist
 nixp() { nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#$1" | head -1; }
-dpkg_out=$(nixp dpkg)
-ait=$(nixp appimagetool)
-export PATH="$dpkg_out/bin:$ait/bin:$PATH"
+dpkg_out=$(nixp dpkg); sq=$(nixp squashfsTools)
+export PATH="$dpkg_out/bin:$sq/bin:$PATH"
 case "$(uname -m)" in x86_64) debarch=amd64 ;; aarch64) debarch=arm64 ;; *) debarch=$(uname -m) ;; esac
 
 # --- .deb
@@ -53,5 +52,19 @@ install -Dm644 packaging/linux/oats-meetings-rs.desktop "$a/oats-meetings-rs.des
 install -Dm644 "$icons/256x256/apps/oats-meetings-rs.png" "$a/oats-meetings-rs.png"
 mkdir -p "$a/usr/share/icons" && cp -r "$icons" "$a/usr/share/icons/hicolor"
 ln -s usr/bin/oats-meetings-rs "$a/AppRun"
-ARCH=$(uname -m) appimagetool --appimage-extract-and-run "$a" "dist/oats-meetings-rs-$(uname -m).AppImage"
+# nixpkgs has no appimagetool: an AppImage is the pinned type2 runtime + a squashfs of AppDir.
+case "$(uname -m)" in
+  x86_64) rt_sha=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d ;;
+  aarch64) rt_sha=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444 ;;
+esac
+rt=$(mktemp)
+curl -fsSL -o "$rt" "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$(uname -m)"
+[ "$(sha256sum "$rt" | cut -d' ' -f1)" = "$rt_sha" ]
+mksquashfs "$a" "$a.sqfs" -root-owned -noappend -comp zstd -no-progress
+img="dist/oats-meetings-rs-$(uname -m).AppImage"
+cat "$rt" "$a.sqfs" > "$img"; chmod +x "$img"
+# Proof: the squashfs unpacks and carries the desktop file and icon.
+off=$(stat -c %s "$rt")
+unsquashfs -o "$off" -l "$img" | grep -E 'oats-meetings-rs\.(desktop|png)$'
+unsquashfs -o "$off" -cat "$img" oats-meetings-rs.desktop | grep -q '^Icon=oats-meetings-rs$'
 (cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS)
