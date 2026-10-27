@@ -54,11 +54,12 @@ actions! {
     WindowHide, "window-hide", "Hide the main window.", "implemented", "control", {};
     WindowToggle, "window-toggle", "Toggle the main window.", "implemented", "control", {};
     PrivacyToggle, "privacy-toggle", "Toggle hiding the window from screen capture.", "implemented", "write", {};
-    RecordStart, "record-start", "Start recording a session.", "planned", "control", {};
-    RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
-    RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};
+    DevicesList, "devices-list", "List audio capture devices (loopback and mic) for the selected backend.", "implemented", "read", {};
+    RecordStart, "record-start", "Start recording a session (system loopback + mic to one WAV).", "implemented", "control", { session: Option<String>, title: Option<String> };
+    RecordStop, "record-stop", "Stop recording and save the session.", "implemented", "control", {};
+    RecordPause, "record-pause", "Pause or resume recording.", "implemented", "control", {};
     SessionList, "session-list", "List sessions.", "planned", "read", {};
-    SessionGet, "session-get", "One session.", "planned", "read", { session: String };
+    SessionGet, "session-get", "One session with its metadata and duration.", "implemented", "read", { session: String };
     SessionRename, "session-rename", "Rename a session.", "planned", "write", { session: String, name: String };
     SessionTag, "session-tag", "Tag a session.", "planned", "write", { session: String, tag: String };
     SessionDelete, "session-delete", "Delete a session; needs confirm.", "planned", "write", { session: String, confirm: Option<bool> };
@@ -75,6 +76,8 @@ pub const EVENTS: &[&str] = &[
     "window-changed",
     "config-reloaded",
     "recording-started",
+    "recording-paused",
+    "recording-stopped",
     "segment",
     "session-saved",
     "quit",

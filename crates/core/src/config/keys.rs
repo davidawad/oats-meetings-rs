@@ -38,6 +38,8 @@ pub struct Key {
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
+pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal"];
+pub const AUDIO_LAYOUTS: &[&str] = &["split", "mix"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
@@ -54,6 +56,55 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Bool,
         default: Def::B(true),
         doc: "Refuse to start a second engine on the same control socket.",
+        ui: true,
+    },
+    Key {
+        path: "audio.backend",
+        kind: Kind::Enum(AUDIO_BACKENDS),
+        default: Def::S("auto"),
+        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire, else cpal; Windows: cpal/WASAPI).",
+        ui: true,
+    },
+    Key {
+        path: "audio.layout",
+        kind: Kind::Enum(AUDIO_LAYOUTS),
+        default: Def::S("split"),
+        doc: "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",
+        ui: true,
+    },
+    Key {
+        path: "audio.mic.device",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Microphone device id (see `ctl devices list`); empty means the default mic.",
+        ui: true,
+    },
+    Key {
+        path: "audio.mic.enabled",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Record the microphone.",
+        ui: true,
+    },
+    Key {
+        path: "audio.record_dir",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
+        ui: true,
+    },
+    Key {
+        path: "audio.system.device",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "System-audio loopback device id (see `ctl devices list`); empty means the default loopback.",
+        ui: true,
+    },
+    Key {
+        path: "audio.system.enabled",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Record system audio (what the machine plays).",
         ui: true,
     },
     Key {

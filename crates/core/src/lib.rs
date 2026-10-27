@@ -3,6 +3,7 @@
 pub mod action;
 pub mod config;
 pub mod control;
+pub mod record;
 
 pub const APP_NAME: &str = "oats-meetings-rs";
 

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub app: App,
+    pub audio: Audio,
     pub config: ConfigSection,
     pub control: Control,
     pub license: License,
@@ -20,6 +21,39 @@ pub struct Config {
 pub struct App {
     pub menubar: bool,
     pub single_instance: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioBackend {
+    Auto,
+    Pulse,
+    Pipewire,
+    Cpal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioLayout {
+    Split,
+    Mix,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioEndpoint {
+    pub device: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Audio {
+    pub backend: AudioBackend,
+    pub layout: AudioLayout,
+    pub mic: AudioEndpoint,
+    pub record_dir: String,
+    pub system: AudioEndpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
