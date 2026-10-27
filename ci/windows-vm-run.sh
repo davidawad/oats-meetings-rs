@@ -14,13 +14,13 @@ echo "OATS_VM kvm=$([ -e /dev/kvm ] && echo yes || echo no) cpus=$(nproc)"
 NO_WINE=1 bash ci/package-windows.sh headless
 exe=$PWD/dist/oats-meetings-rs.exe
 sha256sum "$exe"
-for p in qemu xorriso; do PATH="$(nixp "$p")/bin:$PATH"; done
+for p in qemu libisoburn; do PATH="$(nixp "$p")/bin:$PATH"; done
 export PATH
 repo=$PWD
 w=$(mktemp -d -p "${WORK_DIR:-/work}")
 cd "$w"
 # 2. Windows Server 2022 Evaluation ISO (free from Microsoft; accepting the evaluation EULA in the unattend file)
-curl -fL --retry 5 -o win.iso "$ISO_URL"
+curl -fsSL --retry 5 -o win.iso "$ISO_URL"
 sha256sum win.iso
 # 3. config CD: autounattend.xml + the exe + the run script
 mkdir cfg
