@@ -4,10 +4,14 @@
 set -euo pipefail
 NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
 nixf=(--extra-experimental-features "nix-command flakes")
-# Reuse linux-nix.sh's environment (system libs, toolchain) without its build steps.
-SETUP_ONLY=1 source ci/linux-nix.sh
+# Build in a subshell with linux-nix.sh's environment (system libs, toolchain, LD_LIBRARY_PATH). Packaging
+# runs afterwards in the clean environment: nix libs on LD_LIBRARY_PATH break the host bash and dpkg tools.
+(
+  SETUP_ONLY=1 source ci/linux-nix.sh
+  set -x
+  cargo build --release -p oats-meetings-rs ${LOCKED:+--locked}
+)
 set -x
-cargo build --release -p oats-meetings-rs ${LOCKED:+--locked}
 bin=target/release/oats-meetings-rs
 ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 bash ci/icons.sh
