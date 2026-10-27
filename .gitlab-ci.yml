@@ -1,0 +1,48 @@
+# Free shared Linux runners only. macOS/Windows real builds are manual and need paid runners:
+# do not enable without David.
+stages: [check, build]
+
+.rust: &rust
+  image: rust:latest
+  variables: {CARGO_HOME: "$CI_PROJECT_DIR/.cargo", CARGO_NET_GIT_FETCH_WITH_CLI: "true"}
+  cache: {key: "$CI_JOB_NAME", paths: [.cargo, target]}
+
+.gui-deps: &gui-deps
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends clang cmake pkg-config libxkbcommon-x11-dev libxkbcommon-dev libwayland-dev libxcb1-dev libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan-dev libasound2-dev libssl-dev libzstd-dev
+
+linux-build:
+  <<: [*rust, *gui-deps]
+  stage: build
+  script:
+    - cargo build --workspace
+    - cargo test --workspace
+    - cargo run -q -- --headless --version
+
+linux-headless:
+  <<: *rust
+  stage: check
+  script:
+    - cargo build -p oats-meetings-rs --no-default-features
+    - cargo run -q --no-default-features -- --headless --version
+
+cross-check:
+  <<: [*rust, *gui-deps]
+  stage: check
+  parallel: {matrix: [{TARGET: [x86_64-pc-windows-gnu, aarch64-apple-darwin]}]}
+  script:
+    - rustup target add $TARGET
+    - cargo check --workspace --target $TARGET
+  allow_failure: true
+
+macos-build:
+  stage: build
+  when: manual
+  tags: [saas-macos-medium-m1]
+  script: [cargo build --workspace, cargo run -q -- --headless --version]
+
+windows-build:
+  stage: build
+  when: manual
+  tags: [saas-windows-medium-amd64]
+  script: [cargo build --workspace, cargo run -q -- --headless --version]

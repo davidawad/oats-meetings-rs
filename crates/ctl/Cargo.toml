@@ -1,0 +1,9 @@
+[package]
+name = "oats-ctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+oats-core.workspace = true
