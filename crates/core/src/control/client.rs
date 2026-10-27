@@ -92,8 +92,7 @@ impl Client {
         }
     }
 
-    /// Next event line, waiting up to `timeout` (polling; the socket read itself blocks, so this
-    /// is only for callers that know an event is coming).
+    /// Block until the next event line (skipping any stray responses).
     pub fn next_event(&mut self) -> Result<Value> {
         loop {
             let v = self.read_line()?;

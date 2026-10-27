@@ -11,8 +11,7 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "--headless") {
-        // Engine-only mode; the control server arrives in dot-4uzgol.5.
-        return;
+        std::process::exit(oats_core::control::run_headless_env());
     }
     #[cfg(feature = "gui")]
     oats_ui::run_hello();

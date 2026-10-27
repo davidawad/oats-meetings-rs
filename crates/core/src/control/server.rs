@@ -72,6 +72,15 @@ fn io_err(what: &str, e: impl std::fmt::Display) -> ConfigError {
 
 /// Take the single-instance lock, bind the socket, and start the accept and watcher threads.
 pub fn serve(engine: Arc<Engine>, runtime_dir: &Path) -> Result<ServerHandle> {
+    let poll = std::env::var("OATS_RELOAD_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(250u64);
+    serve_with_poll(engine, runtime_dir, Duration::from_millis(poll))
+}
+
+/// `poll` is how often the watcher checks the user config file for hot reload.
+pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) -> Result<ServerHandle> {
     std::fs::create_dir_all(runtime_dir).map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
     let lock_path = paths::lock_path(runtime_dir);
     let lock = File::options()
@@ -134,15 +143,11 @@ pub fn serve(engine: Arc<Engine>, runtime_dir: &Path) -> Result<ServerHandle> {
         .map_err(|e| io_err("spawn accept", e))?;
 
     let eng = Arc::clone(&engine);
-    let poll = std::env::var("OATS_RELOAD_POLL_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(250u64);
     let watcher = thread::Builder::new()
         .name("oats-watch".into())
         .spawn(move || {
             while !eng.is_shutdown() {
-                thread::sleep(Duration::from_millis(poll));
+                thread::sleep(poll);
                 // config.hot_reload is read live: turning it off stops file-driven reloads.
                 if eng.hot_reload_enabled() && eng.file_changed() {
                     let _ = eng.reload("hot-reload");
@@ -203,7 +208,13 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
             Ok(n) => n,
         };
         if n as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
+            // Discard the rest of the line (bounded) so the error line is not lost to a reset
+            // from unread data, then resync on the next line; give up on an endless line.
+            let resynced = drain_line(&mut reader);
             let _ = conn.send(&err_envelope(&Value::Null, "request_too_large", "request line exceeds 1 MiB"));
+            if resynced {
+                continue;
+            }
             return;
         }
         let reply = match std::str::from_utf8(&buf) {
@@ -217,6 +228,20 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
             }
         }
     }
+}
+
+/// Skip input up to the next newline, reading at most 8 MiB. True if a newline was found.
+fn drain_line<R: BufRead>(reader: &mut R) -> bool {
+    let mut junk = Vec::new();
+    for _ in 0..128 {
+        junk.clear();
+        match reader.by_ref().take(64 * 1024).read_until(b'\n', &mut junk) {
+            Ok(0) | Err(_) => return false,
+            Ok(_) if junk.last() == Some(&b'\n') => return true,
+            Ok(_) => {}
+        }
+    }
+    false
 }
 
 /// Parse one request line and execute it. `None` means the reply was already written (subscribe).
