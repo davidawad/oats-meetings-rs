@@ -2,6 +2,9 @@
 # Real-Windows run proof in a Linux pod: unattended install of the free Windows Server 2022 Evaluation (Server Core)
 # under QEMU, then run oats-meetings-rs.exe --headless --version inside it and read the exit code over COM1.
 # Pods expose no /dev/kvm, so QEMU uses TCG (software emulation): slow (hours), but a real Windows kernel.
+# Modes: fresh install (default) or cached base. VM_CACHE=<dir> (a PVC mount): win.iso and base.qcow2 live there;
+# a missing base.qcow2 is installed once and kept, every run then boots a throwaway overlay of it. KVM is used when
+# /dev/kvm exists (cpu host), else TCG.
 # bin/pod-run <repo> <ref> bash ci/windows-vm-run.sh        (log lines OATS_* are the proof)
 set -euo pipefail
 NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
@@ -20,22 +23,36 @@ repo=$PWD
 w=$(mktemp -d -p "${WORK_DIR:-/work}")
 cd "$w"
 # 2. Windows Server 2022 Evaluation ISO (free from Microsoft; accepting the evaluation EULA in the unattend file)
-curl -fsSL --retry 5 -o win.iso "$ISO_URL"
-sha256sum win.iso
+cache=${VM_CACHE:-}
+if [ -n "$cache" ] && [ -s "$cache/win.iso" ]; then iso=$cache/win.iso; else
+  curl -fsSL --retry 5 -o win.iso "$ISO_URL"; iso=$PWD/win.iso
+  [ -z "$cache" ] || cp win.iso "$cache/win.iso"
+fi
+sha256sum "$iso"
 # 3. config CD: autounattend.xml + the exe + the run script
 mkdir cfg
 cp "$exe" cfg/oats-meetings-rs.exe
 cp "$repo/ci/windows-vm/autounattend.xml" cfg/autounattend.xml
 cp "$repo/ci/windows-vm/oats-run.cmd" cfg/oats-run.cmd
 xorriso -as mkisofs -o cfg.iso -J -R -V OATSCFG cfg
-qemu-img create -f qcow2 disk.qcow2 40G
+if [ -n "$cache" ] && [ -s "$cache/base.qcow2" ]; then
+  echo "OATS_VM mode=overlay-of-cached-base"
+  qemu-img create -f qcow2 -b "$cache/base.qcow2" -F qcow2 disk.qcow2
+  installing=0
+else
+  echo "OATS_VM mode=fresh-install"
+  qemu-img create -f qcow2 disk.qcow2 40G
+  installing=1
+fi
+if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then accel=(-accel kvm -cpu host); else accel=(-accel tcg,thread=multi -cpu max); fi
+echo "OATS_VM accel=${accel[1]}"
 # 4. boot: install, first logon runs oats-run.cmd, which reports over COM1 and powers off
 set +e
 timeout -k 60 "$TIMEOUT_S" qemu-system-x86_64 \
-  -accel tcg,thread=multi -cpu max -smp 4 -m 8G \
+  "${accel[@]}" -smp 4 -m 8G \
   -machine pc -display none -vga std -nic none \
   -drive if=none,id=hd,file=disk.qcow2,format=qcow2 -device ide-hd,drive=hd,bus=ide.0,unit=0,bootindex=2 \
-  -drive if=none,id=win,file=win.iso,media=cdrom,readonly=on -device ide-cd,drive=win,bus=ide.1,unit=0,bootindex=1 \
+  -drive if=none,id=win,file="$iso",media=cdrom,readonly=on -device ide-cd,drive=win,bus=ide.1,unit=0,bootindex=1 \
   -drive if=none,id=cfg,file=cfg.iso,media=cdrom,readonly=on -device ide-cd,drive=cfg,bus=ide.1,unit=1 \
   -serial file:serial.log -monitor none &
 q=$!
@@ -50,3 +67,5 @@ set -e
 cat serial.log || true
 grep -a 'OATS_RC=' serial.log
 grep -a -q 'OATS_RC=0' serial.log
+# keep the installed disk as the cached base (it has run once; later runs overlay it and re-run via the OatsRun task)
+if [ "$installing" = 1 ] && [ -n "$cache" ]; then qemu-img convert -O qcow2 disk.qcow2 "$cache/base.qcow2.tmp" && mv "$cache/base.qcow2.tmp" "$cache/base.qcow2"; echo "OATS_VM base cached"; fi
