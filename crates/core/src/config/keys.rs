@@ -10,6 +10,28 @@ pub enum Kind {
     Enum(&'static [&'static str]),
 }
 
+/// How a change to this key reaches the running app. Every key must be hot-reloadable; the
+/// class says how, and the reload test suite exercises each class for each key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reload {
+    /// Consumers read the active snapshot at the point of use; the swap is the whole effect.
+    Live,
+    /// The control socket is re-bound at the new path.
+    Rebind,
+    /// The single-instance lock is taken or released.
+    Lock,
+}
+
+impl Reload {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reload::Live => "live",
+            Reload::Rebind => "rebind",
+            Reload::Lock => "lock",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Def {
     B(bool),
@@ -33,11 +55,13 @@ pub struct Key {
     pub doc: &'static str,
     /// false = deliberately not shown in the settings view (dot-4uzgol.11 checks this).
     pub ui: bool,
+    pub reload: Reload,
 }
 
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
+pub const DELETE_MODES: &[&str] = &["trash", "remove"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
@@ -48,6 +72,7 @@ pub const KEYS: &[Key] = &[
         default: Def::B(false),
         doc: "Show a menubar / tray item.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "app.single_instance",
@@ -55,6 +80,7 @@ pub const KEYS: &[Key] = &[
         default: Def::B(true),
         doc: "Refuse to start a second engine on the same control socket.",
         ui: true,
+        reload: Reload::Lock,
     },
     Key {
         path: "config.hot_reload",
@@ -62,6 +88,7 @@ pub const KEYS: &[Key] = &[
         default: Def::B(true),
         doc: "Watch the user config file and reload on change.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "control.socket",
@@ -69,6 +96,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S(""),
         doc: "Control socket path; empty means the per-user runtime dir.",
         ui: false,
+        reload: Reload::Rebind,
     },
     Key {
         path: "license.holder",
@@ -76,6 +104,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S(""),
         doc: "Licence holder metadata (placeholder; no licence chosen).",
         ui: false,
+        reload: Reload::Live,
     },
     Key {
         path: "license.spdx",
@@ -83,6 +112,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S("LicenseRef-Undecided"),
         doc: "SPDX expression for packaging metadata (placeholder).",
         ui: false,
+        reload: Reload::Live,
     },
     Key {
         path: "llm.backend",
@@ -90,6 +120,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S("ollama"),
         doc: "Notes-generation LLM backend.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "network.allow",
@@ -97,6 +128,7 @@ pub const KEYS: &[Key] = &[
         default: Def::B(false),
         doc: "Allow outward network calls (cloud STT / LLM). Off means such backends are denied.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "privacy.hide_from_capture",
@@ -104,6 +136,7 @@ pub const KEYS: &[Key] = &[
         default: Def::B(true),
         doc: "Hide the app window from screen capture.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "privacy.hide_method",
@@ -111,6 +144,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S("none"),
         doc: "How hiding is done; set per OS by the os axis.",
         ui: false,
+        reload: Reload::Live,
     },
     Key {
         path: "sessions.confirm_delete",
@@ -118,6 +152,15 @@ pub const KEYS: &[Key] = &[
         default: Def::B(true),
         doc: "Require confirm=true to delete a session.",
         ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "sessions.delete_mode",
+        kind: Kind::Enum(DELETE_MODES),
+        default: Def::S("trash"),
+        doc: "Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.",
+        ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "sessions.root",
@@ -125,6 +168,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S(""),
         doc: "Session store directory (OpenOats layout); empty means the per-user data dir.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "stt.backend",
@@ -132,6 +176,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S("local"),
         doc: "Speech-to-text backend: on-device or a cloud adapter.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "stt.cloud.adapter",
@@ -139,6 +184,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S("none"),
         doc: "Cloud STT adapter; must not be none when stt.backend is cloud.",
         ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "stt.local.model",
@@ -146,6 +192,7 @@ pub const KEYS: &[Key] = &[
         default: Def::S("base.en"),
         doc: "Local ASR model name.",
         ui: true,
+        reload: Reload::Live,
     },
 ];
 

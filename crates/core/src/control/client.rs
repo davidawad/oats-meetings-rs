@@ -21,7 +21,12 @@ pub struct Client {
 impl Client {
     /// Connect to the engine whose runtime dir is `runtime_dir`; reads the hello line.
     pub fn connect(runtime_dir: &Path) -> Result<Client> {
-        let sock = paths::socket_path(runtime_dir);
+        Self::connect_socket(&paths::socket_path(runtime_dir))
+    }
+
+    /// Connect to an explicit socket path (when `control.socket` moved it).
+    pub fn connect_socket(sock: &Path) -> Result<Client> {
+        let sock = sock.to_path_buf();
         let name = sock
             .clone()
             .to_fs_name::<GenericFilePath>()
