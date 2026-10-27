@@ -1,0 +1,5 @@
+{
+  "stt": { "backend": "cloud", "cloud": { "adapter": "openai-compatible" } },
+  "llm": { "backend": "openrouter" },
+  "network": { "allow": true }
+}

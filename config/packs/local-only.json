@@ -1,0 +1,5 @@
+{
+  "stt": { "backend": "local", "cloud": { "adapter": "none" } },
+  "llm": { "backend": "ollama" },
+  "network": { "allow": false }
+}

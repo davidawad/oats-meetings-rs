@@ -1,0 +1,9 @@
+{
+  "os": {
+    "macos": { "privacy": { "hide_method": "sharing_type" } },
+    "windows": { "privacy": { "hide_method": "display_affinity" } },
+    "linux": { "privacy": { "hide_method": "none" } }
+  },
+  "arch": {},
+  "machine": {}
+}

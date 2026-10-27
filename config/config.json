@@ -1,0 +1,6 @@
+{
+  "defaults": "defaults.json",
+  "packs_dir": "packs",
+  "schema": "schema.json",
+  "projections": ["schema.json", "defaults.toml"]
+}
