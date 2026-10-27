@@ -24,6 +24,7 @@ fn sorted(v: &Value) -> Value {
             }
             Value::Object(out)
         }
+        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
         other => other.clone(),
     }
 }
