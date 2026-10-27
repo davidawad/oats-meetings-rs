@@ -1,0 +1,35 @@
+{
+  "app": {
+    "menubar": false,
+    "single_instance": true
+  },
+  "config": {
+    "hot_reload": true
+  },
+  "control": {
+    "socket": ""
+  },
+  "license": {
+    "holder": "",
+    "spdx": "LicenseRef-Undecided"
+  },
+  "llm": {
+    "backend": "ollama"
+  },
+  "network": {
+    "allow": false
+  },
+  "privacy": {
+    "hide_from_capture": true,
+    "hide_method": "none"
+  },
+  "stt": {
+    "backend": "local",
+    "cloud": {
+      "adapter": "none"
+    },
+    "local": {
+      "model": "base.en"
+    }
+  }
+}
