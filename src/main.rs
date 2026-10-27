@@ -3,6 +3,9 @@ fn main() {
     if args.first().map(String::as_str) == Some("ctl") {
         std::process::exit(oats_ctl::run(&args[1..]));
     }
+    if args.first().map(String::as_str) == Some("config") {
+        std::process::exit(oats_core::config::cli::run_env(&args[1..]));
+    }
     if args.iter().any(|a| a == "--version") {
         println!("{}", oats_core::version_line());
         return;
