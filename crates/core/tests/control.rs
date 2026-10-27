@@ -320,10 +320,10 @@ fn hot_reload_off_ignores_file_edits_until_explicit_reload() {
     let mut c = rig.client();
     let g = c.call("config-get", p(&[("key", json!("app.menubar"))])).unwrap();
     assert_eq!(g["data"]["value"], false, "file edit must not apply with hot_reload=false");
+    assert!(rx.try_recv().is_err(), "no event may arrive from the ignored edit");
     // Explicit reload applies it and emits the event.
     let r = c.call("config-reload", Map::new()).unwrap();
     assert_eq!(r["data"]["changed"], json!(["app.menubar"]));
-    assert!(rx.try_recv().is_err(), "no event may arrive from the ignored edit");
     let ev = rx.recv_timeout(Duration::from_secs(5)).expect("reload event");
     assert_eq!(ev["data"]["source"], "config-reload");
 }

@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(p.params["key"], json!("stt.local.model"));
         assert_eq!(p.params["value"], json!(123));
         let p = parse(&s(&["session", "get", "42"])).unwrap();
-        assert_eq!(p.params["id"], json!("42"));
+        assert_eq!(p.params["session"], json!("42"));
     }
 
     #[test]

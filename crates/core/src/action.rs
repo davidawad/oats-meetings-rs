@@ -35,6 +35,7 @@ macro_rules! actions {
     };
 }
 
+// NB: `id` is the request correlation id on the wire, so no action may have a param named `id`.
 // status: "implemented" has an engine handler now; "planned" returns `not_implemented` until the
 // bead that owns it lands. effect: read (no state change), write (changes state or config),
 // control (affects the running engine).
@@ -57,11 +58,11 @@ actions! {
     RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
     RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};
     SessionList, "session-list", "List sessions.", "planned", "read", {};
-    SessionGet, "session-get", "One session.", "planned", "read", { id: String };
-    SessionRename, "session-rename", "Rename a session.", "planned", "write", { id: String, name: String };
-    SessionTag, "session-tag", "Tag a session.", "planned", "write", { id: String, tag: String };
-    SessionDelete, "session-delete", "Delete a session; needs confirm.", "planned", "write", { id: String, confirm: Option<bool> };
-    TranscriptGet, "transcript-get", "A session transcript.", "planned", "read", { id: String };
+    SessionGet, "session-get", "One session.", "planned", "read", { session: String };
+    SessionRename, "session-rename", "Rename a session.", "planned", "write", { session: String, name: String };
+    SessionTag, "session-tag", "Tag a session.", "planned", "write", { session: String, tag: String };
+    SessionDelete, "session-delete", "Delete a session; needs confirm.", "planned", "write", { session: String, confirm: Option<bool> };
+    TranscriptGet, "transcript-get", "A session transcript.", "planned", "read", { session: String };
     TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
     NotesGenerate, "notes-generate", "Generate notes from a template.", "planned", "write", { session: String, template: String };
     TemplateList, "template-list", "List note templates.", "planned", "read", {};
@@ -139,6 +140,13 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             let back = serde_json::to_value(&a).unwrap();
             assert_eq!(back["action"], json!(name));
+        }
+    }
+
+    #[test]
+    fn no_param_is_named_id() {
+        for s in SPECS {
+            assert!(s.4.iter().all(|p| p.0 != "id" && p.0 != "v"), "{}", s.0);
         }
     }
 
