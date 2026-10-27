@@ -157,6 +157,9 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
         })
         .map_err(|e| io_err("spawn watcher", e))?;
 
+    // Detached: ends on its own when the engine shuts down.
+    crate::ics::spawn_scheduler(Arc::clone(&engine));
+
     Ok(ServerHandle {
         engine,
         accept: Some(accept),

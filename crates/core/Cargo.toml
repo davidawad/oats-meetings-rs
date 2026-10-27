@@ -12,6 +12,10 @@ toml.workspace = true
 interprocess.workspace = true
 toml_edit.workspace = true
 chrono.workspace = true
+icalendar.workspace = true
+rrule.workspace = true
+chrono-tz.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

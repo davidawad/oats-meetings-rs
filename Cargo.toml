@@ -20,6 +20,10 @@ interprocess = "2"
 toml_edit = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 tempfile = "3"
+icalendar = "0.17"
+rrule = "0.14"
+chrono-tz = "0.10"
+ureq = "3"
 oats-core = { path = "crates/core" }
 oats-ui = { path = "crates/ui" }
 oats-ctl = { path = "crates/ctl" }
