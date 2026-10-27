@@ -34,9 +34,9 @@ set +e
 timeout -k 60 "$TIMEOUT_S" qemu-system-x86_64 \
   -accel tcg,thread=multi -cpu max -smp 4 -m 8G \
   -machine pc -display none -vga std -nic none \
-  -drive if=none,id=hd,file=disk.qcow2,format=qcow2 -device ide-hd,drive=hd,bootindex=2 \
-  -drive if=none,id=win,file=win.iso,media=cdrom,readonly=on -device ide-cd,drive=win,bootindex=1 \
-  -drive if=none,id=cfg,file=cfg.iso,media=cdrom,readonly=on -device ide-cd,drive=cfg \
+  -drive if=none,id=hd,file=disk.qcow2,format=qcow2 -device ide-hd,drive=hd,bus=ide.0,unit=0,bootindex=2 \
+  -drive if=none,id=win,file=win.iso,media=cdrom,readonly=on -device ide-cd,drive=win,bus=ide.1,unit=0,bootindex=1 \
+  -drive if=none,id=cfg,file=cfg.iso,media=cdrom,readonly=on -device ide-cd,drive=cfg,bus=ide.1,unit=1 \
   -serial file:serial.log -monitor none &
 q=$!
 # tail the serial log into the job log until qemu exits
