@@ -12,6 +12,7 @@ pub struct Config {
     pub llm: Llm,
     pub network: Network,
     pub privacy: Privacy,
+    pub sessions: Sessions,
     pub stt: Stt,
 }
 
@@ -74,6 +75,13 @@ pub enum HideMethod {
 pub struct Privacy {
     pub hide_from_capture: bool,
     pub hide_method: HideMethod,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sessions {
+    pub confirm_delete: bool,
+    pub root: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

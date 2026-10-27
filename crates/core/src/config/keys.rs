@@ -113,6 +113,20 @@ pub const KEYS: &[Key] = &[
         ui: false,
     },
     Key {
+        path: "sessions.confirm_delete",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Require confirm=true to delete a session.",
+        ui: true,
+    },
+    Key {
+        path: "sessions.root",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Session store directory (OpenOats layout); empty means the per-user data dir.",
+        ui: true,
+    },
+    Key {
         path: "stt.backend",
         kind: Kind::Enum(STT_BACKENDS),
         default: Def::S("local"),

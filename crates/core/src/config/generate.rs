@@ -24,6 +24,7 @@ fn sorted(v: &Value) -> Value {
             }
             Value::Object(out)
         }
+        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
         other => other.clone(),
     }
 }
@@ -111,11 +112,18 @@ pub fn schema_json() -> String {
     s
 }
 
+pub fn actions_json() -> String {
+    let mut s = serde_json::to_string_pretty(&sorted(&crate::action::manifest_json())).expect("serializable");
+    s.push('\n');
+    s
+}
+
 pub fn projections() -> Vec<(&'static str, String)> {
     vec![
         ("defaults.json", defaults_json()),
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
+        ("actions.json", actions_json()),
     ]
 }
 

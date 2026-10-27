@@ -115,6 +115,24 @@
       },
       "type": "object"
     },
+    "sessions": {
+      "additionalProperties": false,
+      "properties": {
+        "confirm_delete": {
+          "default": true,
+          "description": "Require confirm=true to delete a session.",
+          "type": "boolean",
+          "x-ui": true
+        },
+        "root": {
+          "default": "",
+          "description": "Session store directory (OpenOats layout); empty means the per-user data dir.",
+          "type": "string",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
     "stt": {
       "additionalProperties": false,
       "properties": {

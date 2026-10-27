@@ -34,6 +34,12 @@ hide_from_capture = true
 # How hiding is done; set per OS by the os axis.
 hide_method = "none"
 
+[sessions]
+# Require confirm=true to delete a session.
+confirm_delete = true
+# Session store directory (OpenOats layout); empty means the per-user data dir.
+root = ""
+
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"

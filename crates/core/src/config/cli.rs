@@ -66,8 +66,15 @@ fn parse(args: &[String]) -> Result<Opts> {
 }
 
 fn user_config_path(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Option<(PathBuf, bool)> {
-    // (path, explicit): an explicitly named file must exist; the default one may be absent.
-    if let Some(p) = o.config.clone().or_else(|| env("OATS_CONFIG")) {
+    default_user_config_path(o.config.clone(), env)
+}
+
+/// (path, explicit): an explicitly named file must exist; the default one may be absent.
+pub fn default_user_config_path(
+    flag: Option<String>,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<(PathBuf, bool)> {
+    if let Some(p) = flag.or_else(|| env("OATS_CONFIG")) {
         return Some((PathBuf::from(p), true));
     }
     let base = env("XDG_CONFIG_HOME")
@@ -88,7 +95,7 @@ fn load_user(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<St
     }
 }
 
-fn host(env: &dyn Fn(&str) -> Option<String>) -> (String, String, String) {
+pub fn host(env: &dyn Fn(&str) -> Option<String>) -> (String, String, String) {
     (
         env("OATS_OS").unwrap_or_else(|| std::env::consts::OS.to_string()),
         env("OATS_ARCH").unwrap_or_else(|| std::env::consts::ARCH.to_string()),

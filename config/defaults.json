@@ -23,6 +23,10 @@
     "hide_from_capture": true,
     "hide_method": "none"
   },
+  "sessions": {
+    "confirm_delete": true,
+    "root": ""
+  },
   "stt": {
     "backend": "local",
     "cloud": {

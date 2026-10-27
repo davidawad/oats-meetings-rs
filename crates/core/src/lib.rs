@@ -1,6 +1,9 @@
 //! Engine: no UI. Single command grammar (Action) lands here in later beads.
 
+pub mod action;
 pub mod config;
+pub mod control;
+pub mod sessions;
 
 pub const APP_NAME: &str = "oats-meetings-rs";
 
