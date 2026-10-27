@@ -123,6 +123,24 @@
       "status": "implemented"
     },
     {
+      "doc": "Import sessions from an OpenOats sessions root or one session dir.",
+      "effect": "write",
+      "name": "session-import",
+      "params": [
+        {
+          "name": "from",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Start recording a session.",
       "effect": "control",
       "name": "record-start",
@@ -144,14 +162,25 @@
       "status": "planned"
     },
     {
-      "doc": "List sessions.",
+      "doc": "List sessions, optionally in a time window (RFC 3339).",
       "effect": "read",
       "name": "session-list",
-      "params": [],
-      "status": "planned"
+      "params": [
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
     },
     {
-      "doc": "One session.",
+      "doc": "One session with its metadata.",
       "effect": "read",
       "name": "session-get",
       "params": [
@@ -161,10 +190,10 @@
           "type": "String"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Rename a session.",
+      "doc": "Rename (retitle) a session.",
       "effect": "write",
       "name": "session-rename",
       "params": [
@@ -179,10 +208,10 @@
           "type": "String"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Tag a session.",
+      "doc": "Add a tag to a session, or remove it with remove=true.",
       "effect": "write",
       "name": "session-tag",
       "params": [
@@ -195,12 +224,17 @@
           "name": "tag",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "remove",
+          "required": false,
+          "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Delete a session; needs confirm.",
+      "doc": "Delete a session; needs confirm=true while sessions.confirm_delete is on.",
       "effect": "write",
       "name": "session-delete",
       "params": [
@@ -215,10 +249,10 @@
           "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "A session transcript.",
+      "doc": "A session transcript (final, else live).",
       "effect": "read",
       "name": "transcript-get",
       "params": [
@@ -228,7 +262,7 @@
           "type": "String"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Search transcripts.",
@@ -296,6 +330,7 @@
     "recording-started",
     "segment",
     "session-saved",
+    "session-deleted",
     "quit"
   ],
   "schema_version": 1

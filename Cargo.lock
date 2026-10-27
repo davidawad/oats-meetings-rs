@@ -3020,11 +3020,13 @@ dependencies = [
 name = "oats-core"
 version = "0.0.1"
 dependencies = [
+ "chrono",
  "interprocess",
  "serde",
  "serde_json",
  "tempfile",
  "toml 0.8.23",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
