@@ -38,6 +38,7 @@ export PATH="${PATH}${paths}"
 export PKG_CONFIG_PATH="${pc#:}"
 export LD_LIBRARY_PATH="${ld#:}"
 export RUSTFLAGS="${RUSTFLAGS:-} $(echo "${ld#:}" | tr ':' '\n' | sed 's/^/-L native=/' | tr '\n' ' ')"
+[ -z "${SETUP_ONLY:-}" ] || return 0 2>/dev/null || exit 0
 set -x
 # CROSS_TARGET=<triple>: only `cargo check` that target (no linking, no run).
 if [ -n "${CROSS_TARGET:-}" ]; then

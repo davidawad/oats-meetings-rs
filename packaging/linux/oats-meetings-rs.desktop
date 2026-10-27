@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Oats Meetings
+Comment=Meeting notes and transcription
+Exec=oats-meetings-rs
+Icon=oats-meetings-rs
+Terminal=false
+Categories=AudioVideo;Audio;Office;
+StartupWMClass=oats-meetings-rs
