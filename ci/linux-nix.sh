@@ -10,7 +10,9 @@ pc=""
 ld=""
 roots=""
 for p in "${pkgs[@]}"; do
-  roots="$roots $(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#$p" "$NIXPKGS#$p.dev" 2> /dev/null | tr '\n' ' ')"
+  for o in "$p" "$p.dev"; do
+    roots="$roots $(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#$o" 2> /dev/null | tr '\n' ' ' || true)"
+  done
 done
 # pkg-config follows Requires: into transitive -dev outputs (freetype2 -> zlib, bzip2, libpng, brotli), so walk the closure.
 # shellcheck disable=SC2086
