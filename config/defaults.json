@@ -25,6 +25,7 @@
   },
   "sessions": {
     "confirm_delete": true,
+    "delete_mode": "trash",
     "root": ""
   },
   "stt": {
