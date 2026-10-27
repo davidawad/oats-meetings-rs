@@ -2,6 +2,7 @@
 # Linux build+test inside a rootless pod: system deps come from nixpkgs (no apt, no root).
 set -euo pipefail
 source "$(dirname "$0")/nix-env.sh"
+[ -z "${SETUP_ONLY:-}" ] || return 0 2>/dev/null || exit 0
 set -x
 # CROSS_TARGET=<triple>: only `cargo check` that target (no linking, no run).
 if [ -n "${CROSS_TARGET:-}" ]; then
