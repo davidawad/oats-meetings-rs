@@ -13,9 +13,20 @@ nixp() { nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#$1" | head
 ISO_URL=${ISO_URL:-'https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US'}
 TIMEOUT_S=${TIMEOUT_S:-28800}
 echo "OATS_VM kvm=$([ -e /dev/kvm ] && echo yes || echo no) cpus=$(nproc)"
-# 1. the exe (headless release, static CRT), no wine here
-NO_WINE=1 bash ci/package-windows.sh headless
-exe=$PWD/dist/oats-meetings-rs.exe
+# TASK=version (default): run oats-meetings-rs.exe --headless --version.
+# TASK=shaders: run tools/shadergen (real d3dcompiler_47) over gpui_windows' HLSL and return shaders_bytes.rs
+#   base64 between OATS_B64_BEGIN/OATS_B64_END lines, with its SHA256 as computed inside Windows.
+TASK=${TASK:-version}
+# 1. the payload exe, built without wine
+if [ "$TASK" = shaders ]; then
+  bash ci/windows-shaders-build.sh
+  exe=$PWD/dist/oats-shadergen.exe
+  hlsl_dir=$(dirname "$(find "${CARGO_HOME:-/usr/local/cargo}" "$HOME/.cargo" -path '*gpui_windows/src/shaders.hlsl' 2> /dev/null | head -1)")
+  [ -f "$hlsl_dir/shaders.hlsl" ] || { echo "no gpui_windows HLSL sources found" >&2; exit 1; }
+else
+  NO_WINE=1 bash ci/package-windows.sh headless
+  exe=$PWD/dist/oats-meetings-rs.exe
+fi
 sha256sum "$exe"
 for p in qemu libisoburn; do for o in $(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#$p"); do PATH="$o/bin:$PATH"; done; done
 export PATH
@@ -31,9 +42,15 @@ fi
 sha256sum "$iso"
 # 3. config CD: autounattend.xml + the exe + the run script
 mkdir cfg
-cp "$exe" cfg/oats-meetings-rs.exe
 cp "$repo/ci/windows-vm/autounattend.xml" cfg/autounattend.xml
-cp "$repo/ci/windows-vm/oats-run.cmd" cfg/oats-run.cmd
+if [ "$TASK" = shaders ]; then
+  cp "$exe" cfg/oats-shadergen.exe
+  cp "$hlsl_dir"/*.hlsl cfg/
+  cp "$repo/ci/windows-vm/oats-shaders.cmd" cfg/oats-run.cmd
+else
+  cp "$exe" cfg/oats-meetings-rs.exe
+  cp "$repo/ci/windows-vm/oats-run.cmd" cfg/oats-run.cmd
+fi
 xorriso -as mkisofs -o cfg.iso -J -R -V OATSCFG cfg
 if [ -n "$cache" ] && [ -s "$cache/base.qcow2" ]; then
   echo "OATS_VM mode=overlay-of-cached-base"
@@ -64,7 +81,13 @@ done) &
 wait $q
 echo "OATS_VM qemu_rc=$?"
 set -e
-cat serial.log || true
+if [ "$TASK" = shaders ]; then
+  # keep the log small for a reader: everything except the base64 body is printed by the log itself
+  sed -n '/OATS_B64_BEGIN/,/OATS_B64_END/p' serial.log | tr -d '\r'
+  grep -a -v -E '^[A-Za-z0-9+/=]{40,}\r?$' serial.log | tr -d '\r' || true
+else
+  cat serial.log || true
+fi
 grep -a 'OATS_RC=' serial.log
 grep -a -q 'OATS_RC=0' serial.log
 # keep the installed disk as the cached base (it has run once; later runs overlay it and re-run via the OatsRun task)
