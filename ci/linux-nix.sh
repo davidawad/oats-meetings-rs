@@ -29,6 +29,11 @@ export PKG_CONFIG_PATH="${pc#:}"
 export LD_LIBRARY_PATH="${ld#:}"
 export RUSTFLAGS="${RUSTFLAGS:-} $(echo "${ld#:}" | tr ':' '\n' | sed 's/^/-L native=/' | tr '\n' ' ')"
 set -x
+# CROSS_TARGET=<triple>: only `cargo check` that target (no linking, no run).
+if [ -n "${CROSS_TARGET:-}" ]; then
+  rustup target add "$CROSS_TARGET"
+  exec cargo check --workspace --target "$CROSS_TARGET"
+fi
 cargo build --workspace
 cargo test --workspace
 cargo run -q -- --headless --version
