@@ -3,7 +3,7 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="Oats Meetings" Language="1033" Version="$(env.OATS_VERSION)"
            Manufacturer="David Awad" UpgradeCode="6f1c2d3e-9a4b-4c5d-8e7f-0a1b2c3d4e5f">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64"/>
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"/>
     <MediaTemplate EmbedCab="yes"/>
     <Icon Id="AppIcon.ico" SourceFile="$(env.OATS_ICO)"/>
     <Property Id="ARPPRODUCTICON" Value="AppIcon.ico"/>
