@@ -14,7 +14,7 @@ echo "OATS_VM kvm=$([ -e /dev/kvm ] && echo yes || echo no) cpus=$(nproc)"
 NO_WINE=1 bash ci/package-windows.sh headless
 exe=$PWD/dist/oats-meetings-rs.exe
 sha256sum "$exe"
-for p in qemu libisoburn; do PATH="$(nixp "$p")/bin:$PATH"; done
+for p in qemu libisoburn; do for o in $(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#$p"); do PATH="$o/bin:$PATH"; done; done
 export PATH
 repo=$PWD
 w=$(mktemp -d -p "${WORK_DIR:-/work}")
