@@ -5,7 +5,7 @@
 # PipeWire too: AUDIO_PIPEWIRE=1 starts pipewire + wireplumber + pipewire-pulse instead of pulseaudio.
 set -euo pipefail
 source "$(dirname "$0")/nix-env.sh"
-paudio=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pulseaudio" | head -1)
+paudio=$(env -u LD_LIBRARY_PATH nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pulseaudio" | head -1)
 export PATH="$paudio/bin:$PATH"
 id
 export XDG_RUNTIME_DIR; XDG_RUNTIME_DIR=$(mktemp -d); chmod 700 "$XDG_RUNTIME_DIR"
@@ -14,7 +14,7 @@ mkdir -p "$PULSE_RUNTIME_PATH" "$PULSE_STATE_PATH" "$PULSE_CONFIG_PATH"
 export PULSE_SERVER="unix:$PULSE_RUNTIME_PATH/native"
 backends=auto,pulse
 if [ -n "${AUDIO_PIPEWIRE:-}" ]; then
-  pw=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pipewire" | head -1)
+  pw=$(env -u LD_LIBRARY_PATH nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pipewire" | head -1)
   export PATH="$pw/bin:$PATH"
   export PIPEWIRE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
   env -u LD_LIBRARY_PATH pipewire > "$XDG_RUNTIME_DIR/pw.log" 2>&1 &
