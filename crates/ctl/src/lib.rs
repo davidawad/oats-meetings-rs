@@ -94,12 +94,13 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         }
         params.insert(k.clone(), typed_value(&wire, &k, &v));
     }
-    let mut free = names.iter().filter(|p| !params.contains_key(**p));
+    let free_names: Vec<&str> = names.iter().copied().filter(|p| !params.contains_key(*p)).collect();
+    let mut free = free_names.into_iter();
     for w in &words[n..] {
         let Some(p) = free.next() else {
             return usage(&format!("too many arguments for '{wire}'"));
         };
-        params.insert((*p).to_string(), typed_value(&wire, p, w));
+        params.insert(p.to_string(), typed_value(&wire, p, w));
     }
     if !topics.is_empty() {
         params.insert("topics".into(), json!(topics));
