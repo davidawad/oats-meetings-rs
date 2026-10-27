@@ -17,6 +17,8 @@ done
 # pkg-config follows Requires: into transitive -dev outputs (freetype2 -> zlib, bzip2, libpng, brotli), so walk the closure.
 # shellcheck disable=SC2086
 for out in $(nix "${nixf[@]}" path-info -r $roots | sort -u); do
+  # The host libc must stay the host libc: nix glibc/gcc in LD_LIBRARY_PATH breaks every host binary.
+  case "$out" in *-glibc-*|*-gcc-*|*-libgcc*|*-binutils*|*-bash-*) continue ;; esac
   [ -d "$out/bin" ] && paths="$paths:$out/bin"
   [ -d "$out/lib/pkgconfig" ] && pc="$pc:$out/lib/pkgconfig"
   [ -d "$out/share/pkgconfig" ] && pc="$pc:$out/share/pkgconfig"
