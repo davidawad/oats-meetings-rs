@@ -2,7 +2,6 @@
 //! plus model/language/response_format=verbose_json). Works against any server that speaks that
 //! API, including a local one. Policy (network.allow, the secret) is the caller's.
 
-use std::time::Duration;
 
 use serde_json::Value;
 

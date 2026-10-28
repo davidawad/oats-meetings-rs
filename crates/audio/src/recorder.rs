@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
 
 use serde::Serialize;
 
@@ -227,6 +226,7 @@ impl Drop for Recording {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use crate::fake::FakeBackend;
     use crate::wav;
 
