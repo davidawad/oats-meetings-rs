@@ -209,17 +209,17 @@ fn garbage_bytes_do_not_kill_the_server() {
     assert_eq!(rig.client().call("ping", Map::new()).unwrap()["ok"], true);
 }
 
-/// control.max_line at its boundary: a line of exactly max_line bytes (newline included) is read,
+/// control.max_line at its boundary: a line of exactly max_line bytes (newline not counted) is read,
 /// one byte more is refused; and a reload changes the limit for a connection already open.
 #[test]
 fn control_max_line_boundary_and_live_change() {
     let rig = Rig::with_config(Some("[control]\nmax_line = 1024\n"));
     let mut c = rig.client();
-    let mut ok = vec![b'x'; 1023];
+    let mut ok = vec![b'x'; 1024];
     ok.push(b'\n');
     c.send_raw(&ok).unwrap();
     assert_eq!(c.read_line().unwrap()["error"]["code"], "bad_request");
-    let mut over = vec![b'x'; 1024];
+    let mut over = vec![b'x'; 1025];
     over.push(b'\n');
     let mut c2 = rig.client();
     c2.send_raw(&over).unwrap();
