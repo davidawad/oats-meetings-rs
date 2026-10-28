@@ -28,7 +28,6 @@ pub type AsrFactory = Box<dyn Fn(&crate::stt::Settings) -> Result<Arc<dyn Asr>> 
 
 struct Active {
     id: String,
-    title: String,
     dir: PathBuf,
     store: Store,
     layout: Layout,
@@ -249,7 +248,6 @@ impl Recorder {
             "started_at": oats_audio::timefmt::iso(started), "transcription": transcription});
         *slot = Some(Active {
             id,
-            title: title.unwrap_or_default().to_string(),
             dir,
             store: Store::new(store.root.clone()),
             layout: st.layout,
