@@ -75,7 +75,7 @@ fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
 
     let cfg = dir.path().join("cfg").join("config.toml");
     std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
-    std::fs::write(&cfg, format!("[stt.local]\nmodel_path = '{}'\nthreads = \"4\"\n", model().display())).unwrap();
+    std::fs::write(&cfg, format!("[stt.local]\nmodel_path = '{}'\nthreads = 4\n", model().display())).unwrap();
     let engine: Arc<Engine> = Engine::new(EngineOpts {
         user_config: cfg,
         pack: None,
