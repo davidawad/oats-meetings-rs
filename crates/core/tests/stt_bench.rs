@@ -1,7 +1,7 @@
 #![cfg(any(feature = "whisper", feature = "parakeet"))]
 //! STT benchmark (dot-4uzgol.22): WER, real-time factor and peak memory of ONE engine x model over the
 //! LibriSpeech clips in tests/fixtures/stt-bench/manifest.tsv (fetched by ci/fetch-bench-corpus.sh), clean and with
-//! noise and crosstalk mixes, for the live pass (`Live`, as the app feeds it) and the final pass (whole clip).
+//! noise and crosstalk mixes, for the live and the final pass of the real pipeline (`stt::run`, default config).
 //! One config per process so VmHWM is that config's peak. Runs only when OATS_BENCH_ENGINE is set (ci/stt-bench.sh);
 //! prints `BENCH_ROW` lines. It asserts nothing about accuracy: it measures, David picks the defaults.
 
@@ -10,11 +10,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use oats_core::stt::wer::{wer, words};
-use oats_core::stt::{wav, Asr, Live};
+use oats_core::stt::{wav, Asr};
 
 const THREADS: u32 = 4;
-const CHUNK_SECS: f64 = 4.0; // config/defaults.toml stt.live.chunk_secs
-const FEED: usize = 8_000; // 0.5 s, as stt::run feeds Live
 const NOISE_SNR_DB: f32 = 10.0;
 const CROSSTALK_SNR_DB: f32 = 5.0;
 
@@ -66,18 +64,27 @@ fn mix(a: &[f32], b: &[f32], snr_db: f32, lead: usize) -> Vec<f32> {
     (0..a.len()).map(|i| a[i] + g * if i >= lead { b[(i - lead) % b.len()] } else { 0.0 }).collect()
 }
 
-fn final_pass(asr: &dyn Asr, pcm: &[f32]) -> String {
-    asr.transcribe(pcm, "en").unwrap().iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(" ")
-}
-
-fn live_pass(asr: &Arc<dyn Asr>, pcm: &[f32]) -> String {
-    let mut live = Live::new(Arc::clone(asr), "en", CHUNK_SECS, "you", "them");
-    let mut out = Vec::new();
-    for c in pcm.chunks(FEED) {
-        out.extend(live.push(0, c).unwrap());
-    }
-    out.extend(live.flush().unwrap());
-    out.iter().filter(|u| u.speaker == "you").map(|u| u.text.as_str()).collect::<Vec<_>>().join(" ")
+/// One pass of the real pipeline (`stt::run`: speech gate, padding, windowing, feed size from the default config) on a
+/// mic-only clip; returns the transcript text of that pass.
+fn pass(asr: &Arc<dyn Asr>, pcm: &[f32], live: bool) -> String {
+    use oats_core::config::typed::Config;
+    let mut c = oats_core::config::resolve::defaults_flat();
+    c.insert("stt.live.enabled".into(), serde_json::json!(live));
+    c.insert("stt.final.enabled".into(), serde_json::json!(!live));
+    let cfg: Config = serde_json::from_value(oats_core::config::resolve::nest(&c)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let settings = oats_core::stt::Settings::from_config(&cfg, dir.path()).unwrap();
+    let store = oats_core::sessions::Store::new(dir.path());
+    let chans = wav::Channels { you: pcm.to_vec(), them: vec![] };
+    let id = "session_2026-10-28_12-00-00";
+    oats_core::stt::run(&store, None, Arc::clone(asr), &settings, &chans, id, chrono::Utc::now()).unwrap();
+    let f = dir.path().join(id).join(format!("transcript.{}.jsonl", if live { "live" } else { "final" }));
+    std::fs::read_to_string(f)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["text"].as_str().unwrap_or("").to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn status_kb(key: &str) -> u64 {
@@ -115,7 +122,7 @@ fn bench() {
     let (model, asr) = load();
     let load_s = t0.elapsed().as_secs_f64();
     // Warm-up: the first call pays one-off allocation and graph setup; it is not a steady-state cost.
-    let _ = final_pass(&*asr, &clips[0].pcm[..16_000 * 3]);
+    let _ = pass(&asr, &clips[0].pcm[..16_000 * 3], false);
 
     let n = clips.len();
     let mut conds: Vec<(&str, Vec<Vec<f32>>)> = vec![("clean", clips.iter().map(|c| c.pcm.clone()).collect())];
@@ -133,7 +140,7 @@ fn bench() {
                         continue;
                     }
                     let t = Instant::now();
-                    let text = if stage == "live" { live_pass(&asr, pcm) } else { final_pass(&*asr, pcm) };
+                    let text = pass(&asr, pcm, stage == "live");
                     wall += t.elapsed().as_secs_f64();
                     let r = words(&c.reference).len();
                     edits += (wer(&c.reference, &text) * r as f64).round();
