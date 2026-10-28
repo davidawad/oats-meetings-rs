@@ -23,7 +23,10 @@ if [ "$TASK" = shaders ]; then
   bash ci/windows-shaders-build.sh
   exe=$PWD/dist/oats-shadergen.exe
   hlsl_dir=$(dirname "$(find "${CARGO_HOME:-/usr/local/cargo}" "$HOME/.cargo" -path '*gpui_windows/src/shaders.hlsl' 2> /dev/null | head -1)")
-  [ -f "$hlsl_dir/shaders.hlsl" ] || { echo "no gpui_windows HLSL sources found" >&2; exit 1; }
+  [ -f "$hlsl_dir/shaders.hlsl" ] || {
+    echo "no gpui_windows HLSL sources found" >&2
+    exit 1
+  }
 else
   NO_WINE=1 bash ci/package-windows.sh "${VARIANT:-headless}"
   exe=$PWD/dist/oats-meetings-rs.exe
@@ -37,7 +40,8 @@ cd "$w"
 # 2. Windows Server 2022 Evaluation ISO (free from Microsoft; accepting the evaluation EULA in the unattend file)
 cache=${VM_CACHE:-}
 if [ -n "$cache" ] && [ -s "$cache/win.iso" ]; then iso=$cache/win.iso; else
-  curl -fsSL --retry 5 -o win.iso "$ISO_URL"; iso=$PWD/win.iso
+  curl -fsSL --retry 5 -o win.iso "$ISO_URL"
+  iso=$PWD/win.iso
   [ -z "$cache" ] || cp win.iso "$cache/win.iso"
 fi
 sha256sum "$iso"
@@ -50,6 +54,9 @@ if [ "$TASK" = shaders ]; then
   cp "$repo/ci/windows-vm/oats-shaders.cmd" cfg/oats-run.cmd
 else
   cp "$exe" cfg/oats-meetings-rs.exe
+  llvm_out=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#llvmPackages.llvm" | head -1)
+  "$llvm_out/bin/llvm-readobj" --coff-imports "$exe" | awk '/Name:/{print $2}' | sort -u > cfg/dlls.txt
+  cat cfg/dlls.txt
   cp "$repo/ci/windows-vm/oats-run.cmd" cfg/oats-run.cmd
 fi
 xorriso -as mkisofs -o cfg.iso -J -R -V OATSCFG cfg
@@ -92,4 +99,7 @@ fi
 grep -a 'OATS_RC=' serial.log
 grep -a -q 'OATS_RC=0' serial.log
 # keep the installed disk as the cached base (it has run once; later runs overlay it and re-run via the OatsRun task)
-if [ "$installing" = 1 ] && [ -n "$cache" ]; then qemu-img convert -O qcow2 disk.qcow2 "$cache/base.qcow2.tmp" && mv "$cache/base.qcow2.tmp" "$cache/base.qcow2"; echo "OATS_VM base cached"; fi
+if [ "$installing" = 1 ] && [ -n "$cache" ]; then
+  qemu-img convert -O qcow2 disk.qcow2 "$cache/base.qcow2.tmp" && mv "$cache/base.qcow2.tmp" "$cache/base.qcow2"
+  echo "OATS_VM base cached"
+fi
