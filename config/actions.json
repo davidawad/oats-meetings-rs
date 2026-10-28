@@ -123,6 +123,45 @@
       "status": "implemented"
     },
     {
+      "doc": "List audio capture devices (loopback and mic) for the selected backend.",
+      "effect": "read",
+      "name": "devices-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Start recording a session (system loopback + mic to one WAV).",
+      "effect": "control",
+      "name": "record-start",
+      "params": [
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Stop recording and save the session.",
+      "effect": "control",
+      "name": "record-stop",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Pause or resume recording.",
+      "effect": "control",
+      "name": "record-pause",
+      "params": [],
+      "status": "implemented"
+    },
+    {
       "doc": "Import sessions from an OpenOats sessions root or one session dir.",
       "effect": "write",
       "name": "session-import",
@@ -302,27 +341,6 @@
       "name": "stt-status",
       "params": [],
       "status": "implemented"
-    },
-    {
-      "doc": "Start recording a session.",
-      "effect": "control",
-      "name": "record-start",
-      "params": [],
-      "status": "planned"
-    },
-    {
-      "doc": "Stop recording.",
-      "effect": "control",
-      "name": "record-stop",
-      "params": [],
-      "status": "planned"
-    },
-    {
-      "doc": "Pause or resume recording.",
-      "effect": "control",
-      "name": "record-pause",
-      "params": [],
-      "status": "planned"
     },
     {
       "doc": "List sessions, optionally in a time window (RFC 3339).",
@@ -533,6 +551,8 @@
     "config-reloaded",
     "config-reload-failed",
     "recording-started",
+    "recording-paused",
+    "recording-stopped",
     "segment",
     "session-saved",
     "session-deleted",
