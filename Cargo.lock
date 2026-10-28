@@ -3042,6 +3042,7 @@ dependencies = [
 name = "oats-meetings-rs"
 version = "0.0.1"
 dependencies = [
+ "embed-resource",
  "oats-core",
  "oats-ctl",
  "oats-ui",
