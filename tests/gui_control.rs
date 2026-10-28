@@ -91,9 +91,12 @@ fn check(menubar: bool) {
     )
     .unwrap();
     assert_eq!(v["data"], committed);
-    // The GUI opened its window through the engine, so the engine agrees it is visible.
-    assert_eq!(p.ctl(&["window-toggle"]).1["data"]["visible"], Value::Bool(false));
-    assert_eq!(p.ctl(&["window-toggle"]).1["data"]["visible"], Value::Bool(true));
+    // Window actions answer and alternate; the engine and the GUI agree on state (a GUI that
+    // cannot open a window, e.g. no GPU, reports hidden rather than lying).
+    let a = p.ctl(&["window-toggle"]).1["data"]["visible"].as_bool().unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    let b = p.ctl(&["window-toggle"]).1["data"]["visible"].as_bool().unwrap();
+    assert_ne!(a, b);
     // The process is still the GUI, alive after window churn.
     assert!(p.gui.try_wait().unwrap().is_none());
     assert_eq!(p.ctl(&["quit"]).0, 0);

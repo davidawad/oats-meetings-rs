@@ -99,7 +99,12 @@ fn open_window(host: &mut Host, cx: &mut App) {
             host.window = Some(h);
             host.applied_capture = None; // new window: capture plan must be applied again
         }
-        Err(e) => eprintln!("oats-meetings-rs: cannot open window: {e}"),
+        Err(e) => {
+            // Keep the engine's idea of the window true: nothing is showing.
+            eprintln!("oats-meetings-rs: cannot open window: {e}");
+            host.want_visible = false;
+            let _ = model::dispatch(&host.engine, "window-hide", json!({}));
+        }
     }
 }
 
