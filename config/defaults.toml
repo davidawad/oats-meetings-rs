@@ -11,6 +11,10 @@ single_instance = true
 backend = "auto"
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"
+# How long a capture backend waits for audio to start flowing before giving up.
+open_timeout = "15s"
+# Pause of the recorder writer and of capture readiness polling.
+poll_interval = "25ms"
 # Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.
 transcribe = "auto"
 
@@ -29,8 +33,20 @@ enabled = true
 [config]
 # Watch the user config file and reload on change.
 hot_reload = true
+# How often the user config file is checked for changes while config.hot_reload is on.
+poll_interval = "250ms"
 
 [control]
+# Wait after an accept error before trying again.
+accept_backoff = "50ms"
+# Idle wait of the control-socket accept loop between checks.
+accept_poll = "10ms"
+# Default wait of oats-ctl for events or for an engine that is still starting (its --timeout-ms flag overrides).
+client_timeout = "10s"
+# Events queued per subscriber before a slow one is dropped.
+event_queue = 256
+# Largest control-socket request line, in bytes; longer lines are refused.
+max_line = 1048576
 # Control socket path; empty means the per-user runtime dir.
 socket = ""
 
@@ -43,8 +59,8 @@ allow_file = true
 cache_dir = ""
 # Whether STATUS:CANCELLED events appear in ics-events.
 cancelled = "hide"
-# Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.
-default_refresh_secs = "900"
+# Time between automatic refreshes of a feed with no refresh_secs of its own; 0s means manual only.
+default_refresh = "15m"
 # IANA zone for floating times and for the midnight bounds of all-day events.
 default_tz = "UTC"
 # Master switch for refreshing feeds (manual and scheduled). Cached events stay readable.
@@ -52,21 +68,23 @@ enabled = true
 # JSON array of feeds: {name, url, enabled, refresh_secs, header}. Edit with ics-add / ics-remove.
 feeds = "[]"
 # Largest feed body accepted, in bytes.
-max_bytes = "5242880"
+max_bytes = 5242880
 # Most occurrences expanded per recurring event per query.
-max_occurrences = "500"
+max_occurrences = 500
 # A malformed event fails the whole feed (error) or is dropped and counted (skip).
 on_bad_event = "error"
+# How often the feed scheduler checks which feeds are due.
+poll_interval = "1s"
 # When a refresh fails, keep serving the last good cached copy.
 stale_on_error = true
-# Whole-request timeout for a feed fetch, in seconds.
-timeout_secs = "15"
+# Whole-request timeout for a feed fetch.
+timeout = "15s"
 # An unknown TZID fails the event (error) or falls back to ics.default_tz.
 unknown_tz = "error"
 # Scheme webcal:// URLs are fetched with.
 webcal_scheme = "https"
 # Default length of the ics-events window in days when no end is given.
-window_days = "7"
+window_days = 7
 
 [kb]
 # Embedding endpoint base URL for kb.embedder ollama / openai-compatible.
@@ -75,8 +93,14 @@ base_url = ""
 dir = ""
 # KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).
 embedder = "hash"
+# Largest KB chunk, in characters; longer paragraphs are cut.
+max_chunk = 1200
+# Smallest KB chunk kept, in characters; shorter fragments are dropped. Must not exceed kb.max_chunk.
+min_chunk = 20
 # Embedding model name for the ollama / openai-compatible embedders.
 model = "nomic-embed-text"
+# Whole-request timeout for a KB embedding call.
+timeout = "2m"
 
 [license]
 # Licence holder metadata (placeholder; no licence chosen).
@@ -93,6 +117,8 @@ backend = "ollama"
 base_url = ""
 # Model name sent to the LLM backend.
 model = "llama3.1"
+# Whole-request timeout for a notes-generation LLM call.
+timeout = "2m"
 
 [network]
 # Allow outward network calls (cloud STT / LLM). Off means such backends are denied.
@@ -141,8 +167,8 @@ adapter = "none"
 key = "secret:stt/cloud"
 # Model name sent to the cloud STT service.
 model = "whisper-1"
-# Whole-request timeout for one cloud transcription, in seconds.
-timeout_secs = "60"
+# Whole-request timeout for one cloud transcription.
+timeout = "1m"
 # Base URL of the OpenAI-compatible transcription API.
 url = "https://api.openai.com/v1"
 
@@ -151,8 +177,8 @@ url = "https://api.openai.com/v1"
 enabled = true
 
 [stt.live]
-# Seconds of audio per live transcription window.
-chunk_secs = "4"
+# Length of audio per live transcription window.
+chunk = "4s"
 # Transcribe while recording and write transcript.live.jsonl.
 enabled = true
 
@@ -164,7 +190,7 @@ model_path = ""
 # Directory holding local model files; empty means models/ beside the sessions dir.
 models_dir = ""
 # CPU threads for local transcription.
-threads = "4"
+threads = 4
 
 [templates]
 # Folder of note-template TOML files; empty means <config dir>/templates.
