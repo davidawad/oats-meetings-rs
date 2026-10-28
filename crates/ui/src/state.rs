@@ -14,16 +14,27 @@ pub enum Tab {
     #[default]
     Live,
     Sessions,
+    Notes,
+    Templates,
+    Calendar,
+    Trash,
+    Models,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Live, Tab::Sessions, Tab::Settings];
+    pub const ALL: [Tab; 8] =
+        [Tab::Live, Tab::Sessions, Tab::Notes, Tab::Templates, Tab::Calendar, Tab::Trash, Tab::Models, Tab::Settings];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Live => "Live",
             Tab::Sessions => "Sessions",
+            Tab::Notes => "Notes",
+            Tab::Templates => "Templates",
+            Tab::Calendar => "Calendar",
+            Tab::Trash => "Trash",
+            Tab::Models => "Models",
             Tab::Settings => "Settings",
         }
     }
@@ -672,6 +683,16 @@ mod tests {
         st.edit.as_mut().unwrap().buf = "soon".into();
         st.commit_edit(&engine);
         assert!(st.edit.as_ref().unwrap().error.is_some());
+    }
+
+    #[test]
+    fn every_tab_is_in_the_nav_once_with_a_distinct_label() {
+        let labels: std::collections::BTreeSet<_> = Tab::ALL.iter().map(|t| t.label()).collect();
+        assert_eq!(labels.len(), Tab::ALL.len());
+        assert_eq!(Tab::ALL[0], Tab::default());
+        for t in ["Notes", "Templates", "Calendar", "Trash", "Models"] {
+            assert!(labels.contains(t), "{t}");
+        }
     }
 
     #[test]

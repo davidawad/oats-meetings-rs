@@ -1,4 +1,4 @@
-//! The main window: Live transcript, Sessions list, Settings. Pure presentation over `State`;
+//! The main window: tab bar, banner, the active tab's view (see `views`), status line. Pure presentation over `State`;
 //! every control dispatches an action id through `model::dispatch`.
 
 use std::sync::Arc;
@@ -14,21 +14,22 @@ use serde_json::json;
 
 use crate::settings::{next_value, Row, Widget};
 use crate::state::{badge_text, Control, Controls, EditKey, Line, Rec, State, Tab};
+use crate::views;
 
-const ERR: u32 = 0xf38ba8;
+pub(crate) const ERR: u32 = 0xf38ba8;
 
-const BG: u32 = 0x1e1e2e;
-const PANEL: u32 = 0x313244;
-const FG: u32 = 0xcdd6f4;
-const DIM: u32 = 0x9399b2;
-const ACCENT: u32 = 0x89b4fa;
-const WARN: u32 = 0xf9e2af;
+pub(crate) const BG: u32 = 0x1e1e2e;
+pub(crate) const PANEL: u32 = 0x313244;
+pub(crate) const FG: u32 = 0xcdd6f4;
+pub(crate) const DIM: u32 = 0x9399b2;
+pub(crate) const ACCENT: u32 = 0x89b4fa;
+pub(crate) const WARN: u32 = 0xf9e2af;
 const REC_RED: u32 = 0xf38ba8;
 const PAUSE_AMBER: u32 = 0xf9e2af;
 const OK_GREEN: u32 = 0xa6e3a1;
 
 pub struct MainWindow {
-    engine: Arc<Engine>,
+    pub(crate) engine: Arc<Engine>,
     pub state: State,
     /// Keyboard focus for the settings text editor; created on first render.
     focus: Option<FocusHandle>,
@@ -195,7 +196,7 @@ impl MainWindow {
         }))
     }
 
-    fn lines(lines: &[Line], empty: &str, speaker_w: f32) -> impl IntoElement {
+    pub(crate) fn lines(lines: &[Line], empty: &str, speaker_w: f32) -> impl IntoElement {
         let body = div().flex().flex_col().gap_1().w_full();
         if lines.is_empty() {
             return body.child(div().text_color(rgb(DIM)).child(empty.to_string()));
@@ -256,7 +257,7 @@ impl MainWindow {
         Some(row)
     }
 
-    fn speaker_width(&self) -> f32 {
+    pub(crate) fn speaker_width(&self) -> f32 {
         self.engine.snapshot().config.ui.speaker_width as f32
     }
 
@@ -295,53 +296,6 @@ impl MainWindow {
                     .track_scroll(&self.live_scroll)
                     .child(Self::lines(&self.state.live, empty, w)),
             )
-    }
-
-    fn sessions(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = div()
-            .id("sessions")
-            .flex()
-            .flex_col()
-            .gap_1()
-            .w(px(280.))
-            .overflow_y_scroll()
-            .children(self.state.sessions.iter().map(|s| {
-                let id = s.id.clone();
-                let sel = self.state.selected.as_deref() == Some(s.id.as_str());
-                let title = if s.title.is_empty() {
-                    s.id.clone()
-                } else {
-                    s.title.clone()
-                };
-                div()
-                    .id(SharedString::from(format!("session-{}", s.id)))
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(rgb(if sel { ACCENT } else { PANEL }))
-                    .text_color(rgb(if sel { BG } else { FG }))
-                    .child(format!("{title}  ({} lines)", s.utterances))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.state.select(&this.engine, &id);
-                        cx.notify();
-                    }))
-            }));
-        let detail = div()
-            .id("transcript")
-            .flex_1()
-            .min_w_0()
-            .overflow_y_scroll()
-            .child(Self::lines(
-                &self.state.transcript,
-                if self.state.selected.is_some() {
-                    "Empty transcript."
-                } else {
-                    "Select a session."
-                },
-                self.speaker_width(),
-            ));
-        div().flex().gap_4().size_full().child(list).child(detail)
     }
 
     fn setting_row(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
@@ -500,9 +454,15 @@ impl Render for MainWindow {
         window.set_window_title("Oats");
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let controls = self.engine.snapshot().config.ui.record_controls;
+        // One line per tab; each view lives in its own file under `views/`.
         let body = match self.state.tab {
             Tab::Live => self.live().into_any_element(),
-            Tab::Sessions => self.sessions(cx).into_any_element(),
+            Tab::Sessions => views::sessions::render(self, cx),
+            Tab::Notes => views::notes::render(self, cx),
+            Tab::Templates => views::templates::render(self, cx),
+            Tab::Calendar => views::calendar::render(self, cx),
+            Tab::Trash => views::trash::render(self, cx),
+            Tab::Models => views::models::render(self, cx),
             Tab::Settings => self.settings(cx).into_any_element(),
         };
         div()

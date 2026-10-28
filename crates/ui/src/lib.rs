@@ -7,6 +7,7 @@ pub mod settings;
 pub mod state;
 pub mod tray;
 pub mod view;
+pub mod views;
 
 #[cfg(test)]
 mod testutil;
