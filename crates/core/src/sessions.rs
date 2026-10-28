@@ -239,6 +239,23 @@ impl Store {
         Ok(summary(&l))
     }
 
+    /// Write `notes.md` into the session and record how it was made in `session.json`.
+    pub fn set_notes(&self, id: &str, notes: &str, template: &str, backend: &str, model: &str) -> Result<PathBuf> {
+        let mut l = self.find(id)?;
+        let path = l.dir.join("notes.md");
+        let tmp = l.dir.join(format!(".notes.md.tmp{}", std::process::id()));
+        std::fs::write(&tmp, notes)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| io(&path, e))?;
+        l.meta.insert("hasNotes".into(), json!(true));
+        l.meta.insert("notesTemplate".into(), json!(template));
+        l.meta.insert("notesBackend".into(), json!(backend));
+        l.meta.insert("notesModel".into(), json!(model));
+        l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+        write_meta(&l.dir, &l.meta)?;
+        Ok(path)
+    }
+
     /// Callers enforce the `--confirm` policy. `Trash` moves the session directory to the OS
     /// trash (recoverable); `Remove` deletes it for good.
     pub fn delete(&self, id: &str, mode: DeleteMode) -> Result<Value> {

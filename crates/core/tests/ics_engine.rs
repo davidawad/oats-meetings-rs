@@ -154,6 +154,7 @@ impl Rig {
             arch: "x86_64".into(),
             machine: "default".into(),
             sessions_dir: dir.path().join("data").join("sessions"),
+            secrets: None,
         })
         .unwrap();
         Rig { dir, engine }

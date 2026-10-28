@@ -174,7 +174,7 @@ impl Settings {
 
 /// Build the recogniser `settings` selects. `network_allow` and the secrets config come from the
 /// resolved config.
-pub fn make_asr(s: &Settings, network_allow: bool, secrets: &crate::config::typed::Secrets) -> Result<Arc<dyn Asr>> {
+pub fn make_asr(s: &Settings, network_allow: bool, secrets: &dyn crate::secrets::SecretStore) -> Result<Arc<dyn Asr>> {
     match s.backend {
         SttBackend::Local => local_asr(s),
         SttBackend::Cloud => {
@@ -185,8 +185,7 @@ pub fn make_asr(s: &Settings, network_allow: bool, secrets: &crate::config::type
             let key = if s.cloud_key.is_empty() {
                 None
             } else {
-                let store = crate::secrets::store_for(secrets);
-                Some(crate::secrets::resolve(&*store, &s.cloud_key)?)
+                Some(crate::secrets::resolve(secrets, &s.cloud_key)?)
             };
             Ok(Arc::new(cloud::OpenAiAsr {
                 url: s.cloud_url.clone(),
@@ -469,7 +468,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                     return Err(ConfigError::new("invalid_argument", format!("speaker must be 'you' or 'them', got {other:?}")))
                 }
             }
-            let asr = make_asr(&s, cfg.network.allow, &cfg.secrets)?;
+            let asr = make_asr(&s, cfg.network.allow, &*engine.secret_store(&cfg))?;
             let now = Utc::now();
             let id = session.clone().unwrap_or_else(|| format!("session_{}", now.format("%Y-%m-%d_%H-%M-%S")));
             run(&engine.store(), Some(&engine.bus), asr, &s, &chans, &id, now)
@@ -478,8 +477,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             let key = if s.cloud_key.is_empty() {
                 "none"
             } else {
-                let store = crate::secrets::store_for(&cfg.secrets);
-                match crate::secrets::resolve(&*store, &s.cloud_key) {
+                match crate::secrets::resolve(&*engine.secret_store(&cfg), &s.cloud_key) {
                     Ok(_) => "set",
                     Err(e) if e.code == "secret_not_found" => "missing",
                     Err(e) => e.code,

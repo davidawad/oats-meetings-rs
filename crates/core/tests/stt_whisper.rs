@@ -83,6 +83,7 @@ fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
         arch: "x86_64".into(),
         machine: "default".into(),
         sessions_dir: dir.path().join("data").join("sessions"),
+        secrets: None,
     })
     .unwrap();
     let id = "session_2026-10-28_12-00-00";

@@ -17,6 +17,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 interprocess = "2"
+tiny_http = "0.12"
 trash = "5"
 toml_edit = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
@@ -47,6 +48,7 @@ oats-ui = { workspace = true, optional = true }
 [dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true
+tiny_http.workspace = true
 
 [features]
 default = ["gui"]

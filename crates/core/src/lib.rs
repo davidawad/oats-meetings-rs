@@ -3,8 +3,12 @@
 pub mod action;
 pub mod config;
 pub mod control;
-pub mod ics;
+pub mod http;
+pub mod kb;
+pub mod notes;
 pub mod secrets;
+pub mod templates;
+pub mod ics;
 pub mod sessions;
 pub mod stt;
 

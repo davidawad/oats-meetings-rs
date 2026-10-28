@@ -27,15 +27,27 @@
     "webcal_scheme": "https",
     "window_days": "7"
   },
+  "kb": {
+    "base_url": "",
+    "dir": "",
+    "embedder": "hash",
+    "model": "nomic-embed-text"
+  },
   "license": {
     "holder": "",
     "spdx": "LicenseRef-Undecided"
   },
   "llm": {
-    "backend": "ollama"
+    "api_key_ref": "secret:llm/api-key",
+    "backend": "ollama",
+    "base_url": "",
+    "model": "llama3.1"
   },
   "network": {
     "allow": false
+  },
+  "notes": {
+    "enforce_headings": true
   },
   "privacy": {
     "hide_from_capture": true,
@@ -54,27 +66,13 @@
   "stt": {
     "backend": "local",
     "cloud": {
-      "adapter": "none",
-      "key": "secret:stt/cloud",
-      "model": "whisper-1",
-      "timeout_secs": "60",
-      "url": "https://api.openai.com/v1"
-    },
-    "final": {
-      "enabled": true
-    },
-    "language": "en",
-    "live": {
-      "chunk_secs": "4",
-      "enabled": true
+      "adapter": "none"
     },
     "local": {
-      "model": "base.en",
-      "model_path": "",
-      "models_dir": "",
-      "threads": "4"
-    },
-    "speaker_them": "remote_1",
-    "speaker_you": "you"
+      "model": "base.en"
+    }
+  },
+  "templates": {
+    "dir": ""
   }
 }
