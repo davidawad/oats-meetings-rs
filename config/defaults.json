@@ -5,7 +5,6 @@
   },
   "audio": {
     "backend": "auto",
-    "dir": "",
     "layout": "split",
     "mic": {
       "device": "",
@@ -14,7 +13,8 @@
     "system": {
       "device": "",
       "enabled": true
-    }
+    },
+    "transcribe": "auto"
   },
   "config": {
     "hot_reload": true

@@ -92,6 +92,7 @@ pub const EVENTS: &[&str] = &[
     "recording-started",
     "recording-paused",
     "recording-stopped",
+    "recording-config-deferred",
     "segment",
     "session-saved",
     "session-deleted",

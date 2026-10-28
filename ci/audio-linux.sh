@@ -14,11 +14,15 @@ mkdir -p "$PULSE_RUNTIME_PATH" "$PULSE_STATE_PATH" "$PULSE_CONFIG_PATH"
 export PULSE_SERVER="unix:$PULSE_RUNTIME_PATH/native"
 backends=auto,pulse
 if [ -n "${AUDIO_PIPEWIRE:-}" ]; then
-  pw=$(env -u LD_LIBRARY_PATH nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pipewire" | head -1)
-  export PATH="$pw/bin:$PATH"
+  # pipewire has several outputs (bin, lib, man ...): put every output's bin dir on PATH.
+  for o in $(env -u LD_LIBRARY_PATH nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pipewire"); do PATH="$o/bin:$PATH"; done
+  wp=$(env -u LD_LIBRARY_PATH nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#wireplumber" | head -1)
+  export PATH="$wp/bin:$PATH"
   export PIPEWIRE_RUNTIME_DIR="$XDG_RUNTIME_DIR"
   env -u LD_LIBRARY_PATH pipewire > "$XDG_RUNTIME_DIR/pw.log" 2>&1 &
-  sleep 1
+  sleep 2
+  env -u LD_LIBRARY_PATH wireplumber > "$XDG_RUNTIME_DIR/wp.log" 2>&1 &
+  sleep 2
   env -u LD_LIBRARY_PATH pipewire-pulse > "$XDG_RUNTIME_DIR/pwp.log" 2>&1 &
   sleep 2
   backends=auto,pulse,pipewire
@@ -42,7 +46,12 @@ pactl list short sources
 # Diagnostic: how many bytes parec delivers from a monitor in 5 s of wall clock (48 kHz mono f32: 960000 expected).
 (pacat --playback --device=oats_sink --format=float32le --rate=48000 --channels=1 < /dev/zero & tp=$!; sleep 0.5; \
   n=$(timeout 5 parec --device=oats_sink.monitor --format=float32le --rate=48000 --channels=1 | wc -c); kill $tp; echo "parec 5s bytes=$n (expect ~960000)") || true
+# Local ASR for the speech test: the checksummed model (ci/fetch-models.sh) and a whisper.cpp build (libclang
+# comes from the host via ci/nix-env.sh).
+source "$(dirname "$0")/fetch-models.sh"
 set -x
-cargo build --locked --workspace
-cargo test --locked --workspace --no-fail-fast
-OATS_AUDIO_LIVE=1 OATS_AUDIO_BACKENDS="$backends" cargo test --locked --test audio_live -- --nocapture --test-threads=1
+cargo build --locked --workspace --features oats-core/whisper
+rc=0
+cargo test --locked --workspace --features oats-core/whisper --no-fail-fast || rc=$?
+OATS_AUDIO_LIVE=1 OATS_AUDIO_BACKENDS="$backends" cargo test --locked --features oats-core/whisper --test audio_live -- --nocapture --test-threads=1 || rc=$?
+exit $rc

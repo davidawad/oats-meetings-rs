@@ -80,6 +80,9 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         Kind::Str if matches!(k.path, "stt.live.chunk_secs" | "stt.local.threads" | "stt.cloud.timeout_secs") => vec![json!("11"), json!("22")],
         Kind::Str if k.path == "ics.default_tz" => vec![json!("Europe/Paris"), json!("Asia/Tokyo")],
         Kind::Str if k.path.starts_with("ics.") && k.path != "ics.cache_dir" => vec![json!("11"), json!("22")],
+        // A host with an audio stack vetoes a device name it does not have, so only "" is safe here;
+        // the veto itself is tested in record.rs with a fake backend.
+        Kind::Str if k.path.starts_with("audio.") && k.path.ends_with(".device") => vec![json!(""), json!("")],
         Kind::Str => vec![json!("sample-x"), json!("sample-y")],
     }
 }
