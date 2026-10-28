@@ -127,14 +127,44 @@ root = ""
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
+# Spoken language code passed to the recogniser.
+language = "en"
+# Speaker id written for the system-audio (them) channel.
+speaker_them = "remote_1"
+# Speaker id written for the microphone (you) channel.
+speaker_you = "you"
 
 [stt.cloud]
 # Cloud STT adapter; must not be none when stt.backend is cloud.
 adapter = "none"
+# Secret reference for the cloud STT API key (never the key itself); see the secrets module.
+key = "secret:stt/cloud"
+# Model name sent to the cloud STT service.
+model = "whisper-1"
+# Whole-request timeout for one cloud transcription, in seconds.
+timeout_secs = "60"
+# Base URL of the OpenAI-compatible transcription API.
+url = "https://api.openai.com/v1"
+
+[stt.final]
+# Re-transcribe the whole recording when it stops and write transcript.final.jsonl.
+enabled = true
+
+[stt.live]
+# Seconds of audio per live transcription window.
+chunk_secs = "4"
+# Transcribe while recording and write transcript.live.jsonl.
+enabled = true
 
 [stt.local]
 # Local ASR model name.
 model = "base.en"
+# Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin.
+model_path = ""
+# Directory holding local model files; empty means models/ beside the sessions dir.
+models_dir = ""
+# CPU threads for local transcription.
+threads = "4"
 
 [templates]
 # Folder of note-template TOML files; empty means <config dir>/templates.

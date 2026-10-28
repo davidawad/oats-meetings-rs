@@ -181,12 +181,32 @@ pub enum SttAdapter {
 #[serde(deny_unknown_fields)]
 pub struct SttCloud {
     pub adapter: SttAdapter,
+    pub key: String,
+    pub model: String,
+    pub timeout_secs: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttLocal {
     pub model: String,
+    pub model_path: String,
+    pub models_dir: String,
+    pub threads: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SttLive {
+    pub chunk_secs: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SttFinal {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -194,7 +214,13 @@ pub struct SttLocal {
 pub struct Stt {
     pub backend: SttBackend,
     pub cloud: SttCloud,
+    #[serde(rename = "final")]
+    pub final_: SttFinal,
+    pub language: String,
+    pub live: SttLive,
     pub local: SttLocal,
+    pub speaker_them: String,
+    pub speaker_you: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -123,45 +123,6 @@
       "status": "implemented"
     },
     {
-      "doc": "List audio capture devices (loopback and mic) for the selected backend.",
-      "effect": "read",
-      "name": "devices-list",
-      "params": [],
-      "status": "implemented"
-    },
-    {
-      "doc": "Start recording a session (system loopback + mic to one WAV).",
-      "effect": "control",
-      "name": "record-start",
-      "params": [
-        {
-          "name": "session",
-          "required": false,
-          "type": "Option<String>"
-        },
-        {
-          "name": "title",
-          "required": false,
-          "type": "Option<String>"
-        }
-      ],
-      "status": "implemented"
-    },
-    {
-      "doc": "Stop recording and save the session.",
-      "effect": "control",
-      "name": "record-stop",
-      "params": [],
-      "status": "implemented"
-    },
-    {
-      "doc": "Pause or resume recording.",
-      "effect": "control",
-      "name": "record-pause",
-      "params": [],
-      "status": "implemented"
-    },
-    {
       "doc": "Import sessions from an OpenOats sessions root or one session dir.",
       "effect": "write",
       "name": "session-import",
@@ -311,6 +272,57 @@
         }
       ],
       "status": "implemented"
+    },
+    {
+      "doc": "Transcribe a WAV file into a new session using the stt.* keys: stereo is you (left) / them (right), mono is one speaker (speaker=you|them).",
+      "effect": "write",
+      "name": "stt-transcribe",
+      "params": [
+        {
+          "name": "path",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "speaker",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Which STT backend is selected and whether it can run (model present, network, key); never shows the key.",
+      "effect": "read",
+      "name": "stt-status",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Start recording a session.",
+      "effect": "control",
+      "name": "record-start",
+      "params": [],
+      "status": "planned"
+    },
+    {
+      "doc": "Stop recording.",
+      "effect": "control",
+      "name": "record-stop",
+      "params": [],
+      "status": "planned"
+    },
+    {
+      "doc": "Pause or resume recording.",
+      "effect": "control",
+      "name": "record-pause",
+      "params": [],
+      "status": "planned"
     },
     {
       "doc": "List sessions, optionally in a time window (RFC 3339).",
@@ -521,8 +533,6 @@
     "config-reloaded",
     "config-reload-failed",
     "recording-started",
-    "recording-paused",
-    "recording-stopped",
     "segment",
     "session-saved",
     "session-deleted",

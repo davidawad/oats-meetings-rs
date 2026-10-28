@@ -11,6 +11,7 @@ pub mod secrets;
 pub mod templates;
 pub mod ics;
 pub mod sessions;
+pub mod stt;
 
 pub const APP_NAME: &str = "oats-meetings-rs";
 

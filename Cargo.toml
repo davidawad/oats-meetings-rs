@@ -27,6 +27,8 @@ rrule = "0.14"
 chrono-tz = "0.10"
 ureq = { version = "3", default-features = false, features = ["gzip"] }
 keyring = "4"
+hound = "3"
+whisper-rs = "0.16"
 oats-core = { path = "crates/core" }
 oats-audio = { path = "crates/audio" }
 oats-ui = { path = "crates/ui" }

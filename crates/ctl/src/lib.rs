@@ -58,7 +58,7 @@ fn absolutize(raw: &str) -> String {
 }
 
 fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
-    if wire == "session-import" && param == "from" {
+    if (wire == "session-import" && param == "from") || (wire == "stt-transcribe" && param == "path") {
         return Value::String(absolutize(raw));
     }
     let t = param_type(wire, param).replace(' ', "");

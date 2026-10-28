@@ -503,6 +503,74 @@
               "type": "string",
               "x-reload": "live",
               "x-ui": true
+            },
+            "key": {
+              "default": "secret:stt/cloud",
+              "description": "Secret reference for the cloud STT API key (never the key itself); see the secrets module.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "model": {
+              "default": "whisper-1",
+              "description": "Model name sent to the cloud STT service.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "timeout_secs": {
+              "default": "60",
+              "description": "Whole-request timeout for one cloud transcription, in seconds.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "url": {
+              "default": "https://api.openai.com/v1",
+              "description": "Base URL of the OpenAI-compatible transcription API.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "final": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Re-transcribe the whole recording when it stops and write transcript.final.jsonl.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "language": {
+          "default": "en",
+          "description": "Spoken language code passed to the recogniser.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "live": {
+          "additionalProperties": false,
+          "properties": {
+            "chunk_secs": {
+              "default": "4",
+              "description": "Seconds of audio per live transcription window.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": true,
+              "description": "Transcribe while recording and write transcript.live.jsonl.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
             }
           },
           "type": "object"
@@ -516,9 +584,44 @@
               "type": "string",
               "x-reload": "live",
               "x-ui": true
+            },
+            "model_path": {
+              "default": "",
+              "description": "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "models_dir": {
+              "default": "",
+              "description": "Directory holding local model files; empty means models/ beside the sessions dir.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "threads": {
+              "default": "4",
+              "description": "CPU threads for local transcription.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
             }
           },
           "type": "object"
+        },
+        "speaker_them": {
+          "default": "remote_1",
+          "description": "Speaker id written for the system-audio (them) channel.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "speaker_you": {
+          "default": "you",
+          "description": "Speaker id written for the microphone (you) channel.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
         }
       },
       "type": "object"
