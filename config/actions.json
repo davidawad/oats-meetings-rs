@@ -278,7 +278,7 @@
       "status": "planned"
     },
     {
-      "doc": "Generate notes from a template.",
+      "doc": "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.",
       "effect": "write",
       "name": "notes-generate",
       "params": [
@@ -291,19 +291,55 @@
           "name": "template",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "dry_run",
+          "required": false,
+          "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "List note templates.",
       "effect": "read",
       "name": "template-list",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Search the knowledge base.",
+      "doc": "One note template.",
+      "effect": "read",
+      "name": "template-get",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Import an OpenOats templates.json into the templates folder.",
+      "effect": "write",
+      "name": "template-import",
+      "params": [
+        {
+          "name": "from",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Search the knowledge base (deterministic ranking).",
       "effect": "read",
       "name": "kb-search",
       "params": [
@@ -311,16 +347,21 @@
           "name": "query",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "Option<u64>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Rebuild the knowledge base index.",
       "effect": "write",
       "name": "kb-reindex",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     }
   ],
   "events": [

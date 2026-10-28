@@ -9,19 +9,35 @@
   "control": {
     "socket": ""
   },
+  "kb": {
+    "base_url": "",
+    "dir": "",
+    "embedder": "hash",
+    "model": "nomic-embed-text"
+  },
   "license": {
     "holder": "",
     "spdx": "LicenseRef-Undecided"
   },
   "llm": {
-    "backend": "ollama"
+    "api_key_name": "OATS_LLM_API_KEY",
+    "backend": "ollama",
+    "base_url": "",
+    "model": "llama3.1"
   },
   "network": {
     "allow": false
   },
+  "notes": {
+    "enforce_headings": true
+  },
   "privacy": {
     "hide_from_capture": true,
     "hide_method": "none"
+  },
+  "secrets": {
+    "keychain_service": "oats-meetings-rs",
+    "source": "env"
   },
   "sessions": {
     "confirm_delete": true,
@@ -36,5 +52,8 @@
     "local": {
       "model": "base.en"
     }
+  },
+  "templates": {
+    "dir": ""
   }
 }
