@@ -60,6 +60,9 @@ actions! {
     IcsList, "ics-list", "Subscribed feeds with cache and refresh state.", "implemented", "read", {};
     IcsRefresh, "ics-refresh", "Fetch one feed (or every enabled feed) now; gated by network.allow.", "implemented", "write", { name: Option<String> };
     IcsEvents, "ics-events", "Events from the cached feeds in a time window (RFC 3339 or YYYY-MM-DD), recurrences expanded.", "implemented", "read", { from: Option<String>, to: Option<String>, feed: Option<String> };
+    SecretSet, "secret-set", "Store a secret under key 'namespace/name' in the writable secrets backend (OS keychain). The value is never shown again.", "implemented", "write", { key: String, value: String };
+    SecretDelete, "secret-delete", "Delete a stored secret.", "implemented", "write", { key: String };
+    SecretHas, "secret-has", "Whether a secret resolves in the configured backend (never returns the value).", "implemented", "read", { key: String };
     RecordStart, "record-start", "Start recording a session.", "planned", "control", {};
     RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
     RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};

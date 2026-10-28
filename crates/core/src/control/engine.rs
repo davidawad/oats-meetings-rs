@@ -21,7 +21,7 @@ use crate::config::keys::{self, Kind};
 use crate::config::resolve::{self, Inputs, Resolved};
 use crate::config::typed::Config;
 use crate::config::{cli, ConfigError, Result, SCHEMA_VERSION};
-use crate::secrets::{EnvSecrets, KeychainSecrets, SecretStore};
+use crate::secrets::{self, SecretStore};
 use crate::sessions::Store;
 use crate::{kb, notes, templates};
 use std::path::Path;
@@ -29,7 +29,7 @@ use std::path::Path;
 use super::bus::Bus;
 use super::subsystem::Subsystem;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EngineOpts {
     pub user_config: PathBuf,
     pub pack: Option<String>,
@@ -38,7 +38,7 @@ pub struct EngineOpts {
     pub machine: String,
     /// Used when `sessions.root` is empty.
     pub sessions_dir: PathBuf,
-    /// Secret store override (tests, embedders); None picks env or keychain from `secrets.source`.
+    /// Secret store override (tests, embedders); None builds the store from `secrets.backend`.
     pub secrets: Option<Arc<dyn SecretStore>>,
 }
 
@@ -175,14 +175,9 @@ impl Engine {
     }
 
     fn secret_store(&self, cfg: &Config) -> Arc<dyn SecretStore> {
-        if let Some(s) = &self.opts.secrets {
-            return Arc::clone(s);
-        }
-        match cfg.secrets.source {
-            crate::config::typed::SecretsSource::Env => Arc::new(EnvSecrets),
-            crate::config::typed::SecretsSource::Keychain => {
-                Arc::new(KeychainSecrets { service: cfg.secrets.keychain_service.clone() })
-            }
+        match &self.opts.secrets {
+            Some(s) => Arc::clone(s),
+            None => Arc::from(secrets::store_for(&cfg.secrets)),
         }
     }
 
@@ -560,6 +555,9 @@ impl Engine {
                     self.session_event(id, "import");
                 }
                 Ok(v)
+            }
+            Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
+                crate::secrets::dispatch(self, a)
             }
             Action::IcsAdd { .. }
             | Action::IcsRemove { .. }

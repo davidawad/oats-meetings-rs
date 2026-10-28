@@ -62,13 +62,13 @@ pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
 pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
-pub const SECRET_SOURCES: &[&str] = &["env", "keychain"];
 pub const ICS_WEBCAL_SCHEMES: &[&str] = &["https", "http"];
 pub const ICS_CANCELLED: &[&str] = &["hide", "show"];
 pub const ICS_ON_BAD_EVENT: &[&str] = &["error", "skip"];
 pub const ICS_UNKNOWN_TZ: &[&str] = &["error", "default_tz"];
 pub const ICS_ALL_DAY: &[&str] = &["include", "exclude"];
 pub const DELETE_MODES: &[&str] = &["trash", "remove"];
+pub const SECRETS_BACKENDS: &[&str] = &["env", "keyring", "env-then-keyring"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
@@ -138,10 +138,10 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "llm.api_key_name",
+        path: "llm.api_key_ref",
         kind: Kind::Str,
-        default: Def::S("OATS_LLM_API_KEY"),
-        doc: "NAME of the secret holding the LLM API key (env var or keychain account). The key itself is never in config.",
+        default: Def::S("secret:llm/api-key"),
+        doc: "Reference (secret:<namespace>/<name>) to the LLM API key in the secrets backend. The key itself is never in config; store it with secret-set.",
         ui: false,
         reload: Reload::Live,
     },
@@ -166,22 +166,6 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Bool,
         default: Def::B(true),
         doc: "Reject generated notes that lack a '## ' heading the template's prompt demands.",
-        ui: true,
-        reload: Reload::Live,
-    },
-    Key {
-        path: "secrets.keychain_service",
-        kind: Kind::Str,
-        default: Def::S("oats-meetings-rs"),
-        doc: "Keychain service name used when secrets.source = keychain.",
-        ui: false,
-        reload: Reload::Live,
-    },
-    Key {
-        path: "secrets.source",
-        kind: Kind::Enum(SECRET_SOURCES),
-        default: Def::S("env"),
-        doc: "Where API keys are read from: process environment or the OS keychain.",
         ui: true,
         reload: Reload::Live,
     },
@@ -366,6 +350,30 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Enum(HIDE_METHODS),
         default: Def::S("none"),
         doc: "How hiding is done; set per OS by the os axis.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.backend",
+        kind: Kind::Enum(SECRETS_BACKENDS),
+        default: Def::S("env-then-keyring"),
+        doc: "Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.env_prefix",
+        kind: Kind::Str,
+        default: Def::S("OATS_SECRET_"),
+        doc: "Prefix of the environment variable holding a secret: secret:ics/work reads OATS_SECRET_ICS_WORK.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.keyring_service",
+        kind: Kind::Str,
+        default: Def::S("oats-meetings-rs"),
+        doc: "Service name secrets are filed under in the OS keychain.",
         ui: false,
         reload: Reload::Live,
     },

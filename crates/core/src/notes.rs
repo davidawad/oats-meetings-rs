@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use crate::config::typed::{Config, LlmBackend};
 use crate::config::{ConfigError, Result};
 use crate::control::subsystem::Subsystem;
-use crate::secrets::SecretStore;
+use crate::secrets::{self, SecretStore};
 use crate::sessions::Store;
 use crate::templates;
 use crate::http;
@@ -79,17 +79,15 @@ pub fn api_key(cfg: &Config, secrets: &dyn SecretStore) -> Result<Option<String>
     if cfg.llm.backend == LlmBackend::Ollama {
         return Ok(None);
     }
-    let key = secrets.get(&cfg.llm.api_key_name)?;
-    if key.is_none() && cfg.llm.backend == LlmBackend::Openrouter {
-        return Err(ConfigError::new(
+    match secrets::resolve(secrets, &cfg.llm.api_key_ref) {
+        Ok(k) => Ok(Some(k)),
+        Err(e) if e.code == "secret_not_found" && cfg.llm.backend != LlmBackend::Openrouter => Ok(None),
+        Err(e) if e.code == "secret_not_found" => Err(ConfigError::new(
             "secret_missing",
-            format!(
-                "openrouter needs an API key: secret {:?} (secrets.source = {:?}) is not set",
-                cfg.llm.api_key_name, cfg.secrets.source
-            ),
-        ));
+            format!("openrouter needs an API key: {} (set it with `secret-set`)", e.message),
+        )),
+        Err(e) => Err(e),
     }
-    Ok(key)
 }
 
 fn render_transcript(store: &Store, session: &str) -> Result<String> {
@@ -197,9 +195,8 @@ impl Subsystem for NotesSubsystem {
                 return Err(ConfigError::new("invalid_value", format!("{key} {dir:?} is an existing file, not a directory")));
             }
         }
-        if new.llm.api_key_name.trim().is_empty() {
-            return Err(ConfigError::new("invalid_value", "llm.api_key_name must not be empty"));
-        }
+        // A literal API key here is refused outright: only references are config.
+        secrets::require_ref(&new.llm.api_key_ref, "llm.api_key_ref")?;
         Ok(())
     }
 }

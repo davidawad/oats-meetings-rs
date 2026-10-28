@@ -12,7 +12,7 @@ use crate::config::typed::{Config, KbEmbedder, LlmBackend};
 use crate::config::{ConfigError, Result};
 use crate::http;
 use crate::notes;
-use crate::secrets::SecretStore;
+use crate::secrets::{self, SecretStore};
 
 pub const INDEX_FILE: &str = ".oats-kb-index.json";
 const INDEX_VERSION: u64 = 1;
@@ -128,7 +128,11 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             }
             let url = http::join(&cfg.kb.base_url, "embeddings");
             notes::gate(cfg, LlmBackend::OpenaiCompatible, &url)?;
-            let key = ctx.secrets.get(&cfg.llm.api_key_name)?;
+            let key = match secrets::resolve(ctx.secrets, &cfg.llm.api_key_ref) {
+                Ok(k) => Some(k),
+                Err(e) if e.code == "secret_not_found" => None,
+                Err(e) => return Err(e),
+            };
             let r = http::post_json(&url, key.as_deref(), &json!({"model": cfg.kb.model, "input": texts}))?;
             let data = r["data"].as_array().ok_or_else(|| ConfigError::new("backend_bad_response", "no data array"))?;
             if data.len() != texts.len() {
@@ -254,7 +258,7 @@ pub fn search(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
 mod tests {
     use super::*;
     use crate::config::resolve::{resolve, Inputs};
-    use crate::secrets::MemSecrets;
+    use crate::secrets::MemStore;
 
     fn cfg() -> Config {
         resolve(&Inputs { pack: None, os: "linux", arch: "x", machine: "default", user_toml: None })
@@ -267,9 +271,9 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/kb")
     }
 
-    fn built(dir: &Path) -> (Config, MemSecrets) {
+    fn built(dir: &Path) -> (Config, MemStore) {
         let cfg = cfg();
-        let s = MemSecrets::default();
+        let s = MemStore::default();
         // copy fixture so the index is not written into the repo
         for (rel, abs) in files(&fixture()).unwrap() {
             let to = dir.join(&rel);

@@ -70,6 +70,7 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         Kind::Bool => vec![json!(true), json!(false)],
         Kind::Enum(vs) => vs.iter().map(|v| json!(v)).collect(),
         Kind::Str if k.path == "control.socket" => vec![json!(dir.join("alt.sock").to_str().unwrap()), json!("")],
+        Kind::Str if k.path == "llm.api_key_ref" => vec![json!("secret:llm/other"), json!("secret:ns/x")],
         Kind::Str if k.path.ends_with("base_url") => vec![json!("http://127.0.0.1:9"), json!("")],
         Kind::Str if k.path == "sessions.root" => vec![json!(dir.join("elsewhere").to_str().unwrap()), json!("")],
         Kind::Str if k.path == "ics.feeds" => vec![

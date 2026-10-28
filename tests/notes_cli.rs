@@ -58,8 +58,7 @@ fn cmd(rt: &str, cfg: &str) -> Command {
         .env("OATS_RUNTIME_DIR", rt)
         .env("OATS_CONFIG", cfg)
         .env("OATS_OS", "linux")
-        .env_remove("OATS_PACK")
-        .env_remove("OATS_LLM_API_KEY");
+        .env_remove("OATS_PACK");
     c
 }
 

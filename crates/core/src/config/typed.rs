@@ -58,7 +58,7 @@ pub enum LlmBackend {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Llm {
-    pub api_key_name: String,
+    pub api_key_ref: String,
     pub backend: LlmBackend,
     pub base_url: String,
     pub model: String,
@@ -85,20 +85,6 @@ pub struct Kb {
 #[serde(deny_unknown_fields)]
 pub struct Notes {
     pub enforce_headings: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SecretsSource {
-    Env,
-    Keychain,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Secrets {
-    pub keychain_service: String,
-    pub source: SecretsSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -231,4 +217,20 @@ pub struct Ics {
     pub unknown_tz: IcsUnknownTz,
     pub webcal_scheme: IcsWebcalScheme,
     pub window_days: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretsBackend {
+    Env,
+    Keyring,
+    EnvThenKeyring,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Secrets {
+    pub backend: SecretsBackend,
+    pub env_prefix: String,
+    pub keyring_service: String,
 }

@@ -12,7 +12,7 @@ use oats_core::control::client::Client;
 use oats_core::control::engine::{Engine, EngineOpts};
 use oats_core::control::server;
 use oats_core::kb::hash_embed;
-use oats_core::secrets::{MemSecrets, SecretStore};
+use oats_core::secrets::{MemStore, SecretStore};
 use serde_json::{json, Map, Value};
 
 // ---------- mock server ----------
@@ -100,7 +100,11 @@ impl Rig {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.toml");
         std::fs::write(&cfg, toml).unwrap();
-        let store: Arc<dyn SecretStore> = Arc::new(MemSecrets::with(secrets));
+        let mem = MemStore::default();
+        for (k, v) in secrets {
+            mem.set(k, v).unwrap();
+        }
+        let store: Arc<dyn SecretStore> = Arc::new(mem);
         let engine = Engine::new(EngineOpts {
             user_config: cfg.clone(),
             pack: None,
@@ -197,7 +201,7 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
 #[test]
 fn openai_compatible_backend_with_and_without_a_key() {
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
-    let rig = Rig::new(&llm_toml("openai-compatible", &mock.base, ""), &[("OATS_LLM_API_KEY", "sk-test-1")]);
+    let rig = Rig::new(&llm_toml("openai-compatible", &mock.base, ""), &[("llm/api-key", "sk-test-1")]);
     let r = rig.generate("Generic", &[]);
     // Template "Generic" demands Summary + Action Items; NOTES lacks Action Items, so turn the gate off here.
     assert_eq!(r["error"]["code"], "headings_missing", "{r}");
@@ -221,7 +225,7 @@ fn openai_compatible_backend_with_and_without_a_key() {
 #[test]
 fn openrouter_backend_needs_network_allow_and_a_key() {
     let mock = Mock::start(|_, _| (200, chat_reply("openrouter", NOTES)));
-    let denied = Rig::new(&llm_toml("openrouter", &mock.base, ""), &[("OATS_LLM_API_KEY", "k")]);
+    let denied = Rig::new(&llm_toml("openrouter", &mock.base, ""), &[("llm/api-key", "k")]);
     let r = denied.generate("Sales Prospect Call", &[]);
     assert_eq!(r["error"]["code"], "network_denied", "{r}");
     assert!(mock.requests().is_empty(), "a denied request must do no I/O");
@@ -231,7 +235,7 @@ fn openrouter_backend_needs_network_allow_and_a_key() {
     assert_eq!(nokey.generate("Sales Prospect Call", &[])["error"]["code"], "secret_missing");
     assert!(mock.requests().is_empty());
 
-    let ok = Rig::new(&format!("{}{allow}", llm_toml("openrouter", &mock.base, "")), &[("OATS_LLM_API_KEY", "or-key")]);
+    let ok = Rig::new(&format!("{}{allow}", llm_toml("openrouter", &mock.base, "")), &[("llm/api-key", "or-key")]);
     let r = ok.generate("Sales Prospect Call", &[]);
     assert_eq!(r["ok"], true, "{r}");
     let req = &mock.requests()[0];
@@ -243,8 +247,8 @@ fn openrouter_backend_needs_network_allow_and_a_key() {
 fn custom_key_name_is_honoured() {
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
     let rig = Rig::new(
-        &llm_toml("openai-compatible", &mock.base, "api_key_name = \"MY_KEY\"\n"),
-        &[("MY_KEY", "named"), ("OATS_LLM_API_KEY", "wrong")],
+        &llm_toml("openai-compatible", &mock.base, "api_key_ref = \"secret:llm/mine\"\n"),
+        &[("llm/mine", "named"), ("llm/api-key", "wrong")],
     );
     assert_eq!(rig.generate("Sales Prospect Call", &[])["ok"], true);
     assert_eq!(mock.requests()[0].auth.as_deref(), Some("Bearer named"));
@@ -255,7 +259,7 @@ fn custom_key_name_is_honoured() {
 #[test]
 fn cloud_backend_without_network_allow_is_network_denied_with_default_urls() {
     // No base_url: openrouter's real URL is never contacted.
-    let rig = Rig::new("[llm]\nbackend = \"openrouter\"\n", &[("OATS_LLM_API_KEY", "k")]);
+    let rig = Rig::new("[llm]\nbackend = \"openrouter\"\n", &[("llm/api-key", "k")]);
     let r = rig.generate("Sales Prospect Call", &[]);
     assert_eq!(r["error"]["code"], "network_denied", "{r}");
     assert!(r["error"]["message"].as_str().unwrap().contains("openrouter.ai"));
@@ -272,7 +276,7 @@ fn non_loopback_ollama_is_outward_and_denied() {
 #[test]
 fn dry_run_shows_the_request_without_sending_it_even_when_denied() {
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
-    let rig = Rig::new(&llm_toml("openrouter", &mock.base, ""), &[("OATS_LLM_API_KEY", "super-secret-key")]);
+    let rig = Rig::new(&llm_toml("openrouter", &mock.base, ""), &[("llm/api-key", "super-secret-key")]);
     let r = rig.generate("Sales Prospect Call", &[("dry_run", json!(true))]);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["data"]["dry_run"], true);
@@ -361,8 +365,8 @@ fn bad_urls_and_dirs_are_rejected_by_the_notes_subsystem() {
     assert_eq!(r["error"]["code"], "invalid_value");
     let r = c.call("config-set", p(&[("key", json!("templates.dir")), ("value", json!(rig.cfg.to_str().unwrap()))])).unwrap();
     assert_eq!(r["error"]["code"], "invalid_value");
-    let r = c.call("config-set", p(&[("key", json!("llm.api_key_name")), ("value", json!(" "))])).unwrap();
-    assert_eq!(r["error"]["code"], "invalid_value");
+    let r = c.call("config-set", p(&[("key", json!("llm.api_key_ref")), ("value", json!(" "))])).unwrap();
+    assert_eq!(r["error"]["code"], "secret_plaintext");
 }
 
 // ---------- secrets ----------
@@ -375,6 +379,11 @@ fn api_keys_cannot_live_in_the_config_file() {
         let r = c.call("config-set", p(&[("key", json!(key)), ("value", json!("sk-leak"))])).unwrap();
         assert_eq!(r["error"]["code"], "unknown_key", "{key}");
     }
+    // The one place a key could be typed is the reference field, and it only takes references.
+    let r = c.call("config-set", p(&[("key", json!("llm.api_key_ref")), ("value", json!("sk-leak"))])).unwrap();
+    assert_eq!(r["error"]["code"], "secret_plaintext", "{r}");
+    let r = c.call("config-set", p(&[("key", json!("llm.api_key_ref")), ("value", json!("secret:llm/other"))])).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
     std::fs::write(&rig.cfg, "[llm]\napi_key = \"sk-leak\"\n").unwrap();
     let r = c.call("config-reload", Map::new()).unwrap();
     assert_eq!(r["error"]["code"], "unknown_key");
@@ -382,13 +391,13 @@ fn api_keys_cannot_live_in_the_config_file() {
 }
 
 #[test]
-fn keychain_source_is_used_when_selected() {
+fn keyring_backend_is_used_when_selected() {
     // No test secret store: the engine builds its own from secrets.source. In a sandbox the
     // keychain is empty or unavailable; both must surface as clear errors, never as a request.
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join("config.toml");
-    std::fs::write(&cfg, format!("{}\n[network]\nallow = true\n[secrets]\nsource = \"keychain\"\nkeychain_service = \"oats-meetings-rs-test-none\"\n", llm_toml("openrouter", &mock.base, ""))).unwrap();
+    std::fs::write(&cfg, format!("{}\n[network]\nallow = true\n[secrets]\nbackend = \"keyring\"\nkeyring_service = \"oats-meetings-rs-test-none\"\n", llm_toml("openrouter", &mock.base, ""))).unwrap();
     let engine = Engine::new(EngineOpts {
         user_config: cfg,
         pack: None,
@@ -405,7 +414,7 @@ fn keychain_source_is_used_when_selected() {
     c.call("template-import", p(&[("from", json!(fixtures().join("openoats-templates.json").to_str().unwrap()))])).unwrap();
     let r = c.call("notes-generate", p(&[("session", json!(SESSION)), ("template", json!("Sales Prospect Call"))])).unwrap();
     let code = r["error"]["code"].as_str().unwrap_or("");
-    assert!(code == "secret_missing" || code == "secret_store_error", "{r}");
+    assert!(code == "secret_missing" || code == "secret_backend_unavailable", "{r}");
     assert!(mock.requests().is_empty());
     drop(h);
 }
@@ -515,7 +524,7 @@ fn kb_remote_embedders_ollama_and_openai_compatible() {
             kbdir.to_str().unwrap(),
             mock.base
         );
-        let secrets: Vec<(&str, &str)> = key.map(|k| ("OATS_LLM_API_KEY", k)).into_iter().collect();
+        let secrets: Vec<(&str, &str)> = key.map(|k| ("llm/api-key", k)).into_iter().collect();
         let rig = Rig::new(&toml, &secrets);
         let mut c = rig.client();
         let r = c.call("kb-reindex", Map::new()).unwrap();

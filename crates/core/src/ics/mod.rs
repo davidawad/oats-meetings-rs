@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Config, Ics, IcsAllDay, IcsCancelled, IcsOnBadEvent, IcsUnknownTz, IcsWebcalScheme};
+use crate::config::typed::{Config, Ics, Secrets, IcsAllDay, IcsCancelled, IcsOnBadEvent, IcsUnknownTz, IcsWebcalScheme};
 use crate::config::{ConfigError, Result};
 use crate::control::engine::Engine;
 use crate::control::subsystem::Subsystem;
@@ -45,7 +45,8 @@ pub struct Feed {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_secs: Option<u64>,
-    /// One request header, `Name: value`, for feeds behind a token.
+    /// One request header, `Name: secret:<key>`, for feeds behind a token. Only the reference is
+    /// stored; the secret lives in the secrets backend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<String>,
 }
@@ -110,7 +111,11 @@ impl Settings {
 /// `config-check`: the `ics.*` strings parse and the feed list is well formed.
 pub fn validate_settings(c: &Ics) -> Result<()> {
     Settings::from_config(c)?;
-    parse_feeds(&c.feeds)?;
+    for f in parse_feeds(&c.feeds)? {
+        if let Some(h) = &f.header {
+            header_secret(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+        }
+    }
     Ok(())
 }
 
@@ -129,6 +134,13 @@ fn header_pair(h: &str) -> Result<(String, String)> {
         return Err(bad());
     }
     Ok((k.to_string(), v.trim().to_string()))
+}
+
+/// A feed header is `Name: secret:ics/<feed>`: the value is a reference, never the secret.
+pub fn header_secret(h: &str) -> Result<(String, String)> {
+    let (name, value) = header_pair(h)?;
+    let key = crate::secrets::require_ref(&value, "a feed header value")?;
+    Ok((name, key))
 }
 
 pub fn parse_feeds(text: &str) -> Result<Vec<Feed>> {
@@ -224,6 +236,7 @@ static FEED_LIST_LOCK: Mutex<()> = Mutex::new(());
 
 struct Ctx {
     cfg: Ics,
+    secrets: Secrets,
     network_allow: bool,
     settings: Settings,
     cache: Cache,
@@ -233,7 +246,7 @@ fn ctx(engine: &Engine) -> Result<Ctx> {
     let typed = engine.resolved().typed()?;
     let settings = Settings::from_config(&typed.ics)?;
     let dir = cache_dir(&settings, engine.default_sessions_dir());
-    Ok(Ctx { network_allow: typed.network.allow, cfg: typed.ics, settings, cache: Cache { dir } })
+    Ok(Ctx { network_allow: typed.network.allow, secrets: typed.secrets, cfg: typed.ics, settings, cache: Cache { dir } })
 }
 
 fn cache_dir(s: &Settings, sessions: &Path) -> PathBuf {
@@ -265,7 +278,7 @@ impl Subsystem for IcsSubsystem {
             fetch::classify(&f.url, s.webcal_https)
                 .map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
             if let Some(h) = &f.header {
-                header_pair(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+                header_secret(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
             }
         }
         Ok(())
@@ -343,7 +356,7 @@ fn add(
     let c = ctx(engine)?;
     fetch::classify(url, c.settings.webcal_https)?;
     if let Some(h) = header {
-        header_pair(h)?;
+        header_secret(h)?;
     }
     let _g = FEED_LIST_LOCK.lock().expect("feed list lock");
     let mut feeds = load_feeds(&c)?;
@@ -460,7 +473,15 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
         }
         _ => {}
     }
-    let header = f.header.as_deref().map(header_pair).transpose()?;
+    let header = match f.header.as_deref() {
+        Some(h) => {
+            let (name, key) = header_secret(h)?;
+            let store = crate::secrets::store_for(&c.secrets);
+            let value = crate::secrets::resolve(&*store, &format!("{}{key}", crate::secrets::REF_PREFIX))?;
+            Some((name, value))
+        }
+        None => None,
+    };
     let prior = c.cache.read_meta(&f.name);
     let have_body = c.cache.ics(&f.name).exists();
     let opts = FetchOpts {
@@ -639,6 +660,8 @@ mod tests {
     #[test]
     fn header_pairs() {
         assert_eq!(header_pair("Authorization: Bearer t").unwrap(), ("Authorization".into(), "Bearer t".into()));
+        assert_eq!(header_secret("Authorization: secret:ics/work").unwrap(), ("Authorization".into(), "ics/work".into()));
+        assert_eq!(header_secret("Authorization: Bearer t").unwrap_err().code, "secret_plaintext");
         assert!(header_pair("nocolon").is_err());
         assert!(header_pair("bad name: v").is_err());
     }
