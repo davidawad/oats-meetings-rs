@@ -121,7 +121,9 @@ impl CaptureBackend for PulseBackend {
             .arg("--format=float32le")
             .arg(format!("--rate={SAMPLE_RATE}"))
             .arg("--channels=1")
-            .arg("--latency-msec=20");
+            // 100 ms, not 20: on a loaded host (CI pods) a 20 ms stream underruns and drops audio, measured
+            // as 8 s of audio per 10 s of wall clock; at 100 ms the full 10 s arrives (ci/audio-probe.sh).
+            .arg("--latency-msec=100");
         proc::spawn(cmd, on_samples)
     }
 }
