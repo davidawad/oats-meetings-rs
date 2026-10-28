@@ -195,3 +195,7 @@ threads = 4
 [templates]
 # Folder of note-template TOML files; empty means <config dir>/templates.
 dir = ""
+
+[ui]
+# How often the window re-reads the engine state (window visibility, capture hiding, tray).
+tick = "100ms"

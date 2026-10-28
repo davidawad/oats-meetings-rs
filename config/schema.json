@@ -841,6 +841,26 @@
         }
       },
       "type": "object"
+    },
+    "ui": {
+      "additionalProperties": false,
+      "properties": {
+        "tick": {
+          "default": "100ms",
+          "description": "How often the window re-reads the engine state (window visibility, capture hiding, tray).",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "10ms",
+          "x-min-ms": 10,
+          "x-reload": "live",
+          "x-ui": false
+        }
+      },
+      "type": "object"
     }
   },
   "title": "oats-meetings-rs config",
