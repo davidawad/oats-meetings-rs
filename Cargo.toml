@@ -30,6 +30,7 @@ keyring = "4"
 hound = "3"
 whisper-rs = "0.16"
 sherpa-onnx = "1.13"
+sha2 = "0.10"
 oats-core = { path = "crates/core" }
 oats-audio = { path = "crates/audio" }
 oats-ui = { path = "crates/ui" }
@@ -58,5 +59,8 @@ tempfile.workspace = true
 tiny_http.workspace = true
 
 [features]
-default = ["gui"]
+# whisper: local ASR (whisper.cpp), so a stock build transcribes out of the box (dot-4uzgol.26). It needs cmake, a C++
+# compiler and libclang. Windows builds pass `--no-default-features --features gui` until whisper-rs is proven there.
+default = ["gui", "whisper"]
 gui = ["dep:oats-ui"]
+whisper = ["oats-core/whisper"]

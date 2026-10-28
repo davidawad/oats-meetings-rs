@@ -106,6 +106,7 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "config-set",
     "config-resolved",
     "stt-status",
+    "stt-model-fetch",
     "ics-list",
     "devices-list",
 ];

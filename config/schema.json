@@ -880,6 +880,13 @@
         "local": {
           "additionalProperties": false,
           "properties": {
+            "auto_download": {
+              "default": true,
+              "description": "When a recording starts and the local whisper model is missing, download it in the background (about 142 MB for base.en). Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            },
             "engine": {
               "default": "whisper",
               "description": "Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).",
@@ -909,6 +916,13 @@
             "model_path": {
               "default": "",
               "description": "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin (whisper) or <models_dir>/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 (parakeet, a directory).",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "model_url": {
+              "default": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main",
+              "description": "Base URL the whisper model is downloaded from (<url>/ggml-<stt.local.model>.bin). The file is checked against a pinned SHA-256, so a mirror must serve the same bytes.",
               "type": "string",
               "x-reload": "live",
               "x-ui": false

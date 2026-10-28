@@ -69,6 +69,7 @@ actions! {
     SecretHas, "secret-has", "Whether a secret resolves in the configured backend (never returns the value).", "implemented", "read", { key: String };
     SttTranscribe, "stt-transcribe", "Transcribe a WAV file into a new session using the stt.* keys: stereo is you (left) / them (right), mono is one speaker (speaker=you|them).", "implemented", "write", { path: String, session: Option<String>, speaker: Option<String> };
     SttStatus, "stt-status", "Which STT backend is selected and whether it can run (model present, network, key); never shows the key.", "implemented", "read", {};
+    SttModelFetch, "stt-model-fetch", "Download the selected stt.local.model (whisper, SHA-256 pinned) into the models directory. Returns at once with the download state (progress: stt-status and model-download events); wait=true blocks until it is done.", "implemented", "write", { wait: Option<bool> };
     SessionList, "session-list", "List sessions, optionally in a time window (RFC 3339).", "implemented", "read", { from: Option<String>, to: Option<String> };
     SessionGet, "session-get", "One session with its metadata.", "implemented", "read", { session: String };
     SessionRename, "session-rename", "Rename (retitle) a session.", "implemented", "write", { session: String, name: String };
@@ -94,6 +95,7 @@ pub const EVENTS: &[&str] = &[
     "recording-stopped",
     "recording-config-deferred",
     "segment",
+    "model-download",
     "session-saved",
     "session-deleted",
     "ics-updated",

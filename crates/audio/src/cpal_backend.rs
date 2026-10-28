@@ -113,7 +113,10 @@ mod imp {
                     }
                 }
             },
-            |e| eprintln!("oats-audio: cpal stream error: {e}"),
+            |e| {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "oats-audio: cpal stream error: {e}");
+            },
             None,
         )
     }

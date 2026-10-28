@@ -826,6 +826,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "stt.local.model_url",
+        kind: Kind::Str,
+        default: Def::S("https://huggingface.co/ggerganov/whisper.cpp/resolve/main"),
+        doc: "Base URL the whisper model is downloaded from (<url>/ggml-<stt.local.model>.bin). The file is checked against a pinned SHA-256, so a mirror must serve the same bytes.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.local.auto_download",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "When a recording starts and the local whisper model is missing, download it in the background (about 142 MB for base.en). Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "stt.local.threads",
         kind: Kind::Int { min: 1, max: 256 },
         default: Def::I(4),

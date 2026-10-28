@@ -17,6 +17,7 @@ const PANEL: u32 = 0x313244;
 const FG: u32 = 0xcdd6f4;
 const DIM: u32 = 0x9399b2;
 const ACCENT: u32 = 0x89b4fa;
+const WARN: u32 = 0xf9e2af;
 
 pub struct MainWindow {
     engine: Arc<Engine>,
@@ -75,6 +76,29 @@ impl MainWindow {
                 .child(div().w(px(80.)).text_color(rgb(ACCENT)).child(l.speaker.clone()))
                 .child(div().child(l.text.clone()))
         }))
+    }
+
+    /// The transcription-unavailable banner, with a button when an action fixes it.
+    fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let p = self.state.stt_problem.as_ref()?;
+        let mut row = div().flex().gap_3().items_center().px_3().py_2().rounded_md().bg(rgb(PANEL)).text_color(rgb(WARN)).child(p.message.clone());
+        if let Some(fix) = p.fix.clone() {
+            row = row.child(
+                div()
+                    .id("stt-fix")
+                    .px_3()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgb(ACCENT))
+                    .text_color(rgb(BG))
+                    .child("Download model")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.state.act(&this.engine, &fix, json!({}));
+                        cx.notify();
+                    })),
+            );
+        }
+        Some(row)
     }
 
     fn live(&self) -> impl IntoElement {
@@ -261,6 +285,7 @@ impl Render for MainWindow {
                 cx.notify();
             }))
             .child(self.tab_bar(cx))
+            .children(self.banner(cx))
             .child(div().flex_1().min_h_0().child(body))
             .child(div().text_sm().text_color(rgb(DIM)).child(self.state.status.clone()))
     }

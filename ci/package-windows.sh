@@ -41,11 +41,11 @@ fn main() {
 }
 RS
     export OATS_SHADERS_BYTES="$PWD/assets/windows-shaders/shaders_bytes.rs"
-    cargo xwin build --release --target x86_64-pc-windows-msvc -p oats-meetings-rs ${LOCKED:+--locked}
+    cargo xwin build --release --target x86_64-pc-windows-msvc -p oats-meetings-rs --no-default-features --features gui ${LOCKED:+--locked}
     exe=target/x86_64-pc-windows-msvc/release/oats-meetings-rs.exe
     ;;
   gui-debug)
-    cargo xwin build --target x86_64-pc-windows-msvc -p oats-meetings-rs ${LOCKED:+--locked}
+    cargo xwin build --target x86_64-pc-windows-msvc -p oats-meetings-rs --no-default-features --features gui ${LOCKED:+--locked}
     exe=target/x86_64-pc-windows-msvc/debug/oats-meetings-rs.exe
     ;;
   *)

@@ -67,10 +67,19 @@ pub enum EditKey {
     Ignored,
 }
 
+/// Why transcription cannot run right now (from `stt-status`), shown as a banner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Problem {
+    pub message: String,
+    /// Action id that repairs it (a banner button), if any.
+    pub fix: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct State {
     pub edit: Option<Edit>,
     pub device_opts: Vec<DeviceOpt>,
+    pub stt_problem: Option<Problem>,
     pub tab: Tab,
     pub sessions: Vec<SessionRow>,
     pub selected: Option<String>,
@@ -123,6 +132,10 @@ impl State {
             .flatten()
             .map(|d| DeviceOpt { id: s(d, "id"), name: s(d, "name"), kind: s(d, "kind") })
             .collect();
+        self.stt_problem = model::dispatch(engine, "stt-status", json!({})).ok().and_then(|v| {
+            let p = &v["problem"];
+            Some(Problem { message: p["message"].as_str()?.to_string(), fix: p["fix"].as_str().map(str::to_string) })
+        });
         self.settings = settings::build(&engine.resolved().flat);
         if let Some(id) = self.selected.clone() {
             self.select(engine, &id);
@@ -231,6 +244,22 @@ mod tests {
         assert_eq!(st.transcript.len(), 2);
         assert_eq!(st.transcript[0], Line { speaker: "you".into(), text: "hello".into() });
         assert!(!st.settings.is_empty());
+    }
+
+    #[test]
+    fn a_missing_model_is_a_banner_with_a_fix_and_a_present_one_is_not() {
+        let (engine, dir) = testutil::engine(&[]);
+        let mut st = State::default();
+        st.refresh(&engine);
+        let p = st.stt_problem.clone().expect("a fresh data dir has no model");
+        assert!(p.message.contains("audio only"), "{}", p.message);
+        // Whisper is compiled into default builds; without it the banner has no fix.
+        assert_eq!(p.fix.as_deref(), cfg!(feature = "whisper").then_some("stt-model-fetch"));
+        let m = dir.path().join("models");
+        std::fs::create_dir_all(&m).unwrap();
+        std::fs::write(m.join("ggml-base.en.bin"), b"x").unwrap();
+        st.refresh(&engine);
+        assert_eq!(st.stt_problem.is_some(), !cfg!(feature = "whisper"));
     }
 
     #[test]

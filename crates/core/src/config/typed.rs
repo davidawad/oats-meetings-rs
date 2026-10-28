@@ -265,6 +265,8 @@ pub struct SttLocal {
     pub model: String,
     pub model_path: String,
     pub models_dir: String,
+    pub model_url: String,
+    pub auto_download: bool,
     pub threads: u32,
 }
 

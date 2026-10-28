@@ -69,6 +69,31 @@ pub fn reconcile(want: bool, backend: &mut dyn TrayBackend, entries: &[Entry]) -
     }
 }
 
+/// Reconcile once per tick without repeating a refusal: an unsupported tray is reported once each
+/// time `app.menubar` is turned on, and not retried until it goes off and on again (dot-4uzgol.33).
+#[derive(Default)]
+pub struct Gate {
+    unsupported: bool,
+}
+
+impl Gate {
+    /// Returns the reason to log when the backend refuses the tray now.
+    pub fn step(&mut self, want: bool, backend: &mut dyn TrayBackend, entries: &[Entry]) -> Option<String> {
+        if !want {
+            self.unsupported = false;
+        } else if self.unsupported {
+            return None;
+        }
+        match reconcile(want, backend, entries) {
+            Reconciled::Unsupported(why) => {
+                self.unsupported = true;
+                Some(why)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// No tray on this platform (Linux: GPUI has no tray API and tray-icon needs gtk + appindicator).
 pub struct Unsupported;
 
@@ -227,6 +252,17 @@ mod tests {
         model::dispatch(&engine, "config-set", json!({"key": "app.menubar", "value": false})).unwrap();
         assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Hidden);
         assert_eq!((b.shown.len(), b.hides), (1, 1));
+    }
+
+    #[test]
+    fn an_unsupported_tray_is_reported_once_per_turn_on() {
+        let (mut g, mut b) = (Gate::default(), Unsupported);
+        assert!(g.step(true, &mut b, model::TRAY).is_some());
+        for _ in 0..150 {
+            assert_eq!(g.step(true, &mut b, model::TRAY), None);
+        }
+        assert_eq!(g.step(false, &mut b, model::TRAY), None);
+        assert!(g.step(true, &mut b, model::TRAY).is_some());
     }
 
     #[test]

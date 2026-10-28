@@ -19,11 +19,13 @@ icalendar.workspace = true
 rrule.workspace = true
 chrono-tz.workspace = true
 hound.workspace = true
+sha2.workspace = true
 whisper-rs = { workspace = true, optional = true }
 sherpa-onnx = { workspace = true, optional = true }
 
 [features]
-# Local ASR (whisper.cpp). Off by default: it needs cmake, a C++ compiler and libclang to build.
+# Local ASR (whisper.cpp). Off here (crate-level default stays lean for the Windows check) but ON in the root package default
+# features; it needs cmake, a C++ compiler and libclang to build.
 whisper = ["dep:whisper-rs"]
 # Local ASR (NVIDIA Parakeet TDT through sherpa-onnx). Off by default: the build fetches a prebuilt onnxruntime library.
 parakeet = ["dep:sherpa-onnx"]

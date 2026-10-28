@@ -299,21 +299,48 @@ impl Engine {
         if cfg.audio.transcribe == AudioTranscribe::Off {
             return Ok((None, json!({"state": "off", "reason": "audio.transcribe = off"})));
         }
+        let mut note = None;
         let built = (|| -> Result<crate::stt::capture::Plan> {
             let settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
             if !settings.live_enabled && !settings.final_enabled {
                 return Err(ConfigError::new("nothing_enabled", "stt.live.enabled and stt.final.enabled are both off"));
             }
             let secrets = self.secret_store(cfg);
-            let asr = self.recorder.make_asr(&settings, &|s| crate::stt::make_asr(s, cfg.network.allow, &*secrets))?;
+            let asr = match self.recorder.make_asr(&settings, &|s| crate::stt::make_asr(s, cfg.network.allow, &*secrets)) {
+                Ok(a) => a,
+                Err(e) => {
+                    note = self.first_run_model(&settings, &e);
+                    return Err(e);
+                }
+            };
             Ok(crate::stt::capture::Plan { asr, settings, bus: Arc::clone(&self.bus) })
         })();
         match built {
             Ok(p) => Ok((Some(p), Value::Null)),
             Err(e) if cfg.audio.transcribe == AudioTranscribe::Auto => {
-                Ok((None, json!({"state": "unavailable", "code": e.code, "reason": e.message})))
+                let mut why = json!({"state": "unavailable", "code": e.code, "reason": e.message});
+                if let Some(n) = note {
+                    why["reason"] = json!(format!("{}. {n}", e.message));
+                    why["download"] = json!(true);
+                }
+                Ok((None, why))
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// The local model is missing: with `stt.local.auto_download` start fetching it and return the
+    /// sentence that tells the user what happens to this recording.
+    fn first_run_model(&self, s: &crate::stt::Settings, e: &ConfigError) -> Option<String> {
+        if e.code != "model_not_found" || !s.auto_download {
+            return None;
+        }
+        match crate::stt::models::spawn(s, Some(Arc::clone(&self.bus))) {
+            Ok(_) => Some(
+                "Downloading it now (progress in stt-status); this recording is audio only. Once the model is present, run `ctl stt transcribe <session audio.wav>` to transcribe it"
+                    .to_string(),
+            ),
+            Err(_) => None,
         }
     }
 
@@ -663,7 +690,7 @@ impl Engine {
                 }
                 Ok(v)
             }
-            Action::SttTranscribe { .. } | Action::SttStatus {} => crate::stt::dispatch(self, a),
+            Action::SttTranscribe { .. } | Action::SttModelFetch { .. } | Action::SttStatus {} => crate::stt::dispatch(self, a),
             Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
                 crate::secrets::dispatch(self, a)
             }

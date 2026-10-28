@@ -343,6 +343,19 @@
       "status": "implemented"
     },
     {
+      "doc": "Download the selected stt.local.model (whisper, SHA-256 pinned) into the models directory. Returns at once with the download state (progress: stt-status and model-download events); wait=true blocks until it is done.",
+      "effect": "write",
+      "name": "stt-model-fetch",
+      "params": [
+        {
+          "name": "wait",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "List sessions, optionally in a time window (RFC 3339).",
       "effect": "read",
       "name": "session-list",
@@ -555,6 +568,7 @@
     "recording-stopped",
     "recording-config-deferred",
     "segment",
+    "model-download",
     "session-saved",
     "session-deleted",
     "ics-updated",

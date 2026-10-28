@@ -207,12 +207,16 @@ chunk = "4s"
 enabled = true
 
 [stt.local]
+# When a recording starts and the local whisper model is missing, download it in the background (about 142 MB for base.en). Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.
+auto_download = true
 # Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).
 engine = "whisper"
 # Local ASR model name.
 model = "base.en"
 # Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin (whisper) or <models_dir>/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 (parakeet, a directory).
 model_path = ""
+# Base URL the whisper model is downloaded from (<url>/ggml-<stt.local.model>.bin). The file is checked against a pinned SHA-256, so a mirror must serve the same bytes.
+model_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 # Directory holding local model files; empty means models/ beside the sessions dir.
 models_dir = ""
 # CPU threads for local transcription.

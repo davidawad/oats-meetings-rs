@@ -80,6 +80,7 @@ struct Host {
     applied_capture: Option<capture::Plan>,
     /// What the engine says the window should be (from `window-changed`).
     want_visible: bool,
+    tray_gate: tray::Gate,
 }
 
 type Shared = Rc<RefCell<Host>>;
@@ -110,7 +111,7 @@ fn open_window(host: &mut Host, cx: &mut App) {
         }
         Err(e) => {
             // Keep the engine's idea of the window true: nothing is showing.
-            eprintln!("oats-meetings-rs: cannot open window: {e}");
+            oats_core::elog!("oats-meetings-rs: cannot open window: {e}");
             host.want_visible = false;
             let _ = model::dispatch(&host.engine, "window-hide", json!({}));
         }
@@ -129,7 +130,7 @@ fn tick(host: &Shared, cx: &mut App) {
         let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
         match v["event"].as_str() {
             Some("window-changed") => h.want_visible = v["data"]["visible"].as_bool().unwrap_or(false),
-            Some("session-saved" | "session-deleted" | "config-reloaded" | "setting-changed") => changed_sessions = true,
+            Some("session-saved" | "session-deleted" | "config-reloaded" | "setting-changed" | "model-download") => changed_sessions = true,
             _ => {}
         }
     }
@@ -158,8 +159,8 @@ fn tick(host: &Shared, cx: &mut App) {
         if h.applied_capture != Some(plan) {
             let out = w.update(cx, |_, window, _| capture::apply(window, plan));
             match out {
-                Ok(capture::Applied::Failed(e)) => eprintln!("oats-meetings-rs: capture hiding failed: {e}"),
-                Ok(capture::Applied::WrongPlatform(why)) => eprintln!("oats-meetings-rs: capture hiding unavailable: {why}"),
+                Ok(capture::Applied::Failed(e)) => oats_core::elog!("oats-meetings-rs: capture hiding failed: {e}"),
+                Ok(capture::Applied::WrongPlatform(why)) => oats_core::elog!("oats-meetings-rs: capture hiding unavailable: {why}"),
                 _ => {}
             }
             h.applied_capture = Some(plan);
@@ -173,8 +174,8 @@ fn tick(host: &Shared, cx: &mut App) {
     }
     let want = h.tray_state.wanted();
     let h = &mut *h;
-    if let tray::Reconciled::Unsupported(why) = tray::reconcile(want, &mut *h.tray, model::TRAY) {
-        eprintln!("oats-meetings-rs: app.menubar is on but {why}");
+    if let Some(why) = h.tray_gate.step(want, &mut *h.tray, model::TRAY) {
+        oats_core::elog!("oats-meetings-rs: app.menubar is on but {why}");
     }
     for id in h.tray.take_clicks() {
         let _ = model::dispatch(&h.engine, &id, json!({}));
@@ -192,11 +193,11 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
     let handle = match server::serve(Arc::clone(&engine), runtime_dir) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("{e}");
+            oats_core::elog!("{e}");
             return 1;
         }
     };
-    eprintln!("oats-meetings-rs: engine listening on {}", handle.socket_display());
+    oats_core::elog!("oats-meetings-rs: engine listening on {}", handle.socket_display());
     let host: Shared = Rc::new(RefCell::new(Host {
         engine: Arc::clone(&engine),
         events: engine.bus.subscribe(vec![]),
@@ -205,6 +206,7 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
         window: None,
         applied_capture: None,
         want_visible: false,
+        tray_gate: tray::Gate::default(),
     }));
     let h2 = Rc::clone(&host);
     gpui_platform::application().run(move |cx: &mut App| {
@@ -215,7 +217,7 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
         cx.on_action(move |a: &Do, _cx: &mut App| {
             if let Err(e) = model::dispatch(&eng, &a.id, json!({})) {
                 if e.code != "not_implemented" {
-                    eprintln!("oats-meetings-rs: {}: {e}", a.id);
+                    oats_core::elog!("oats-meetings-rs: {}: {e}", a.id);
                 }
             }
         });
@@ -241,7 +243,7 @@ pub fn run_env() -> i32 {
     match Engine::from_env(&env) {
         Ok(engine) => run(engine, &paths::runtime_dir(&env)),
         Err(ConfigError { .. }) => {
-            eprintln!("oats-meetings-rs: cannot start the engine");
+            oats_core::elog!("oats-meetings-rs: cannot start the engine");
             1
         }
     }

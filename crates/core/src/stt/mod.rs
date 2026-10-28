@@ -20,6 +20,7 @@ pub mod capture;
 pub mod cloud;
 #[cfg(feature = "whisper")]
 pub mod local;
+pub mod models;
 #[cfg(feature = "parakeet")]
 pub mod parakeet;
 pub mod wav;
@@ -105,6 +106,10 @@ pub struct Settings {
     pub engine: SttEngine,
     pub model: String,
     pub model_file: PathBuf,
+    /// `stt.local.model_path` is set: the file is the user's to provide.
+    pub explicit_model_path: bool,
+    pub model_url: String,
+    pub auto_download: bool,
     pub threads: u32,
     pub cloud_url: String,
     pub cloud_model: String,
@@ -160,6 +165,9 @@ impl Settings {
             engine: c.local.engine,
             model: model.to_string(),
             model_file,
+            explicit_model_path: !c.local.model_path.trim().is_empty(),
+            model_url: c.local.model_url.trim().to_string(),
+            auto_download: c.local.auto_download,
             threads: c.local.threads,
             cloud_url: c.cloud.url.trim().to_string(),
             cloud_model: c.cloud.model.trim().to_string(),
@@ -263,7 +271,11 @@ fn whisper_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     if !s.model_file.is_file() {
         return Err(ConfigError::new(
             "model_not_found",
-            format!("{} not found; fetch it with ci/fetch-models.sh or set stt.local.model_path", s.model_file.display()),
+            format!(
+                "whisper model {} not found at {}; download it with `ctl stt model fetch` (or the Download model button), or set stt.local.model_path",
+                s.model,
+                s.model_file.display()
+            ),
         ));
     }
     Ok(Arc::new(local::WhisperAsr::load(&s.model_file, s.threads)?))
@@ -273,7 +285,7 @@ fn whisper_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
 fn whisper_asr(_s: &Settings) -> Result<Arc<dyn Asr>> {
     Err(ConfigError::new(
         "backend_unavailable",
-        "this build has no local ASR; rebuild with --features oats-core/whisper",
+        "this build has no local ASR; rebuild with --features oats-core/whisper (or use stt.backend = cloud)",
     ))
 }
 
@@ -526,6 +538,26 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             let id = session.clone().unwrap_or_else(|| format!("session_{}", now.format("%Y-%m-%d_%H-%M-%S")));
             run(&engine.store(), Some(&*engine.bus), asr, &s, &chans, &id, now)
         }
+        Action::SttModelFetch { wait } => {
+            let wait = wait.unwrap_or(false);
+            if !cfg!(feature = "whisper") {
+                return Err(ConfigError::new(
+                    "backend_unavailable",
+                    "this build has no local ASR, so a model would not be used; rebuild with --features oats-core/whisper",
+                ));
+            }
+            if wait {
+                if s.model_file.is_file() {
+                    return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
+                }
+                models::wait_idle(&s.model_file);
+                if s.model_file.is_file() {
+                    return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
+                }
+                return models::run(&s, Some(&*engine.bus));
+            }
+            models::spawn(&s, Some(Arc::clone(&engine.bus)))
+        }
         Action::SttStatus {} => {
             let key = if s.cloud_key.is_empty() {
                 "none"
@@ -542,7 +574,10 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 "local": {
                     "model": s.model, "path": s.model_file, "present": s.model_file.is_file(),
                     "compiled": cfg!(feature = "whisper"), "threads": s.threads,
+                    "auto_download": s.auto_download, "url": s.model_url,
+                    "download": models::progress(&s.model_file).map(|p| p.to_json()),
                 },
+                "problem": problem(&s),
                 "cloud": {
                     "adapter": match s.adapter { SttAdapter::None => "none", SttAdapter::OpenaiCompatible => "openai-compatible" },
                     "url": s.cloud_url, "model": s.cloud_model, "network_allow": cfg.network.allow, "key": key,
@@ -550,6 +585,37 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             }))
         }
         _ => Err(ConfigError::new("bad_request", "not an stt action")),
+    }
+}
+
+/// What stops local transcription from working, for the GUI banner and `ctl`: `null` when nothing
+/// does. `fix` is an action id that repairs it, when there is one.
+fn problem(s: &Settings) -> Value {
+    if s.backend != SttBackend::Local {
+        return Value::Null;
+    }
+    if s.engine == SttEngine::Whisper && !cfg!(feature = "whisper") || s.engine == SttEngine::Parakeet && !cfg!(feature = "parakeet") {
+        return json!({"code": "backend_unavailable", "message": "This build has no local transcription engine, so recordings are saved as audio only. Use a build with local ASR or set stt.backend to cloud.", "fix": null});
+    }
+    let present = if s.engine == SttEngine::Whisper { s.model_file.is_file() } else { s.model_file.is_dir() };
+    if present {
+        return Value::Null;
+    }
+    let fetchable = models::check(s).is_ok();
+    match models::progress(&s.model_file) {
+        Some(p) if p.state == "downloading" => {
+            let pct = p.to_json()["percent"].as_u64().map_or(String::new(), |x| format!(" {x}%"));
+            json!({"code": "model_downloading", "message": format!("Downloading the {} model{pct}. Recordings made until it finishes are saved as audio only.", s.model), "fix": null})
+        }
+        Some(p) if p.state == "failed" => {
+            let why = p.error.map(|e| e.1).unwrap_or_default();
+            json!({"code": "model_download_failed", "message": format!("Downloading the {} model failed: {why}", s.model), "fix": "stt-model-fetch"})
+        }
+        _ => json!({
+            "code": "model_not_found",
+            "message": format!("The {} model is not downloaded, so recordings are saved as audio only.", s.model),
+            "fix": if fetchable { json!("stt-model-fetch") } else { Value::Null },
+        }),
     }
 }
 
