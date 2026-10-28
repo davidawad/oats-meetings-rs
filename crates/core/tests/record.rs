@@ -236,7 +236,10 @@ fn recording_writes_live_and_final_transcripts_with_the_stt_speakers() {
     let s = start(&r, "t1");
     assert_eq!(s["transcription"]["state"], "on");
     // Live utterances arrive while still recording.
-    wait_until("a live transcript before stop", || !lines(&r, "t1", "live").is_empty());
+    // The file is appended while we read: only a newline-terminated line is a whole utterance.
+    wait_until("a live transcript before stop", || {
+        std::fs::read_to_string(r.dir.path().join("rec/t1/transcript.live.jsonl")).is_ok_and(|t| t.contains('\n'))
+    });
     let done = stop(&r);
     let t = &done["transcription"];
     assert_eq!(t["state"], "done", "{t}");
