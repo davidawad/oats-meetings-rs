@@ -55,6 +55,11 @@ actions! {
     WindowToggle, "window-toggle", "Toggle the main window.", "implemented", "control", {};
     PrivacyToggle, "privacy-toggle", "Toggle hiding the window from screen capture.", "implemented", "write", {};
     SessionImport, "session-import", "Import sessions from an OpenOats sessions root or one session dir.", "implemented", "write", { from: String, overwrite: Option<bool> };
+    IcsAdd, "ics-add", "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.", "implemented", "write", { name: String, url: String, enabled: Option<bool>, refresh_secs: Option<u64>, header: Option<String> };
+    IcsRemove, "ics-remove", "Unsubscribe from a feed and drop its cache.", "implemented", "write", { name: String };
+    IcsList, "ics-list", "Subscribed feeds with cache and refresh state.", "implemented", "read", {};
+    IcsRefresh, "ics-refresh", "Fetch one feed (or every enabled feed) now; gated by network.allow.", "implemented", "write", { name: Option<String> };
+    IcsEvents, "ics-events", "Events from the cached feeds in a time window (RFC 3339 or YYYY-MM-DD), recurrences expanded.", "implemented", "read", { from: Option<String>, to: Option<String>, feed: Option<String> };
     RecordStart, "record-start", "Start recording a session.", "planned", "control", {};
     RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
     RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};
@@ -82,6 +87,7 @@ pub const EVENTS: &[&str] = &[
     "segment",
     "session-saved",
     "session-deleted",
+    "ics-updated",
     "quit",
 ];
 

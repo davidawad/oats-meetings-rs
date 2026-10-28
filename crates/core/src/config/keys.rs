@@ -63,6 +63,11 @@ pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
 pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
 pub const SECRET_SOURCES: &[&str] = &["env", "keychain"];
+pub const ICS_WEBCAL_SCHEMES: &[&str] = &["https", "http"];
+pub const ICS_CANCELLED: &[&str] = &["hide", "show"];
+pub const ICS_ON_BAD_EVENT: &[&str] = &["error", "skip"];
+pub const ICS_UNKNOWN_TZ: &[&str] = &["error", "default_tz"];
+pub const ICS_ALL_DAY: &[&str] = &["include", "exclude"];
 pub const DELETE_MODES: &[&str] = &["trash", "remove"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
@@ -185,6 +190,130 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Str,
         default: Def::S(""),
         doc: "Folder of note-template TOML files; empty means <config dir>/templates.",
+        path: "ics.all_day",
+        kind: Kind::Enum(ICS_ALL_DAY),
+        default: Def::S("include"),
+        doc: "Whether all-day events appear in ics-events.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.allow_file",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Allow file:// feeds (local, not gated by network.allow).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.cache_dir",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Directory for cached feeds; empty means ics/ beside the sessions dir.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.cancelled",
+        kind: Kind::Enum(ICS_CANCELLED),
+        default: Def::S("hide"),
+        doc: "Whether STATUS:CANCELLED events appear in ics-events.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.default_refresh_secs",
+        kind: Kind::Str,
+        default: Def::S("900"),
+        doc: "Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.default_tz",
+        kind: Kind::Str,
+        default: Def::S("UTC"),
+        doc: "IANA zone for floating times and for the midnight bounds of all-day events.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.enabled",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Master switch for refreshing feeds (manual and scheduled). Cached events stay readable.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.feeds",
+        kind: Kind::Str,
+        default: Def::S("[]"),
+        doc: "JSON array of feeds: {name, url, enabled, refresh_secs, header}. Edit with ics-add / ics-remove.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.max_bytes",
+        kind: Kind::Str,
+        default: Def::S("5242880"),
+        doc: "Largest feed body accepted, in bytes.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.max_occurrences",
+        kind: Kind::Str,
+        default: Def::S("500"),
+        doc: "Most occurrences expanded per recurring event per query.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.on_bad_event",
+        kind: Kind::Enum(ICS_ON_BAD_EVENT),
+        default: Def::S("error"),
+        doc: "A malformed event fails the whole feed (error) or is dropped and counted (skip).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.stale_on_error",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "When a refresh fails, keep serving the last good cached copy.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.timeout_secs",
+        kind: Kind::Str,
+        default: Def::S("15"),
+        doc: "Whole-request timeout for a feed fetch, in seconds.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.unknown_tz",
+        kind: Kind::Enum(ICS_UNKNOWN_TZ),
+        default: Def::S("error"),
+        doc: "An unknown TZID fails the event (error) or falls back to ics.default_tz.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.webcal_scheme",
+        kind: Kind::Enum(ICS_WEBCAL_SCHEMES),
+        default: Def::S("https"),
+        doc: "Scheme webcal:// URLs are fetched with.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.window_days",
+        kind: Kind::Str,
+        default: Def::S("7"),
+        doc: "Default length of the ics-events window in days when no end is given.",
         ui: true,
         reload: Reload::Live,
     },

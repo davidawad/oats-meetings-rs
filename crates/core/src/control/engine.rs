@@ -190,6 +190,11 @@ impl Engine {
         self.bus.publish("session-saved", json!({"id": id, "change": change}));
     }
 
+    /// Where the sessions live by default; the ICS cache defaults to a sibling directory.
+    pub fn default_sessions_dir(&self) -> &std::path::Path {
+        &self.opts.sessions_dir
+    }
+
     pub fn new(opts: EngineOpts) -> Result<Arc<Engine>> {
         let text = read_user(&opts.user_config)?;
         let resolved = Self::resolve_with(&opts, text.as_deref())?;
@@ -211,6 +216,7 @@ impl Engine {
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
+        engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(&engine))));
         Ok(engine)
     }
 
@@ -461,7 +467,8 @@ impl Engine {
                 Ok(json!({"changed": changed}))
             }
             Action::ConfigCheck {} => {
-                self.resolved().typed()?;
+                let typed = self.resolved().typed()?;
+                crate::ics::validate_settings(&typed.ics)?;
                 Ok(json!({"valid": true}))
             }
             Action::ConfigResolved {} => {
@@ -554,6 +561,11 @@ impl Engine {
                 }
                 Ok(v)
             }
+            Action::IcsAdd { .. }
+            | Action::IcsRemove { .. }
+            | Action::IcsList {}
+            | Action::IcsRefresh { .. }
+            | Action::IcsEvents { .. } => crate::ics::dispatch(self, a),
             other => {
                 let name = serde_json::to_value(other)
                     .ok()

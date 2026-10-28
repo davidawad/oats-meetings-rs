@@ -8,6 +8,7 @@ pub mod kb;
 pub mod notes;
 pub mod secrets;
 pub mod templates;
+pub mod ics;
 pub mod sessions;
 
 pub const APP_NAME: &str = "oats-meetings-rs";
