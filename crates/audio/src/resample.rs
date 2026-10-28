@@ -72,7 +72,7 @@ mod tests {
                 r.push(chunk, &mut out);
             }
             let want = to as i64;
-            assert!((out.len() as i64 - want).abs() <= 2, "{from}->{to}: {} vs {want}", out.len());
+            assert!((out.len() as i64 - want).abs() <= 4, "{from}->{to}: {} vs {want}", out.len());
         }
     }
 

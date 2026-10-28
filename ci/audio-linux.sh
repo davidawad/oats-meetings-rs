@@ -40,5 +40,5 @@ pactl set-default-sink oats_sink
 pactl list short sources
 set -x
 cargo build --locked --workspace
-cargo test --locked --workspace
+cargo test --locked --workspace --no-fail-fast
 OATS_AUDIO_LIVE=1 OATS_AUDIO_BACKENDS="$backends" cargo test --locked --test audio_live -- --nocapture --test-threads=1
