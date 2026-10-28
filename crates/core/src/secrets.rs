@@ -312,9 +312,9 @@ mod tests {
         assert_eq!(e.get("ns/two").unwrap(), None);
         assert_eq!(e.set("ns/one", "x").unwrap_err().code, "secret_read_only");
         assert_eq!(e.delete("ns/one").unwrap_err().code, "secret_read_only");
-        assert_eq!(resolve(&e, "secret:ns/one").unwrap(), "tok");
-        assert_eq!(resolve(&e, "secret:ns/two").unwrap_err().code, "secret_not_found");
-        assert_eq!(resolve(&e, "tok").unwrap_err().code, "secret_plaintext");
+        assert_eq!(resolve(&e, "secret:ns/one", 128).unwrap(), "tok");
+        assert_eq!(resolve(&e, "secret:ns/two", 128).unwrap_err().code, "secret_not_found");
+        assert_eq!(resolve(&e, "tok", 128).unwrap_err().code, "secret_plaintext");
     }
 
     #[test]
@@ -322,7 +322,7 @@ mod tests {
         let m = MemStore::default();
         assert_eq!(m.get("a/b").unwrap(), None);
         m.set("a/b", "v").unwrap();
-        assert_eq!(resolve(&m, "secret:a/b").unwrap(), "v");
+        assert_eq!(resolve(&m, "secret:a/b", 128).unwrap(), "v");
         assert!(m.delete("a/b").unwrap());
         assert!(!m.delete("a/b").unwrap());
     }
