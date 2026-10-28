@@ -199,11 +199,11 @@ mod tests {
     use super::*;
 
     /// Same shape as the real OpenOats file, synthetic content.
-    pub(crate) const SAMPLE: &str = r##"{"version":1,"templates":[
+    pub(crate) const SAMPLE: &str = r###"{"version":1,"templates":[
       {"name":"Sales Prospect Call","icon":"person","systemPrompt":"Notes.\n\n## CRM\nContact Name: [x]\n\n## Summary\nShort.\n\n## Next Step\nOne.","isBuiltIn":false,"id":"AAAA"},
       {"name":"1:1","systemPrompt":"## Discussion Points\n- x","isBuiltIn":false,"id":"BBBB"},
       {"name":"Stand-Up","systemPrompt":"## Yesterday\n## Today\n## Blockers"}
-    ]}"##;
+    ]}"###;
 
     #[test]
     fn slugs() {
