@@ -3,14 +3,15 @@
 set -uxo pipefail
 NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
 nixf=(--extra-experimental-features "nix-command flakes")
-pw=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pipewire" | head -1)
+pw=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pipewire" | tr "\n" " ")
 pa=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#pulseaudio" | head -1)
 wp=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#wireplumber" | head -1)
 echo "pw=$pw pa=$pa wp=$wp"
 ls "$pw/bin" "$wp/bin"
 id
 ls -la /dev/snd /run/dbus 2>&1 | head
-export PATH="$pw/bin:$wp/bin:$pa/bin:$PATH"
+for o in $pw; do PATH="$o/bin:$PATH"; done
+export PATH="$wp/bin:$pa/bin:$PATH"
 export XDG_RUNTIME_DIR
 XDG_RUNTIME_DIR=$(mktemp -d)
 chmod 700 "$XDG_RUNTIME_DIR"
