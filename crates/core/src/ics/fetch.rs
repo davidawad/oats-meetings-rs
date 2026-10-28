@@ -106,11 +106,14 @@ fn map_ureq(e: ureq::Error) -> ConfigError {
 }
 
 fn fetch_http(url: &str, o: &FetchOpts) -> Result<Fetched> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+    let builder = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(o.timeout_secs.max(1))))
-        .http_status_as_error(false)
-        .build()
-        .into();
+        .http_status_as_error(false);
+    #[cfg(windows)]
+    let builder = builder.tls_config(
+        ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build(),
+    );
+    let agent: ureq::Agent = builder.build().into();
     let mut req = agent
         .get(url)
         .header("Accept", "text/calendar, text/plain;q=0.5, */*;q=0.1");
