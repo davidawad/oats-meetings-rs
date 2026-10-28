@@ -210,9 +210,7 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
         let h3 = Rc::clone(&h2);
         cx.spawn(async move |cx: &mut AsyncApp| loop {
             cx.background_executor().timer(Duration::from_millis(100)).await;
-            if cx.update(|cx| tick(&h3, cx)).is_err() {
-                break;
-            }
+            cx.update(|cx| tick(&h3, cx));
         })
         .detach();
         cx.activate(true);

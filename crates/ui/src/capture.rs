@@ -42,7 +42,7 @@ pub enum Applied {
 
 /// Apply `plan` to a real window.
 pub fn apply(window: &Window, plan: Plan) -> Applied {
-    let handle = match window.window_handle() {
+    let handle = match HasWindowHandle::window_handle(window) {
         Ok(h) => h.as_raw(),
         Err(e) => return Applied::Failed(format!("no window handle: {e}")),
     };
@@ -79,7 +79,7 @@ fn apply_raw(handle: RawWindowHandle, plan: Plan) -> Applied {
 pub fn read_sharing_type(window: &Window) -> Option<usize> {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
-    let RawWindowHandle::AppKit(h) = window.window_handle().ok()?.as_raw() else {
+    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
         return None;
     };
     // SAFETY: as in `apply_raw`.
