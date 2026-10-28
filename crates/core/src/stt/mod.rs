@@ -79,32 +79,16 @@ pub struct Settings {
     pub cloud_url: String,
     pub cloud_model: String,
     pub cloud_key: String,
-    pub cloud_timeout: u64,
+    pub cloud_timeout: std::time::Duration,
 }
 
 fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("invalid_value", format!("stt.{key}: {why}"))
 }
 
-fn num(key: &str, v: &str) -> Result<u64> {
-    v.trim().parse::<u64>().map_err(|_| invalid(key, format!("'{v}' is not a non-negative integer")))
-}
-
 impl Settings {
     /// Parse and check every `stt.*` value. `sessions_dir` anchors the default models directory.
     pub fn from_config(c: &Stt, sessions_dir: &Path) -> Result<Settings> {
-        let chunk = num("live.chunk_secs", &c.live.chunk_secs)?;
-        if !(1..=60).contains(&chunk) {
-            return Err(invalid("live.chunk_secs", "must be between 1 and 60"));
-        }
-        let threads = num("local.threads", &c.local.threads)?;
-        if !(1..=256).contains(&threads) {
-            return Err(invalid("local.threads", "must be between 1 and 256"));
-        }
-        let timeout = num("cloud.timeout_secs", &c.cloud.timeout_secs)?;
-        if timeout == 0 {
-            return Err(invalid("cloud.timeout_secs", "must be at least 1"));
-        }
         if c.language.trim().is_empty() {
             return Err(invalid("language", "must not be empty"));
         }
@@ -133,15 +117,15 @@ impl Settings {
             speaker_you: you.to_string(),
             speaker_them: them.to_string(),
             live_enabled: c.live.enabled,
-            chunk_secs: chunk as f64,
+            chunk_secs: c.live.chunk.0 as f64 / 1000.0,
             final_enabled: c.final_.enabled,
             model: model.to_string(),
             model_file,
-            threads: threads as u32,
+            threads: c.local.threads,
             cloud_url: c.cloud.url.trim().to_string(),
             cloud_model: c.cloud.model.trim().to_string(),
             cloud_key: c.cloud.key.trim().to_string(),
-            cloud_timeout: timeout,
+            cloud_timeout: c.cloud.timeout.as_duration(),
         })
     }
 
@@ -191,7 +175,7 @@ pub fn make_asr(s: &Settings, network_allow: bool, secrets: &dyn crate::secrets:
                 url: s.cloud_url.clone(),
                 model: s.cloud_model.clone(),
                 key,
-                timeout_secs: s.cloud_timeout,
+                timeout: s.cloud_timeout,
             }))
         }
     }
@@ -677,12 +661,11 @@ mod tests {
             Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions")).map(|_| ())
         };
         for (k, v) in [
-            ("stt.live.chunk_secs", "0"), ("stt.live.chunk_secs", "61"), ("stt.live.chunk_secs", "x"),
-            ("stt.local.threads", "0"), ("stt.local.model", "../evil"), ("stt.cloud.timeout_secs", "0"),
+            ("stt.local.model", "../evil"),
             ("stt.language", " "), ("stt.speaker_you", "remote_1"),
         ] {
             assert_eq!(check(k, json!(v)).unwrap_err().code, "invalid_value", "{k}={v}");
         }
-        check("stt.live.chunk_secs", json!("10")).unwrap();
+        check("stt.live.chunk", json!("10s")).unwrap();
     }
 }

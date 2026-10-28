@@ -10,27 +10,22 @@ mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
     use std::thread::JoinHandle;
-    use std::time::Duration;
-
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
 
     use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
     use crate::error::{AudioError, Result};
     use crate::resample::{downmix, Resampler};
+    use crate::settings::Timing;
     use crate::SAMPLE_RATE;
 
-    pub struct CpalBackend;
-
-    impl CpalBackend {
-        pub fn new() -> Self {
-            Self
-        }
+    pub struct CpalBackend {
+        timing: Timing,
     }
 
-    impl Default for CpalBackend {
-        fn default() -> Self {
-            Self::new()
+    impl CpalBackend {
+        pub fn new(timing: Timing) -> Self {
+            Self { timing }
         }
     }
 
@@ -148,6 +143,7 @@ mod imp {
             let (name, is_output) = (info.name.clone(), *is_output);
             let stop = Arc::new(AtomicBool::new(false));
             let flag = Arc::clone(&stop);
+            let timing = self.timing;
             let (tx, rx) = mpsc::channel::<Result<()>>();
             let cb = Arc::new(Mutex::new(on_samples));
             let th = std::thread::spawn(move || {
@@ -178,7 +174,7 @@ mod imp {
                     Ok(stream) => {
                         let _ = tx.send(Ok(()));
                         while !flag.load(Ordering::SeqCst) {
-                            std::thread::sleep(Duration::from_millis(20));
+                            std::thread::sleep(timing.poll);
                         }
                         drop(stream);
                     }
@@ -187,7 +183,7 @@ mod imp {
                     }
                 }
             });
-            match rx.recv_timeout(Duration::from_secs(10)) {
+            match rx.recv_timeout(timing.open_timeout) {
                 Ok(Ok(())) => Ok(Box::new(CpalCapture { stop, th: Some(th) })),
                 Ok(Err(e)) => {
                     let _ = th.join();
@@ -195,7 +191,7 @@ mod imp {
                 }
                 Err(_) => {
                     stop.store(true, Ordering::SeqCst);
-                    Err(AudioError::new("capture_failed", "cpal stream did not start within 10s"))
+                    Err(AudioError::new("capture_failed", format!("cpal stream did not start within {:?}", timing.open_timeout)))
                 }
             }
         }

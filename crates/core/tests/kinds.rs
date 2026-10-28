@@ -130,7 +130,7 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn no_timing_literals_outside_the_key_table() {
     let mut files = vec![];
-    for d in ["crates/core/src", "crates/ctl/src", "crates/ui/src", "src"] {
+    for d in ["crates/core/src", "crates/ctl/src", "crates/ui/src", "crates/audio/src", "src"] {
         rust_files(&repo(d), &mut files);
     }
     assert!(files.len() > 20, "scanned {} files", files.len());

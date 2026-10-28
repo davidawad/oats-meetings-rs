@@ -1,6 +1,8 @@
 //! The audio config keys as a plain struct. `oats-core` builds it from the resolved config; the
 //! string values are exactly the enum values of the `audio.*` keys.
 
+use std::time::Duration;
+
 use crate::error::{AudioError, Result};
 
 pub const BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal"];
@@ -58,6 +60,16 @@ impl Layout {
     }
 }
 
+/// Waits the backends and the recorder use; `oats-core` fills them from `audio.open_timeout` and
+/// `audio.poll_interval`. There is no default here: the key table is the only home of defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timing {
+    /// How long a backend waits for a capture to deliver its first audio (or start).
+    pub open_timeout: Duration,
+    /// Pause of every polling loop (writer, readiness waits, stop flags).
+    pub poll: Duration,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioSettings {
     pub backend: BackendChoice,
@@ -68,10 +80,12 @@ pub struct AudioSettings {
     pub mic_enabled: bool,
     /// Empty means the platform default microphone.
     pub mic_device: String,
+    pub timing: Timing,
 }
 
-impl Default for AudioSettings {
-    fn default() -> Self {
+impl AudioSettings {
+    /// Both sources on, split layout, platform-default devices.
+    pub fn new(timing: Timing) -> Self {
         Self {
             backend: BackendChoice::Auto,
             layout: Layout::Split,
@@ -79,8 +93,14 @@ impl Default for AudioSettings {
             system_device: String::new(),
             mic_enabled: true,
             mic_device: String::new(),
+            timing,
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_settings() -> AudioSettings {
+    AudioSettings::new(Timing { open_timeout: Duration::from_secs(15), poll: Duration::from_millis(25) })
 }
 
 #[cfg(test)]

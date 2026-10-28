@@ -21,7 +21,7 @@ pub mod wav;
 pub use backend::{select, Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
 pub use error::{AudioError, Result};
 pub use recorder::{Recording, Summary};
-pub use settings::{AudioSettings, BackendChoice, Layout};
+pub use settings::{AudioSettings, BackendChoice, Layout, Timing};
 
 /// Fixed output rate of the recorder and of every backend's callback.
 pub const SAMPLE_RATE: u32 = 48_000;

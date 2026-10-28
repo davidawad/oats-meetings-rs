@@ -7,19 +7,16 @@ use serde_json::Value;
 
 use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
 use crate::error::{io_err, AudioError, Result};
+use crate::settings::Timing;
 use crate::{proc, SAMPLE_RATE};
 
-pub struct PulseBackend;
-
-impl PulseBackend {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct PulseBackend {
+    timing: Timing,
 }
 
-impl Default for PulseBackend {
-    fn default() -> Self {
-        Self::new()
+impl PulseBackend {
+    pub fn new(timing: Timing) -> Self {
+        Self { timing }
     }
 }
 
@@ -124,7 +121,7 @@ impl CaptureBackend for PulseBackend {
             // 100 ms, not 20: on a loaded host (CI pods) a 20 ms stream underruns and drops audio, measured
             // as 8 s of audio per 10 s of wall clock; at 100 ms the full 10 s arrives (ci/audio-probe.sh).
             .arg("--latency-msec=100");
-        proc::spawn(cmd, on_samples)
+        proc::spawn(cmd, on_samples, self.timing)
     }
 }
 

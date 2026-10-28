@@ -52,6 +52,13 @@ fn b(flat: &Flat, k: &str, default: bool) -> bool {
     flat.get(k).and_then(Value::as_bool).unwrap_or(default)
 }
 
+fn dur(flat: &Flat, k: &str) -> Result<std::time::Duration> {
+    let text = s(flat, k);
+    crate::config::keys::parse_duration_ms(&text)
+        .map(std::time::Duration::from_millis)
+        .ok_or_else(|| ConfigError::new("invalid_value", format!("{k} '{text}' is not a duration like \"15s\"")))
+}
+
 pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
     Ok(AudioSettings {
         backend: BackendChoice::parse(&s(flat, "audio.backend")).map_err(audio_err)?,
@@ -60,6 +67,10 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
         system_device: s(flat, "audio.system.device"),
         mic_enabled: b(flat, "audio.mic.enabled", true),
         mic_device: s(flat, "audio.mic.device"),
+        timing: oats_audio::Timing {
+            open_timeout: dur(flat, "audio.open_timeout")?,
+            poll: dur(flat, "audio.poll_interval")?,
+        },
     })
 }
 

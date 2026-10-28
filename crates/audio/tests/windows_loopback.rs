@@ -11,6 +11,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use oats_audio::cpal_backend::CpalBackend;
 use oats_audio::{recorder, wav, AudioSettings, CaptureBackend, DeviceKind};
 
+fn timing() -> oats_audio::Timing {
+    oats_audio::Timing { open_timeout: Duration::from_secs(15), poll: Duration::from_millis(25) }
+}
+
 fn live() -> bool {
     let on = std::env::var("OATS_AUDIO_LIVE").ok().as_deref() == Some("1");
     if !on {
@@ -24,7 +28,7 @@ fn devices_list_has_a_loopback_source() {
     if !live() {
         return;
     }
-    let devs = CpalBackend::new().list_devices().unwrap();
+    let devs = CpalBackend::new(timing()).list_devices().unwrap();
     assert!(devs.iter().any(|d| d.kind == DeviceKind::Loopback && d.default), "{devs:?}");
 }
 
@@ -60,8 +64,8 @@ fn five_second_wasapi_loopback_is_non_silent() {
     std::fs::create_dir_all(&d).unwrap();
     let path = d.join("loopback.wav");
     // System audio only: a Windows VM may have no microphone.
-    let st = AudioSettings { mic_enabled: false, ..Default::default() };
-    let rec = recorder::start(&CpalBackend::new(), &st, &path).unwrap();
+    let st = AudioSettings { mic_enabled: false, ..AudioSettings::new(timing()) };
+    let rec = recorder::start(&CpalBackend::new(timing()), &st, &path).unwrap();
     std::thread::sleep(Duration::from_secs(5));
     let s = rec.stop().unwrap();
     drop(stream);

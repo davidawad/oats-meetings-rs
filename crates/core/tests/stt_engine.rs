@@ -159,7 +159,7 @@ impl Rig {
     fn cloud(mock: &Mock, tag: &str, extra: &str) -> Rig {
         std::env::set_var(format!("OATS_SECRET_STT_{tag}"), "tok-123");
         Rig::with_config(&format!(
-            "[network]\nallow = true\n[secrets]\nbackend = \"env\"\n[stt]\nbackend = \"cloud\"\n[stt.cloud]\nadapter = \"openai-compatible\"\nurl = \"{}\"\nkey = \"secret:stt/{}\"\ntimeout_secs = \"2\"\n{extra}",
+            "[network]\nallow = true\n[secrets]\nbackend = \"env\"\n[stt]\nbackend = \"cloud\"\n[stt.cloud]\nadapter = \"openai-compatible\"\nurl = \"{}\"\nkey = \"secret:stt/{}\"\ntimeout = \"2s\"\n{extra}",
             mock.url(),
             tag.to_ascii_lowercase()
         ))
@@ -337,7 +337,7 @@ fn cloud_failures_have_stable_codes() {
 
 impl Rig {
     fn set_timeout_one(&self) {
-        self.engine.set("stt.cloud.timeout_secs", &json!("1"), "test").unwrap();
+        self.engine.set("stt.cloud.timeout", &json!("1s"), "test").unwrap();
     }
 }
 
@@ -377,10 +377,6 @@ fn status_never_leaks_the_key() {
 fn the_subsystem_vetoes_bad_stt_values_and_keeps_the_running_config() {
     let rig = Rig::with_config("");
     for (key, bad) in [
-        ("stt.live.chunk_secs", "0"),
-        ("stt.live.chunk_secs", "soon"),
-        ("stt.local.threads", "0"),
-        ("stt.cloud.timeout_secs", "0"),
         ("stt.local.model", "../escape"),
         ("stt.language", ""),
         ("stt.speaker_you", "remote_1"),

@@ -148,6 +148,7 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
     let mut w = WavWriter::create(path, layout.channels(), SAMPLE_RATE)?;
     let sh = Arc::clone(&shared);
     let (out_path, channels) = (path.to_path_buf(), layout.channels());
+    let poll = settings.timing.poll;
     let writer = std::thread::spawn(move || -> Result<Summary> {
         loop {
             let stopping = sh.stop.load(Ordering::SeqCst);
@@ -159,7 +160,7 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
             if stopping {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(40));
+            std::thread::sleep(poll);
         }
         let frames = w.finish()?;
         Ok(Summary {
@@ -241,7 +242,7 @@ mod tests {
 
     #[test]
     fn split_layout_keeps_each_source_on_its_channel() {
-        let (s, d) = record(&AudioSettings::default(), 1.2);
+        let (s, d) = record(&crate::settings::test_settings(), 1.2);
         assert_eq!((d.channels, d.rate, s.channels), (2, 48000, 2));
         assert!(d.duration_secs() > 1.0 && d.duration_secs() < 1.6, "{}", d.duration_secs());
         assert!((d.tone_hz(0) - 440.0).abs() < 15.0, "left {}", d.tone_hz(0));
@@ -251,7 +252,7 @@ mod tests {
 
     #[test]
     fn mix_layout_is_one_channel() {
-        let st = AudioSettings { layout: Layout::Mix, ..Default::default() };
+        let st = AudioSettings { layout: Layout::Mix, ..crate::settings::test_settings() };
         let (_, d) = record(&st, 0.6);
         assert_eq!(d.channels, 1);
         assert!(d.rms(0) > 0.3);
@@ -259,10 +260,10 @@ mod tests {
 
     #[test]
     fn disabled_sources_are_silent_channels() {
-        let st = AudioSettings { mic_enabled: false, ..Default::default() };
+        let st = AudioSettings { mic_enabled: false, ..crate::settings::test_settings() };
         let (_, d) = record(&st, 0.6);
         assert!(d.rms(0) > 0.3 && d.rms(1) == 0.0);
-        let st = AudioSettings { system_enabled: false, ..Default::default() };
+        let st = AudioSettings { system_enabled: false, ..crate::settings::test_settings() };
         let (_, d) = record(&st, 0.6);
         assert!(d.rms(0) == 0.0 && d.rms(1) > 0.3);
     }
@@ -271,9 +272,9 @@ mod tests {
     fn nothing_enabled_and_bad_device_are_errors() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
-        let st = AudioSettings { system_enabled: false, mic_enabled: false, ..Default::default() };
+        let st = AudioSettings { system_enabled: false, mic_enabled: false, ..crate::settings::test_settings() };
         assert_eq!(start(&FakeBackend::default(), &st, &p).err().unwrap().code, "invalid_config");
-        let st = AudioSettings { mic_device: "nope".into(), ..Default::default() };
+        let st = AudioSettings { mic_device: "nope".into(), ..crate::settings::test_settings() };
         let e = start(&FakeBackend::default(), &st, &p).err().unwrap();
         assert_eq!(e.code, "device_not_found");
         assert!(e.message.starts_with("microphone:"));
@@ -283,7 +284,7 @@ mod tests {
     fn pause_drops_audio_and_duration_tracks_writes() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
-        let r = start(&FakeBackend::default(), &AudioSettings::default(), &p).unwrap();
+        let r = start(&FakeBackend::default(), &crate::settings::test_settings(), &p).unwrap();
         std::thread::sleep(Duration::from_millis(500));
         r.set_paused(true);
         std::thread::sleep(Duration::from_millis(100));

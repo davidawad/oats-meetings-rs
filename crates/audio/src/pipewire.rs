@@ -7,19 +7,16 @@ use serde_json::Value;
 
 use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
 use crate::error::{io_err, AudioError, Result};
+use crate::settings::Timing;
 use crate::{proc, pulse, SAMPLE_RATE};
 
-pub struct PipewireBackend;
-
-impl PipewireBackend {
-    pub fn new() -> Self {
-        Self
-    }
+pub struct PipewireBackend {
+    timing: Timing,
 }
 
-impl Default for PipewireBackend {
-    fn default() -> Self {
-        Self::new()
+impl PipewireBackend {
+    pub fn new(timing: Timing) -> Self {
+        Self { timing }
     }
 }
 
@@ -95,7 +92,7 @@ impl CaptureBackend for PipewireBackend {
             cmd.args(["-P", "stream.capture.sink=true"]);
         }
         cmd.arg("-");
-        proc::spawn(cmd, on_samples)
+        proc::spawn(cmd, on_samples, self.timing)
     }
 }
 

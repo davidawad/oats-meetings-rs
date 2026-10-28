@@ -3,7 +3,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::error::{AudioError, Result};
-use crate::settings::{AudioSettings, BackendChoice};
+use crate::settings::{AudioSettings, BackendChoice, Timing};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -49,7 +49,7 @@ pub(crate) fn tool_works(tool: &str, arg: &str) -> bool {
 
 /// Choose the backend for `settings.backend` on this OS.
 pub fn select(settings: &AudioSettings) -> Result<Box<dyn CaptureBackend>> {
-    select_for(settings.backend, std::env::consts::OS, &tool_works)
+    select_for(settings.backend, std::env::consts::OS, &tool_works, settings.timing)
 }
 
 /// Pure on the OS name and a tool probe, so every (choice, os) pair is testable anywhere.
@@ -57,6 +57,7 @@ pub fn select_for(
     choice: BackendChoice,
     os: &str,
     probe: &dyn Fn(&str, &str) -> bool,
+    timing: Timing,
 ) -> Result<Box<dyn CaptureBackend>> {
     let unsupported = |what: &str| {
         Err(AudioError::new(
@@ -69,18 +70,18 @@ pub fn select_for(
             "unsupported_platform",
             "macOS audio capture is dot-4uzgol.6, not part of this backend set",
         )),
-        (BackendChoice::Pulse, "linux") => Ok(Box::new(crate::pulse::PulseBackend::new())),
+        (BackendChoice::Pulse, "linux") => Ok(Box::new(crate::pulse::PulseBackend::new(timing))),
         (BackendChoice::Pulse, _) => unsupported("pulse"),
-        (BackendChoice::Pipewire, "linux") => Ok(Box::new(crate::pipewire::PipewireBackend::new())),
+        (BackendChoice::Pipewire, "linux") => Ok(Box::new(crate::pipewire::PipewireBackend::new(timing))),
         (BackendChoice::Pipewire, _) => unsupported("pipewire"),
-        (BackendChoice::Cpal, "windows") => cpal_boxed(),
+        (BackendChoice::Cpal, "windows") => cpal_boxed(timing),
         (BackendChoice::Cpal, _) => unsupported("cpal"),
-        (BackendChoice::Auto, "windows") => cpal_boxed(),
+        (BackendChoice::Auto, "windows") => cpal_boxed(timing),
         (BackendChoice::Auto, "linux") => {
             if probe("pactl", "info") {
-                Ok(Box::new(crate::pulse::PulseBackend::new()))
+                Ok(Box::new(crate::pulse::PulseBackend::new(timing)))
             } else if probe("pw-dump", "--version") {
-                Ok(Box::new(crate::pipewire::PipewireBackend::new()))
+                Ok(Box::new(crate::pipewire::PipewireBackend::new(timing)))
             } else {
                 Err(AudioError::new(
                     "tool_missing",
@@ -93,18 +94,22 @@ pub fn select_for(
 }
 
 #[cfg(windows)]
-fn cpal_boxed() -> Result<Box<dyn CaptureBackend>> {
-    Ok(Box::new(crate::cpal_backend::CpalBackend::new()))
+fn cpal_boxed(timing: Timing) -> Result<Box<dyn CaptureBackend>> {
+    Ok(Box::new(crate::cpal_backend::CpalBackend::new(timing)))
 }
 
 #[cfg(not(windows))]
-fn cpal_boxed() -> Result<Box<dyn CaptureBackend>> {
+fn cpal_boxed(_timing: Timing) -> Result<Box<dyn CaptureBackend>> {
     Err(AudioError::new("unsupported_platform", "cpal (WASAPI) backend is built on Windows only"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn t() -> Timing {
+        Timing { open_timeout: std::time::Duration::from_secs(1), poll: std::time::Duration::from_millis(5) }
+    }
 
     fn name(r: Result<Box<dyn CaptureBackend>>) -> String {
         match r {
@@ -121,21 +126,21 @@ mod tests {
         for os in ["linux", "windows", "macos", "freebsd"] {
             for c in [BackendChoice::Auto, BackendChoice::Pulse, BackendChoice::Pipewire, BackendChoice::Cpal] {
                 // must never panic; returns a backend or a structured error
-                let _ = select_for(c, os, &all);
+                let _ = select_for(c, os, &all, t());
             }
         }
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &all)), "pulse");
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &only_pw)), "pipewire");
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &none)), "tool_missing");
-        assert_eq!(name(select_for(BackendChoice::Cpal, "linux", &all)), "unsupported_platform");
+        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &all, t())), "pulse");
+        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &only_pw, t())), "pipewire");
+        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &none, t())), "tool_missing");
+        assert_eq!(name(select_for(BackendChoice::Cpal, "linux", &all, t())), "unsupported_platform");
         #[cfg(windows)]
-        assert_eq!(name(select_for(BackendChoice::Auto, "windows", &none)), "cpal");
-        assert_eq!(name(select_for(BackendChoice::Pulse, "linux", &none)), "pulse");
-        assert_eq!(name(select_for(BackendChoice::Pipewire, "linux", &none)), "pipewire");
+        assert_eq!(name(select_for(BackendChoice::Auto, "windows", &none, t())), "cpal");
+        assert_eq!(name(select_for(BackendChoice::Pulse, "linux", &none, t())), "pulse");
+        assert_eq!(name(select_for(BackendChoice::Pipewire, "linux", &none, t())), "pipewire");
         #[cfg(windows)]
-        assert_eq!(name(select_for(BackendChoice::Cpal, "windows", &none)), "cpal");
-        assert_eq!(name(select_for(BackendChoice::Pulse, "windows", &all)), "unsupported_platform");
-        assert_eq!(name(select_for(BackendChoice::Pipewire, "windows", &all)), "unsupported_platform");
-        assert_eq!(name(select_for(BackendChoice::Auto, "macos", &all)), "unsupported_platform");
+        assert_eq!(name(select_for(BackendChoice::Cpal, "windows", &none, t())), "cpal");
+        assert_eq!(name(select_for(BackendChoice::Pulse, "windows", &all, t())), "unsupported_platform");
+        assert_eq!(name(select_for(BackendChoice::Pipewire, "windows", &all, t())), "unsupported_platform");
+        assert_eq!(name(select_for(BackendChoice::Auto, "macos", &all, t())), "unsupported_platform");
     }
 }

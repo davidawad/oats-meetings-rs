@@ -14,7 +14,7 @@ pub struct OpenAiAsr {
     pub model: String,
     /// Bearer token; `None` sends no Authorization header.
     pub key: Option<String>,
-    pub timeout_secs: u64,
+    pub timeout: std::time::Duration,
 }
 
 fn multipart(boundary: &str, fields: &[(&str, &str)], file: &[u8]) -> Vec<u8> {
@@ -75,7 +75,7 @@ impl Asr for OpenAiAsr {
         }
         let body = multipart(boundary, &fields, &wav::encode_mono(pcm));
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(self.timeout_secs.max(1))))
+            .timeout_global(Some(self.timeout))
             .http_status_as_error(false)
             .build()
             .into();

@@ -25,7 +25,7 @@ pub fn decode_f32le(carry: &mut Vec<u8>, bytes: &[u8], out: &mut Vec<f32>) {
     carry.drain(..whole);
 }
 
-pub fn spawn(mut cmd: Command, mut on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+pub fn spawn(mut cmd: Command, mut on_samples: OnSamples, timing: crate::settings::Timing) -> Result<Box<dyn Capture>> {
     let name = cmd.get_program().to_string_lossy().into_owned();
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
     let mut child = cmd.spawn().map_err(|e| {
@@ -58,9 +58,9 @@ pub fn spawn(mut cmd: Command, mut on_samples: OnSamples) -> Result<Box<dyn Capt
     // Return only once audio flows: a cold `parec` takes ~2 s to connect on a loaded host, and a
     // `record start` that returned earlier would silently drop that long from the recording. A tool
     // that exits first (bad device name, no server) is an error, not a silent WAV.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + timing.open_timeout;
     loop {
-        if first_rx.recv_timeout(std::time::Duration::from_millis(25)).is_ok() {
+        if first_rx.recv_timeout(timing.poll).is_ok() {
             break;
         }
         let exited = child.try_wait().ok().flatten();
@@ -75,7 +75,7 @@ pub fn spawn(mut cmd: Command, mut on_samples: OnSamples) -> Result<Box<dyn Capt
             let _ = reader.join();
             let why = match status {
                 Some(st) if !timed_out || exited.is_some() => format!("exited at once ({st})"),
-                _ => "delivered no audio within 15 s".to_string(),
+                _ => format!("delivered no audio within {:?}", timing.open_timeout),
             };
             return Err(AudioError::new("capture_failed", format!("{name} {why}: {}", err.trim())));
         }
@@ -121,9 +121,34 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn missing_tool_and_instant_exit_are_errors() {
-        let e = spawn(Command::new("definitely-not-a-real-tool-oats"), Box::new(|_| {})).err().unwrap();
+        let t = timing(15_000, 25);
+        let e = spawn(Command::new("definitely-not-a-real-tool-oats"), Box::new(|_| {}), t).err().unwrap();
         assert_eq!(e.code, "tool_missing");
-        let e = spawn(Command::new("false"), Box::new(|_| {})).err().unwrap();
+        let e = spawn(Command::new("false"), Box::new(|_| {}), t).err().unwrap();
         assert_eq!(e.code, "capture_failed");
+    }
+
+    fn timing(open_ms: u64, poll_ms: u64) -> crate::settings::Timing {
+        crate::settings::Timing {
+            open_timeout: std::time::Duration::from_millis(open_ms),
+            poll: std::time::Duration::from_millis(poll_ms),
+        }
+    }
+
+    /// audio.open_timeout is the wait for a silent tool: it gives up at about that long, at both
+    /// a short and a longer setting, and says which limit it hit.
+    #[cfg(unix)]
+    #[test]
+    fn open_timeout_is_honoured() {
+        for open_ms in [200u64, 700] {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("30");
+            let t0 = std::time::Instant::now();
+            let e = spawn(cmd, Box::new(|_| {}), timing(open_ms, 10)).err().unwrap();
+            let took = t0.elapsed().as_millis() as u64;
+            assert_eq!(e.code, "capture_failed");
+            assert!(e.message.contains("delivered no audio within"), "{}", e.message);
+            assert!(took >= open_ms && took < open_ms + 1500, "open {open_ms}ms took {took}ms");
+        }
     }
 }

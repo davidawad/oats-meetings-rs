@@ -64,7 +64,8 @@ impl CaptureBackend for FakeBackend {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let th = std::thread::spawn(move || {
-            let chunk = SAMPLE_RATE as usize / 100; // 10 ms
+            let chunk = SAMPLE_RATE as usize / 100; // 10 ms of audio per delivery
+            let pace = Duration::from_secs_f64(chunk as f64 / f64::from(SAMPLE_RATE));
             let mut n: u64 = 0;
             while !flag.load(Ordering::SeqCst) {
                 let buf: Vec<f32> = (0..chunk)
@@ -75,7 +76,7 @@ impl CaptureBackend for FakeBackend {
                     .collect();
                 n += chunk as u64;
                 on_samples(&buf);
-                std::thread::sleep(Duration::from_millis(10));
+                std::thread::sleep(pace);
             }
         });
         Ok(Box::new(FakeCapture { stop, th: Some(th) }))

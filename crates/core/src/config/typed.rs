@@ -89,6 +89,8 @@ pub struct Audio {
     pub layout: AudioLayout,
     pub mic: AudioEndpoint,
     pub dir: String,
+    pub open_timeout: Dur,
+    pub poll_interval: Dur,
     pub system: AudioEndpoint,
 }
 
@@ -223,7 +225,7 @@ pub struct SttCloud {
     pub adapter: SttAdapter,
     pub key: String,
     pub model: String,
-    pub timeout_secs: String,
+    pub timeout: Dur,
     pub url: String,
 }
 
@@ -233,13 +235,13 @@ pub struct SttLocal {
     pub model: String,
     pub model_path: String,
     pub models_dir: String,
-    pub threads: String,
+    pub threads: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttLive {
-    pub chunk_secs: String,
+    pub chunk: Dur,
     pub enabled: bool,
 }
 
