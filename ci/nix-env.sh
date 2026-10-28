@@ -4,7 +4,7 @@
 # Pinned nixpkgs (nixos-unstable on 2026-10-27) for reproducible system libs.
 NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
 nixf=(--extra-experimental-features "nix-command flakes")
-pkgs=(llvmPackages.llvm libxkbcommon wayland libxcb libx11 fontconfig freetype vulkan-loader alsa-lib openssl zstd pkg-config cmake zlib bzip2 libpng brotli expat libxau libxdmcp xorgproto libxkbcommon libxcb)
+pkgs=(llvmPackages.llvm llvmPackages.libclang llvmPackages.libclang.lib libxkbcommon wayland libxcb libx11 fontconfig freetype vulkan-loader alsa-lib openssl zstd pkg-config cmake zlib bzip2 libpng brotli expat libxau libxdmcp xorgproto libxkbcommon libxcb)
 paths=""
 # Bare nix images (nixos/nix) have no Rust or C toolchain: provide them. Pods already have both.
 if ! command -v cc > /dev/null; then
@@ -38,3 +38,10 @@ export PATH="${PATH}${paths}"
 export PKG_CONFIG_PATH="${pc#:}"
 export LD_LIBRARY_PATH="${ld#:}"
 export RUSTFLAGS="${RUSTFLAGS:-} $(echo "${ld#:}" | tr ':' '\n' | sed 's/^/-L native=/' | tr '\n' ' ')"
+# bindgen (whisper-rs-sys): libclang.so is found through LD_LIBRARY_PATH; its resource headers
+# (stddef.h, ...) come from the clang package and are passed explicitly.
+for d in $roots; do
+  for inc in "$d"/lib/clang/*/include; do
+    [ -d "$inc" ] && export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} -isystem $inc"
+  done
+done

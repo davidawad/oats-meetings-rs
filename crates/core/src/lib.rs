@@ -20,3 +20,6 @@ mod tests {
         assert!(super::version_line().starts_with("oats-meetings-rs "));
     }
 }
+
+#[cfg(feature = "whisper")]
+use whisper_rs as _;

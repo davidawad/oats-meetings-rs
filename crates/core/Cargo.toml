@@ -17,6 +17,12 @@ icalendar.workspace = true
 rrule.workspace = true
 chrono-tz.workspace = true
 keyring.workspace = true
+hound.workspace = true
+whisper-rs = { workspace = true, optional = true }
+
+[features]
+# Local ASR (whisper.cpp). Off by default: it needs cmake, a C++ compiler and libclang to build.
+whisper = ["dep:whisper-rs"]
 
 [dev-dependencies]
 tempfile.workspace = true
