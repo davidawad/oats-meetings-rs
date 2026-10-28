@@ -125,6 +125,7 @@ pub fn projections() -> Vec<(&'static str, String)> {
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
         ("actions.json", actions_json()),
+        ("template.schema.json", crate::templates::schema_json()),
     ]
 }
 

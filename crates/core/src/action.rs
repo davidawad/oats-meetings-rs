@@ -65,10 +65,12 @@ actions! {
     SessionDelete, "session-delete", "Delete a session; needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: String, confirm: Option<bool> };
     TranscriptGet, "transcript-get", "A session transcript (final, else live).", "implemented", "read", { session: String };
     TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
-    NotesGenerate, "notes-generate", "Generate notes from a template.", "planned", "write", { session: String, template: String };
-    TemplateList, "template-list", "List note templates.", "planned", "read", {};
-    KbSearch, "kb-search", "Search the knowledge base.", "planned", "read", { query: String };
-    KbReindex, "kb-reindex", "Rebuild the knowledge base index.", "planned", "write", {};
+    NotesGenerate, "notes-generate", "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.", "implemented", "write", { session: String, template: String, dry_run: Option<bool> };
+    TemplateList, "template-list", "List note templates.", "implemented", "read", {};
+    TemplateGet, "template-get", "One note template.", "implemented", "read", { name: String };
+    TemplateImport, "template-import", "Import an OpenOats templates.json into the templates folder.", "implemented", "write", { from: String, overwrite: Option<bool> };
+    KbSearch, "kb-search", "Search the knowledge base (deterministic ranking).", "implemented", "read", { query: String, limit: Option<u64> };
+    KbReindex, "kb-reindex", "Rebuild the knowledge base index.", "implemented", "write", {};
 }
 
 pub const EVENTS: &[&str] = &[

@@ -61,6 +61,8 @@ pub struct Key {
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
+pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
+pub const SECRET_SOURCES: &[&str] = &["env", "keychain"];
 pub const DELETE_MODES: &[&str] = &["trash", "remove"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
@@ -97,6 +99,94 @@ pub const KEYS: &[Key] = &[
         doc: "Control socket path; empty means the per-user runtime dir.",
         ui: false,
         reload: Reload::Rebind,
+    },
+    Key {
+        path: "kb.base_url",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Embedding endpoint base URL for kb.embedder ollama / openai-compatible.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "kb.dir",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Knowledge-base folder of .md/.txt files; empty means <data dir>/kb.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "kb.embedder",
+        kind: Kind::Enum(KB_EMBEDDERS),
+        default: Def::S("hash"),
+        doc: "KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "kb.model",
+        kind: Kind::Str,
+        default: Def::S("nomic-embed-text"),
+        doc: "Embedding model name for the ollama / openai-compatible embedders.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "llm.api_key_name",
+        kind: Kind::Str,
+        default: Def::S("OATS_LLM_API_KEY"),
+        doc: "NAME of the secret holding the LLM API key (env var or keychain account). The key itself is never in config.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "llm.base_url",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "LLM endpoint base URL; empty means the backend default (required for openai-compatible).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "llm.model",
+        kind: Kind::Str,
+        default: Def::S("llama3.1"),
+        doc: "Model name sent to the LLM backend.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "notes.enforce_headings",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Reject generated notes that lack a '## ' heading the template's prompt demands.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.keychain_service",
+        kind: Kind::Str,
+        default: Def::S("oats-meetings-rs"),
+        doc: "Keychain service name used when secrets.source = keychain.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.source",
+        kind: Kind::Enum(SECRET_SOURCES),
+        default: Def::S("env"),
+        doc: "Where API keys are read from: process environment or the OS keychain.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "templates.dir",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Folder of note-template TOML files; empty means <config dir>/templates.",
+        ui: true,
+        reload: Reload::Live,
     },
     Key {
         path: "license.holder",

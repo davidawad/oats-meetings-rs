@@ -3,6 +3,11 @@
 pub mod action;
 pub mod config;
 pub mod control;
+pub mod http;
+pub mod kb;
+pub mod notes;
+pub mod secrets;
+pub mod templates;
 pub mod sessions;
 
 pub const APP_NAME: &str = "oats-meetings-rs";

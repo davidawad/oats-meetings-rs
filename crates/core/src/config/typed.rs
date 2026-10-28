@@ -8,12 +8,16 @@ pub struct Config {
     pub app: App,
     pub config: ConfigSection,
     pub control: Control,
+    pub kb: Kb,
     pub license: License,
     pub llm: Llm,
     pub network: Network,
+    pub notes: Notes,
     pub privacy: Privacy,
+    pub secrets: Secrets,
     pub sessions: Sessions,
     pub stt: Stt,
+    pub templates: Templates,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -53,7 +57,53 @@ pub enum LlmBackend {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Llm {
+    pub api_key_name: String,
     pub backend: LlmBackend,
+    pub base_url: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KbEmbedder {
+    Hash,
+    Ollama,
+    OpenaiCompatible,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Kb {
+    pub base_url: String,
+    pub dir: String,
+    pub embedder: KbEmbedder,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Notes {
+    pub enforce_headings: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretsSource {
+    Env,
+    Keychain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Secrets {
+    pub keychain_service: String,
+    pub source: SecretsSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Templates {
+    pub dir: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

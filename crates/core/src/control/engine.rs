@@ -21,7 +21,10 @@ use crate::config::keys::{self, Kind};
 use crate::config::resolve::{self, Inputs, Resolved};
 use crate::config::typed::Config;
 use crate::config::{cli, ConfigError, Result, SCHEMA_VERSION};
+use crate::secrets::{EnvSecrets, KeychainSecrets, SecretStore};
 use crate::sessions::Store;
+use crate::{kb, notes, templates};
+use std::path::Path;
 
 use super::bus::Bus;
 use super::subsystem::Subsystem;
@@ -35,6 +38,8 @@ pub struct EngineOpts {
     pub machine: String,
     /// Used when `sessions.root` is empty.
     pub sessions_dir: PathBuf,
+    /// Secret store override (tests, embedders); None picks env or keychain from `secrets.source`.
+    pub secrets: Option<Arc<dyn SecretStore>>,
 }
 
 type Stamp = Option<(SystemTime, u64)>;
@@ -153,6 +158,34 @@ impl Engine {
         Store::new(root)
     }
 
+    fn templates_dir(&self, cfg: &Config) -> PathBuf {
+        if cfg.templates.dir.is_empty() {
+            self.opts.user_config.parent().unwrap_or_else(|| Path::new(".")).join("templates")
+        } else {
+            PathBuf::from(&cfg.templates.dir)
+        }
+    }
+
+    fn kb_dir(&self, cfg: &Config) -> PathBuf {
+        if cfg.kb.dir.is_empty() {
+            self.opts.sessions_dir.parent().unwrap_or_else(|| Path::new(".")).join("kb")
+        } else {
+            PathBuf::from(&cfg.kb.dir)
+        }
+    }
+
+    fn secret_store(&self, cfg: &Config) -> Arc<dyn SecretStore> {
+        if let Some(s) = &self.opts.secrets {
+            return Arc::clone(s);
+        }
+        match cfg.secrets.source {
+            crate::config::typed::SecretsSource::Env => Arc::new(EnvSecrets),
+            crate::config::typed::SecretsSource::Keychain => {
+                Arc::new(KeychainSecrets { service: cfg.secrets.keychain_service.clone() })
+            }
+        }
+    }
+
     fn session_event(&self, id: &str, change: &str) {
         self.bus.publish("session-saved", json!({"id": id, "change": change}));
     }
@@ -177,6 +210,7 @@ impl Engine {
             window_visible: AtomicBool::new(false),
         });
         engine.register(Arc::new(SessionsSubsystem));
+        engine.register(Arc::new(notes::NotesSubsystem));
         Ok(engine)
     }
 
@@ -192,6 +226,7 @@ impl Engine {
             arch,
             machine,
             sessions_dir: crate::sessions::default_sessions_dir(env),
+            secrets: None,
         })
     }
 
@@ -466,6 +501,51 @@ impl Engine {
                 let v = self.store().delete(session, self.snapshot().config.sessions.delete_mode)?;
                 self.bus.publish("session-deleted", json!({"id": session}));
                 Ok(v)
+            }
+            Action::NotesGenerate { session, template, dry_run } => {
+                let snap = self.snapshot();
+                let (store, secrets, tdir) = (self.store(), self.secret_store(&snap.config), self.templates_dir(&snap.config));
+                let dry = dry_run.unwrap_or(false);
+                let v = notes::generate(
+                    &notes::Ctx { cfg: &snap.config, store: &store, templates_dir: &tdir, secrets: &*secrets },
+                    session,
+                    template,
+                    dry,
+                )?;
+                if !dry {
+                    self.session_event(session, "notes");
+                }
+                Ok(v)
+            }
+            Action::TemplateList {} => {
+                let tdir = self.templates_dir(&self.snapshot().config);
+                let all = templates::load_all(&tdir)?;
+                let items: Vec<Value> = all
+                    .iter()
+                    .map(|t| json!({"name": t.name, "icon": t.icon, "headings": templates::required_headings(&t.system_prompt)}))
+                    .collect();
+                Ok(json!({"count": items.len(), "dir": tdir, "templates": items}))
+            }
+            Action::TemplateGet { name } => {
+                let t = templates::find(&self.templates_dir(&self.snapshot().config), name)?;
+                let mut v = serde_json::to_value(&t).map_err(|e| ConfigError::new("parse_error", e.to_string()))?;
+                v["headings"] = json!(templates::required_headings(&t.system_prompt));
+                Ok(v)
+            }
+            Action::TemplateImport { from, overwrite } => {
+                let tdir = self.templates_dir(&self.snapshot().config);
+                templates::import_openoats(Path::new(from), &tdir, overwrite.unwrap_or(false))
+            }
+            Action::KbReindex {} => {
+                let snap = self.snapshot();
+                let secrets = self.secret_store(&snap.config);
+                kb::reindex(&kb::Ctx { cfg: &snap.config, dir: self.kb_dir(&snap.config), secrets: &*secrets })
+            }
+            Action::KbSearch { query, limit } => {
+                let snap = self.snapshot();
+                let secrets = self.secret_store(&snap.config);
+                let n = usize::try_from(limit.unwrap_or(5)).unwrap_or(5);
+                kb::search(&kb::Ctx { cfg: &snap.config, dir: self.kb_dir(&snap.config), secrets: &*secrets }, query, n)
             }
             Action::SessionImport { from, overwrite } => {
                 let v = self.store().import(std::path::Path::new(from), overwrite.unwrap_or(false))?;

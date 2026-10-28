@@ -44,6 +44,7 @@ impl Rig {
             arch: "x86_64".into(),
             machine: "default".into(),
             sessions_dir: dir.path().join("sessions"),
+            secrets: None,
         })
         .unwrap();
         let handle = server::serve_with_poll(engine, &rt, Duration::from_millis(40)).unwrap();
@@ -352,6 +353,7 @@ fn single_instance_lock() {
         arch: "x86_64".into(),
         machine: "default".into(),
         sessions_dir: rig.cfg.parent().unwrap().join("sessions"),
+        secrets: None,
     })
     .unwrap();
     let e = server::serve(engine2.clone(), &rig.rt).err().expect("second engine refused");
