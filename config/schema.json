@@ -77,6 +77,34 @@
           },
           "type": "object"
         },
+        "open_timeout": {
+          "default": "15s",
+          "description": "How long a capture backend waits for audio to start flowing before giving up.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "5m",
+          "x-max-ms": 300000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "poll_interval": {
+          "default": "25ms",
+          "description": "Pause of the recorder writer and of capture readiness polling.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1s",
+          "x-max-ms": 1000,
+          "x-min": "5ms",
+          "x-min-ms": 5,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "system": {
           "additionalProperties": false,
           "properties": {
@@ -672,10 +700,17 @@
               "x-reload": "live",
               "x-ui": true
             },
-            "timeout_secs": {
-              "default": "60",
-              "description": "Whole-request timeout for one cloud transcription, in seconds.",
+            "timeout": {
+              "default": "1m",
+              "description": "Whole-request timeout for one cloud transcription.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
               "type": "string",
+              "x-kind": "duration",
+              "x-max": "1h",
+              "x-max-ms": 3600000,
+              "x-min": "1s",
+              "x-min-ms": 1000,
               "x-reload": "live",
               "x-ui": false
             },
@@ -712,10 +747,17 @@
         "live": {
           "additionalProperties": false,
           "properties": {
-            "chunk_secs": {
-              "default": "4",
-              "description": "Seconds of audio per live transcription window.",
+            "chunk": {
+              "default": "4s",
+              "description": "Length of audio per live transcription window.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
               "type": "string",
+              "x-kind": "duration",
+              "x-max": "1m",
+              "x-max-ms": 60000,
+              "x-min": "1s",
+              "x-min-ms": 1000,
               "x-reload": "live",
               "x-ui": true
             },
@@ -754,9 +796,11 @@
               "x-ui": false
             },
             "threads": {
-              "default": "4",
+              "default": 4,
               "description": "CPU threads for local transcription.",
-              "type": "string",
+              "maximum": 256,
+              "minimum": 1,
+              "type": "integer",
               "x-reload": "live",
               "x-ui": false
             }

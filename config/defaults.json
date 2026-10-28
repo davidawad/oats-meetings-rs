@@ -11,6 +11,8 @@
       "device": "",
       "enabled": true
     },
+    "open_timeout": "15s",
+    "poll_interval": "25ms",
     "system": {
       "device": "",
       "enabled": true
@@ -93,7 +95,7 @@
       "adapter": "none",
       "key": "secret:stt/cloud",
       "model": "whisper-1",
-      "timeout_secs": "60",
+      "timeout": "1m",
       "url": "https://api.openai.com/v1"
     },
     "final": {
@@ -101,14 +103,14 @@
     },
     "language": "en",
     "live": {
-      "chunk_secs": "4",
+      "chunk": "4s",
       "enabled": true
     },
     "local": {
       "model": "base.en",
       "model_path": "",
       "models_dir": "",
-      "threads": "4"
+      "threads": 4
     },
     "speaker_them": "remote_1",
     "speaker_you": "you"

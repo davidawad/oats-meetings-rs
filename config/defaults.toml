@@ -13,6 +13,10 @@ backend = "auto"
 dir = ""
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"
+# How long a capture backend waits for audio to start flowing before giving up.
+open_timeout = "15s"
+# Pause of the recorder writer and of capture readiness polling.
+poll_interval = "25ms"
 
 [audio.mic]
 # Microphone device id (see `ctl devices list`); empty means the default mic.
@@ -163,8 +167,8 @@ adapter = "none"
 key = "secret:stt/cloud"
 # Model name sent to the cloud STT service.
 model = "whisper-1"
-# Whole-request timeout for one cloud transcription, in seconds.
-timeout_secs = "60"
+# Whole-request timeout for one cloud transcription.
+timeout = "1m"
 # Base URL of the OpenAI-compatible transcription API.
 url = "https://api.openai.com/v1"
 
@@ -173,8 +177,8 @@ url = "https://api.openai.com/v1"
 enabled = true
 
 [stt.live]
-# Seconds of audio per live transcription window.
-chunk_secs = "4"
+# Length of audio per live transcription window.
+chunk = "4s"
 # Transcribe while recording and write transcript.live.jsonl.
 enabled = true
 
@@ -186,7 +190,7 @@ model_path = ""
 # Directory holding local model files; empty means models/ beside the sessions dir.
 models_dir = ""
 # CPU threads for local transcription.
-threads = "4"
+threads = 4
 
 [templates]
 # Folder of note-template TOML files; empty means <config dir>/templates.
