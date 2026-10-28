@@ -70,6 +70,12 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         Kind::Enum(vs) => vs.iter().map(|v| json!(v)).collect(),
         Kind::Str if k.path == "control.socket" => vec![json!(dir.join("alt.sock").to_str().unwrap()), json!("")],
         Kind::Str if k.path == "sessions.root" => vec![json!(dir.join("elsewhere").to_str().unwrap()), json!("")],
+        Kind::Str if k.path == "ics.feeds" => vec![
+            json!(r#"[{"name":"a","url":"https://example.invalid/a.ics"}]"#),
+            json!(r#"[{"name":"b","url":"file:///tmp/b.ics","enabled":false}]"#),
+        ],
+        Kind::Str if k.path == "ics.default_tz" => vec![json!("Europe/Paris"), json!("Asia/Tokyo")],
+        Kind::Str if k.path.starts_with("ics.") && k.path != "ics.cache_dir" => vec![json!("11"), json!("22")],
         Kind::Str => vec![json!("sample-x"), json!("sample-y")],
     }
 }

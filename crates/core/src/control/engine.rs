@@ -182,6 +182,7 @@ impl Engine {
             window_visible: AtomicBool::new(false),
         });
         engine.register(Arc::new(SessionsSubsystem));
+        engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(&engine))));
         Ok(engine)
     }
 

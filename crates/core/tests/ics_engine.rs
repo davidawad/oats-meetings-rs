@@ -651,8 +651,9 @@ fn max_occurrences_choice() {
 }
 
 #[test]
-fn bad_settings_are_reported_with_a_stable_code() {
+fn a_bad_ics_value_vetoes_the_change_and_keeps_the_running_config() {
     let r = Rig::new();
+    r.add("keep", "https://example.invalid/a.ics").unwrap();
     for (key, bad) in [
         ("ics.timeout_secs", "soon"),
         ("ics.max_bytes", "-1"),
@@ -660,20 +661,48 @@ fn bad_settings_are_reported_with_a_stable_code() {
         ("ics.window_days", ""),
         ("ics.default_tz", "Mars/Base"),
         ("ics.feeds", "not json"),
+        ("ics.feeds", r#"[{"name":"x","url":"ftp://h/a.ics"}]"#),
+        ("ics.feeds", r#"[{"name":"x","url":"https://h/a.ics","header":"nocolon"}]"#),
+        ("ics.feeds", r#"[{"name":"../x","url":"https://h/a.ics"}]"#),
     ] {
-        r.set(key, json!(bad));
-        assert_eq!(code(r.engine.dispatch(&Action::ConfigCheck {})), "invalid_value", "{key}");
-        assert_eq!(code(r.engine.dispatch(&Action::IcsList {})), "invalid_value", "{key}");
-        r.engine.set(key, &json!(match key {
-            "ics.default_tz" => "UTC",
-            "ics.feeds" => "[]",
-            "ics.timeout_secs" => "15",
-            "ics.max_bytes" => "5242880",
-            "ics.window_days" => "7",
-            _ => "900",
-        }), "test").unwrap();
+        let e = r.engine.set(key, &json!(bad), "test").unwrap_err();
+        assert!(e.message.starts_with("ics:"), "{key}={bad}: {e}");
+        assert!(e.code == "invalid_value" || e.code == "invalid_argument", "{key}: {}", e.code);
+        assert_eq!(r.list()["feeds"].as_array().unwrap().len(), 1, "{key}");
         r.engine.dispatch(&Action::ConfigCheck {}).unwrap();
     }
+}
+
+#[test]
+fn a_reload_that_drops_or_repoints_a_feed_discards_its_cache_and_announces_it() {
+    let r = Rig::new();
+    r.add("gone", &file_url("lf-only.ics")).unwrap();
+    r.add("moved", &file_url("zones-misc.ics")).unwrap();
+    r.add("kept", &file_url("all-day.ics")).unwrap();
+    r.refresh(None).unwrap();
+    let rx = r.sub();
+    let feeds = json!([
+        {"name": "moved", "url": file_url("lf-only.ics")},
+        {"name": "kept", "url": file_url("all-day.ics")}
+    ])
+    .to_string();
+    let text = format!("[ics]\nfeeds = '{feeds}'\n");
+    std::fs::write(r.dir.path().join("cfg/config.toml"), text).unwrap();
+    r.engine.reload("test").unwrap();
+    let mut seen = Vec::new();
+    while let Ok(l) = rx.recv_timeout(Duration::from_millis(500)) {
+        let v: Value = serde_json::from_str(&l).unwrap();
+        seen.push((v["data"]["feed"].as_str().unwrap().to_string(), v["data"]["removed"].as_bool().unwrap()));
+    }
+    seen.sort();
+    assert_eq!(seen, [("gone".to_string(), true), ("moved".to_string(), false)]);
+    assert!(!r.dir.path().join("data/ics/gone.ics").exists());
+    assert!(!r.dir.path().join("data/ics/moved.ics").exists());
+    assert!(r.dir.path().join("data/ics/kept.ics").exists());
+    // A reload with an invalid feed URL is vetoed whole; the running list stays.
+    std::fs::write(r.dir.path().join("cfg/config.toml"), "[ics]\nfeeds = '[{\"name\":\"z\",\"url\":\"gopher://x\"}]'\n").unwrap();
+    assert_eq!(code(r.engine.reload("test")), "invalid_argument");
+    assert_eq!(r.list()["feeds"].as_array().unwrap().len(), 2);
 }
 
 // ---- schedule ------------------------------------------------------------------------------

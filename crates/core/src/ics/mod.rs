@@ -15,7 +15,7 @@ pub mod fetch;
 pub mod parse;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -25,9 +25,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Ics, IcsAllDay, IcsCancelled, IcsOnBadEvent, IcsUnknownTz, IcsWebcalScheme};
+use crate::config::typed::{Config, Ics, IcsAllDay, IcsCancelled, IcsOnBadEvent, IcsUnknownTz, IcsWebcalScheme};
 use crate::config::{ConfigError, Result};
 use crate::control::engine::Engine;
+use crate::control::subsystem::Subsystem;
 
 use fetch::{FetchOpts, Fetched, Source};
 use parse::ParseOpts;
@@ -207,7 +208,7 @@ impl Cache {
         let text = serde_json::to_vec_pretty(m).expect("meta serializes");
         self.write(&self.meta(name), &text)
     }
-    fn remove(&self, name: &str) {
+    fn discard(&self, name: &str) {
         let _ = std::fs::remove_file(self.ics(name));
         let _ = std::fs::remove_file(self.meta(name));
     }
@@ -231,11 +232,62 @@ struct Ctx {
 fn ctx(engine: &Engine) -> Result<Ctx> {
     let typed = engine.resolved().typed()?;
     let settings = Settings::from_config(&typed.ics)?;
-    let dir = settings.cache_dir.clone().unwrap_or_else(|| {
-        let sessions = engine.default_sessions_dir();
-        sessions.parent().unwrap_or(sessions).join("ics")
-    });
+    let dir = cache_dir(&settings, engine.default_sessions_dir());
     Ok(Ctx { network_allow: typed.network.allow, cfg: typed.ics, settings, cache: Cache { dir } })
+}
+
+fn cache_dir(s: &Settings, sessions: &Path) -> PathBuf {
+    s.cache_dir
+        .clone()
+        .unwrap_or_else(|| sessions.parent().unwrap_or(sessions).join("ics"))
+}
+
+/// Takes part in config reload: a bad feed list, URL, header or `ics.*` value vetoes the whole
+/// reload (nothing changes); a feed dropped or re-pointed has its cache deleted and is announced.
+pub struct IcsSubsystem {
+    engine: Weak<Engine>,
+}
+
+impl IcsSubsystem {
+    pub fn new(engine: Weak<Engine>) -> IcsSubsystem {
+        IcsSubsystem { engine }
+    }
+}
+
+impl Subsystem for IcsSubsystem {
+    fn name(&self) -> &'static str {
+        "ics"
+    }
+
+    fn validate(&self, new: &Config) -> Result<()> {
+        let s = Settings::from_config(&new.ics)?;
+        for f in parse_feeds(&new.ics.feeds)? {
+            fetch::classify(&f.url, s.webcal_https)
+                .map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+            if let Some(h) = &f.header {
+                header_pair(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn apply(&self, old: &Config, new: &Config) {
+        let Some(engine) = self.engine.upgrade() else { return };
+        let (Ok(os), Ok(old_feeds), Ok(new_feeds)) =
+            (Settings::from_config(&old.ics), parse_feeds(&old.ics.feeds), parse_feeds(&new.ics.feeds))
+        else {
+            return;
+        };
+        let cache = Cache { dir: cache_dir(&os, engine.default_sessions_dir()) };
+        for f in &old_feeds {
+            let same = new_feeds.iter().any(|n| n.name == f.name && n.url == f.url);
+            if !same {
+                cache.discard(&f.name);
+                let gone = !new_feeds.iter().any(|n| n.name == f.name);
+                engine.bus.publish("ics-updated", json!({"feed": f.name, "removed": gone}));
+            }
+        }
+    }
 }
 
 fn load_feeds(c: &Ctx) -> Result<Vec<Feed>> {
