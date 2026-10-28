@@ -73,8 +73,9 @@ fn out_of_range_file_reload_is_vetoed_and_reports_failure() {
 #[test]
 fn cli_style_strings_are_coerced_for_integers_only() {
     let d = tempfile::tempdir().unwrap();
-    let (e, _) = engine(d.path());
+    let (e, cfg) = engine(d.path());
     e.set("ics.window_days", &json!("30"), "test").unwrap();
+    assert!(std::fs::read_to_string(&cfg).unwrap().contains("window_days = 30"));
     assert_eq!(e.snapshot().config.ics.window_days, 30);
     assert_eq!(e.set("ics.window_days", &json!("many"), "test").unwrap_err().code, "type_mismatch");
     e.set("llm.timeout", &json!("45s"), "test").unwrap();

@@ -119,6 +119,7 @@ fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Res
     let new_val: toml_edit::Value = match value {
         Value::Bool(b) => (*b).into(),
         Value::String(s) => s.as_str().into(),
+        Value::Number(n) if n.is_i64() => n.as_i64().unwrap_or_default().into(),
         other => {
             return Err(ConfigError::new("type_mismatch", format!("cannot store {other} in TOML")))
         }
