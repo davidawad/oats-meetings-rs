@@ -5,7 +5,7 @@
 #            OPENOATS_SESSIONS_ROOT=<dir>/sessions bin/meeting sessions list
 set -euo pipefail
 source "$(dirname "$0")/nix-env.sh"
-source "$(dirname "$0")/fetch-models.sh" >&2
+OATS_FETCH_PARAKEET=0 OATS_FETCH_MODELS=tiny.en source "$(dirname "$0")/fetch-models.sh" >&2
 d=$(mktemp -d)
 OATS_STORE_DUMP="$d/sessions" cargo test --locked -p oats-core --features whisper --test stt_whisper engine_local_backend -- --nocapture >&2
 echo "-----BEGIN-STORE"
