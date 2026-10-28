@@ -79,7 +79,7 @@ pub fn api_key(cfg: &Config, secrets: &dyn SecretStore) -> Result<Option<String>
     if cfg.llm.backend == LlmBackend::Ollama {
         return Ok(None);
     }
-    match secrets::resolve(secrets, &cfg.llm.api_key_ref) {
+    match secrets::resolve(secrets, &cfg.llm.api_key_ref, cfg.secrets.max_key_len as usize) {
         Ok(k) => Ok(Some(k)),
         Err(e) if e.code == "secret_not_found" && cfg.llm.backend != LlmBackend::Openrouter => Ok(None),
         Err(e) if e.code == "secret_not_found" => Err(ConfigError::new(
@@ -196,7 +196,8 @@ impl Subsystem for NotesSubsystem {
             }
         }
         // A literal API key here is refused outright: only references are config.
-        secrets::require_ref(&new.llm.api_key_ref, "llm.api_key_ref")?;
+        let key = secrets::require_ref(&new.llm.api_key_ref, "llm.api_key_ref")?;
+        secrets::check_len(&key, new.secrets.max_key_len as usize)?;
         Ok(())
     }
 }

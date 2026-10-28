@@ -107,7 +107,7 @@ impl Settings {
 /// `config-check`: the `ics.*` strings parse and the feed list is well formed.
 pub fn validate_settings(c: &Ics) -> Result<()> {
     Settings::from_config(c)?;
-    for f in parse_feeds(&c.feeds)? {
+    for f in parse_feeds(&c.feeds, c.max_name_len as usize)? {
         if let Some(h) = &f.header {
             header_secret(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
         }
@@ -115,9 +115,9 @@ pub fn validate_settings(c: &Ics) -> Result<()> {
     Ok(())
 }
 
-pub fn valid_name(n: &str) -> bool {
+pub fn valid_name(n: &str, max_len: usize) -> bool {
     !n.is_empty()
-        && n.len() <= 64
+        && n.len() <= max_len
         && !n.starts_with('.')
         && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
@@ -139,12 +139,12 @@ pub fn header_secret(h: &str) -> Result<(String, String)> {
     Ok((name, key))
 }
 
-pub fn parse_feeds(text: &str) -> Result<Vec<Feed>> {
+pub fn parse_feeds(text: &str, max_name: usize) -> Result<Vec<Feed>> {
     let feeds: Vec<Feed> = serde_json::from_str(if text.trim().is_empty() { "[]" } else { text })
         .map_err(|e| invalid("feeds", format!("not a JSON array of feeds: {e}")))?;
     let mut seen = std::collections::BTreeSet::new();
     for f in &feeds {
-        if !valid_name(&f.name) {
+        if !valid_name(&f.name, max_name) {
             return Err(invalid("feeds", format!("invalid feed name '{}'", f.name)));
         }
         if !seen.insert(f.name.clone()) {
@@ -270,7 +270,7 @@ impl Subsystem for IcsSubsystem {
 
     fn validate(&self, new: &Config) -> Result<()> {
         let s = Settings::from_config(&new.ics)?;
-        for f in parse_feeds(&new.ics.feeds)? {
+        for f in parse_feeds(&new.ics.feeds, new.ics.max_name_len as usize)? {
             fetch::classify(&f.url, s.webcal_https)
                 .map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
             if let Some(h) = &f.header {
@@ -283,7 +283,7 @@ impl Subsystem for IcsSubsystem {
     fn apply(&self, old: &Config, new: &Config) {
         let Some(engine) = self.engine.upgrade() else { return };
         let (Ok(os), Ok(old_feeds), Ok(new_feeds)) =
-            (Settings::from_config(&old.ics), parse_feeds(&old.ics.feeds), parse_feeds(&new.ics.feeds))
+            (Settings::from_config(&old.ics), parse_feeds(&old.ics.feeds, old.ics.max_name_len as usize), parse_feeds(&new.ics.feeds, new.ics.max_name_len as usize))
         else {
             return;
         };
@@ -300,7 +300,7 @@ impl Subsystem for IcsSubsystem {
 }
 
 fn load_feeds(c: &Ctx) -> Result<Vec<Feed>> {
-    parse_feeds(&c.cfg.feeds)
+    parse_feeds(&c.cfg.feeds, c.cfg.max_name_len as usize)
 }
 
 fn save_feeds(engine: &Engine, feeds: &[Feed], source: &str) -> Result<()> {
@@ -343,10 +343,11 @@ fn add(
     refresh_secs: Option<u64>,
     header: Option<&str>,
 ) -> Result<Value> {
-    if !valid_name(name) {
+    let max_name = engine.snapshot().config.ics.max_name_len as usize;
+    if !valid_name(name, max_name) {
         return Err(ConfigError::new(
             "invalid_argument",
-            format!("invalid feed name {name:?} (letters, digits, '_', '-', '.'; at most 64)"),
+            format!("invalid feed name {name:?} (letters, digits, '_', '-', '.'; at most {max_name}, ics.max_name_len)"),
         ));
     }
     let c = ctx(engine)?;
@@ -473,7 +474,7 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
         Some(h) => {
             let (name, key) = header_secret(h)?;
             let store = crate::secrets::store_for(&c.secrets);
-            let value = crate::secrets::resolve(&*store, &format!("{}{key}", crate::secrets::REF_PREFIX))?;
+            let value = crate::secrets::resolve(&*store, &format!("{}{key}", crate::secrets::REF_PREFIX), c.secrets.max_key_len as usize)?;
             Some((name, value))
         }
         None => None,
@@ -646,16 +647,16 @@ mod tests {
 
     #[test]
     fn feed_json_defaults() {
-        let f = parse_feeds(r#"[{"name":"a","url":"file:///x.ics"}]"#).unwrap();
+        let f = parse_feeds(r#"[{"name":"a","url":"file:///x.ics"}]"#, 64).unwrap();
         assert!(f[0].enabled);
         assert_eq!(f[0].refresh_secs, None);
-        assert_eq!(parse_feeds("").unwrap().len(), 0);
-        assert_eq!(parse_feeds("nope").unwrap_err().code, "invalid_value");
+        assert_eq!(parse_feeds("", 64).unwrap().len(), 0);
+        assert_eq!(parse_feeds("nope", 64).unwrap_err().code, "invalid_value");
         assert_eq!(
-            parse_feeds(r#"[{"name":"a","url":"u"},{"name":"a","url":"v"}]"#).unwrap_err().code,
+            parse_feeds(r#"[{"name":"a","url":"u"},{"name":"a","url":"v"}]"#, 64).unwrap_err().code,
             "invalid_value"
         );
-        assert_eq!(parse_feeds(r#"[{"name":"../x","url":"u"}]"#).unwrap_err().code, "invalid_value");
+        assert_eq!(parse_feeds(r#"[{"name":"../x","url":"u"}]"#, 64).unwrap_err().code, "invalid_value");
     }
 
     #[test]
@@ -676,5 +677,16 @@ mod tests {
         assert_eq!(parse::parse_duration("PT"), Some(0));
         assert_eq!(parse::parse_duration("1H"), None);
         assert_eq!(parse::parse_duration("PT5"), None);
+    }
+
+    /// ics.max_name_len at its boundary.
+    #[test]
+    fn feed_name_cap_boundary() {
+        for max in [1usize, 64, 255] {
+            let at = "n".repeat(max);
+            let feed = |n: &str| format!(r#"[{{"name":"{n}","url":"file:///x.ics"}}]"#);
+            assert_eq!(parse_feeds(&feed(&at), max).unwrap().len(), 1, "{max}");
+            assert_eq!(parse_feeds(&feed(&format!("{at}n")), max).unwrap_err().code, "invalid_value", "{max}+1");
+        }
     }
 }

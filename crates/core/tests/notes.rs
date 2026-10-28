@@ -485,18 +485,22 @@ fn kb_reindex_and_search_over_the_api_is_deterministic() {
     assert_eq!(c.call("kb-search", q).unwrap()["data"], a["data"]);
 }
 
+fn dims() -> usize {
+    oats_core::config::keys::default_int("kb.hash_dims") as usize
+}
+
 /// A fake embedding endpoint that answers with the local hash embedding, so ranking is exact.
 fn embed_mock() -> Mock {
     Mock::start(|path, body| {
         if path.ends_with("/api/embeddings") {
-            let v = hash_embed(body["prompt"].as_str().unwrap_or(""));
+            let v = hash_embed(body["prompt"].as_str().unwrap_or(""), dims());
             (200, json!({"embedding": v}).to_string())
         } else if path.ends_with("/embeddings") {
             let data: Vec<Value> = body["input"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|t| json!({"embedding": hash_embed(t.as_str().unwrap_or(""))}))
+                .map(|t| json!({"embedding": hash_embed(t.as_str().unwrap_or(""), dims())}))
                 .collect();
             (200, json!({"data": data}).to_string())
         } else {

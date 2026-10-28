@@ -32,15 +32,27 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, key: &str) -> Result<bool>;
 }
 
-/// `namespace/name`, letters, digits and `_ - . /`, no leading slash, no `..`.
+/// `namespace/name`, letters, digits and `_ - . /`, no leading slash, no `..`. The length cap
+/// (`secrets.max_key_len`) is checked by `check_len` where a config is at hand.
 pub fn valid_key(k: &str) -> bool {
     !k.is_empty()
-        && k.len() <= 128
         && k.contains('/')
         && !k.starts_with('/')
         && !k.ends_with('/')
         && !k.contains("..")
         && k.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
+}
+
+/// `secrets.max_key_len`: the key is at most `max` bytes.
+pub fn check_len(k: &str, max: usize) -> Result<()> {
+    if k.len() <= max {
+        Ok(())
+    } else {
+        Err(ConfigError::new(
+            "invalid_argument",
+            format!("secret key is {} bytes; secrets.max_key_len allows {max}", k.len()),
+        ))
+    }
 }
 
 fn check_key(k: &str) -> Result<()> {
@@ -71,8 +83,9 @@ pub fn require_ref(s: &str, what: &str) -> Result<String> {
 }
 
 /// Look a reference up in `store`.
-pub fn resolve(store: &dyn SecretStore, reference: &str) -> Result<String> {
+pub fn resolve(store: &dyn SecretStore, reference: &str, max_len: usize) -> Result<String> {
     let key = require_ref(reference, "the value")?;
+    check_len(&key, max_len)?;
     store.get(&key)?.ok_or_else(|| {
         ConfigError::new("secret_not_found", format!("no secret '{key}' in the {} store", store.name()))
     })
@@ -246,6 +259,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
     match a {
         Action::SecretSet { key, value } => {
             check_key(key)?;
+            check_len(key, cfg.max_key_len as usize)?;
             if value.is_empty() {
                 return Err(ConfigError::new("invalid_argument", "a secret cannot be empty"));
             }
@@ -253,10 +267,12 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             Ok(json!({"key": key, "stored": true, "backend": store.name()}))
         }
         Action::SecretDelete { key } => {
+            check_len(key, cfg.max_key_len as usize)?;
             let deleted = store.delete(key)?;
             Ok(json!({"key": key, "deleted": deleted, "backend": store.name()}))
         }
         Action::SecretHas { key } => {
+            check_len(key, cfg.max_key_len as usize)?;
             let present = store.get(key)?.is_some();
             Ok(json!({"key": key, "present": present, "backend": store.name()}))
         }
@@ -334,5 +350,20 @@ mod tests {
             Err(e) => assert_eq!(e.code, "secret_backend_unavailable"),
         }
         assert_eq!(k.get("nokey").unwrap_err().code, "invalid_argument");
+    }
+
+    /// secrets.max_key_len at its boundary, for the check used by actions and references.
+    #[test]
+    fn key_length_cap_boundary() {
+        for max in [8usize, 128, 512] {
+            let at = format!("ns/{}", "k".repeat(max - 3));
+            assert_eq!(at.len(), max);
+            check_len(&at, max).unwrap();
+            assert_eq!(check_len(&format!("{at}k"), max).unwrap_err().code, "invalid_argument");
+            let store = MemStore::default();
+            store.set(&at, "v").unwrap();
+            assert_eq!(resolve(&store, &format!("secret:{at}"), max).unwrap(), "v");
+            assert_eq!(resolve(&store, &format!("secret:{at}k"), max).unwrap_err().code, "invalid_argument");
+        }
     }
 }
