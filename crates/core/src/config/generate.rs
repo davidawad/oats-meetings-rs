@@ -87,6 +87,21 @@ pub fn schema_json() -> String {
                 leaf.insert("type".into(), json!("string"));
                 leaf.insert("enum".into(), json!(vs));
             }
+            Kind::Int { min, max } => {
+                leaf.insert("type".into(), json!("integer"));
+                leaf.insert("minimum".into(), json!(min));
+                leaf.insert("maximum".into(), json!(max));
+            }
+            Kind::Duration { min_ms, max_ms } => {
+                leaf.insert("type".into(), json!("string"));
+                leaf.insert("format".into(), json!("duration"));
+                leaf.insert("pattern".into(), json!("^[0-9]+(ms|s|m|h|d)$"));
+                leaf.insert("x-kind".into(), json!("duration"));
+                leaf.insert("x-min".into(), json!(super::keys::format_duration_ms(min_ms)));
+                leaf.insert("x-max".into(), json!(super::keys::format_duration_ms(max_ms)));
+                leaf.insert("x-min-ms".into(), json!(min_ms));
+                leaf.insert("x-max-ms".into(), json!(max_ms));
+            }
         }
         leaf.insert("default".into(), k.default.to_json());
         leaf.insert("description".into(), json!(k.doc));

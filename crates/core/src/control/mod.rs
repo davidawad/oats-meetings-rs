@@ -19,7 +19,6 @@ pub mod subsystem;
 
 pub const PROTOCOL: u32 = 1;
 /// A request line longer than this is refused and the connection closed.
-pub const MAX_LINE: u64 = 1 << 20;
 
 use std::sync::Arc;
 

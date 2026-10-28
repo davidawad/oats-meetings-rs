@@ -17,8 +17,6 @@ use crate::secrets::{self, SecretStore};
 pub const INDEX_FILE: &str = ".oats-kb-index.json";
 const INDEX_VERSION: u64 = 1;
 const DIMS: usize = 256;
-const MAX_CHUNK: usize = 1200;
-const MIN_CHUNK: usize = 20;
 
 fn io(p: &Path, e: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("io_error", format!("{}: {e}", p.display()))
@@ -64,20 +62,21 @@ pub fn hash_embed(text: &str) -> Vec<f32> {
     normalize(v)
 }
 
-/// Paragraph chunks, merged up to MAX_CHUNK characters; tiny fragments are dropped.
-pub fn chunk(text: &str) -> Vec<String> {
+/// Paragraph chunks, merged up to `max_chunk` characters (`kb.max_chunk`); fragments under
+/// `min_chunk` (`kb.min_chunk`) are dropped.
+pub fn chunk(text: &str, max_chunk: usize, min_chunk: usize) -> Vec<String> {
     let mut out: Vec<String> = vec![];
     let mut cur = String::new();
     for para in text.split("\n\n").map(str::trim).filter(|p| !p.is_empty()) {
-        if !cur.is_empty() && cur.len() + para.len() + 2 > MAX_CHUNK {
+        if !cur.is_empty() && cur.len() + para.len() + 2 > max_chunk {
             out.push(std::mem::take(&mut cur));
         }
         if !cur.is_empty() {
             cur.push_str("\n\n");
         }
         cur.push_str(para);
-        while cur.len() > MAX_CHUNK {
-            let mut cut = MAX_CHUNK;
+        while cur.len() > max_chunk {
+            let mut cut = max_chunk;
             while !cur.is_char_boundary(cut) {
                 cut -= 1;
             }
@@ -88,7 +87,7 @@ pub fn chunk(text: &str) -> Vec<String> {
     if !cur.is_empty() {
         out.push(cur);
     }
-    out.into_iter().filter(|c| c.chars().count() >= MIN_CHUNK).collect()
+    out.into_iter().filter(|c| c.chars().count() >= min_chunk).collect()
 }
 
 pub struct Ctx<'a> {
@@ -117,7 +116,7 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             texts
                 .iter()
                 .map(|t| {
-                    let r = http::post_json(&url, None, &json!({"model": cfg.kb.model, "prompt": t}))?;
+                    let r = http::post_json(&url, None, &json!({"model": cfg.kb.model, "prompt": t}), cfg.kb.timeout.as_duration())?;
                     vector_of(&r["embedding"])
                 })
                 .collect()
@@ -133,7 +132,7 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
                 Err(e) if e.code == "secret_not_found" => None,
                 Err(e) => return Err(e),
             };
-            let r = http::post_json(&url, key.as_deref(), &json!({"model": cfg.kb.model, "input": texts}))?;
+            let r = http::post_json(&url, key.as_deref(), &json!({"model": cfg.kb.model, "input": texts}), cfg.kb.timeout.as_duration())?;
             let data = r["data"].as_array().ok_or_else(|| ConfigError::new("backend_bad_response", "no data array"))?;
             if data.len() != texts.len() {
                 return Err(ConfigError::new("backend_bad_response", "embedding count mismatch"));
@@ -183,7 +182,7 @@ pub fn reindex(ctx: &Ctx) -> Result<Value> {
     let srcs = files(&ctx.dir)?;
     for (rel, abs) in &srcs {
         let text = std::fs::read_to_string(abs).map_err(|e| io(abs, e))?;
-        for (i, c) in chunk(&text).into_iter().enumerate() {
+        for (i, c) in chunk(&text, ctx.cfg.kb.max_chunk as usize, ctx.cfg.kb.min_chunk as usize).into_iter().enumerate() {
             chunks.push((rel.clone(), i, c));
         }
     }
@@ -298,13 +297,32 @@ mod tests {
 
     #[test]
     fn chunking() {
-        assert!(chunk("tiny").is_empty());
+        let (max, min) = (
+            crate::config::keys::default_int("kb.max_chunk") as usize,
+            crate::config::keys::default_int("kb.min_chunk") as usize,
+        );
+        assert!(chunk("tiny", max, min).is_empty());
         let big = format!("{}\n\n{}", "a".repeat(1000), "b".repeat(1000));
-        let c = chunk(&big);
+        let c = chunk(&big, max, min);
         assert_eq!(c.len(), 2);
-        assert!(c.iter().all(|x| x.len() <= MAX_CHUNK));
+        assert!(c.iter().all(|x| x.len() <= max));
         let long = "word ".repeat(1000);
-        assert!(chunk(&long).iter().all(|x| x.len() <= MAX_CHUNK));
+        assert!(chunk(&long, max, min).iter().all(|x| x.len() <= max));
+    }
+
+    /// kb.max_chunk / kb.min_chunk at and around their boundaries.
+    #[test]
+    fn chunk_limits_are_honoured() {
+        let para = "x".repeat(50);
+        let text = format!("{para}\n\n{para}\n\n{para}");
+        // Everything fits one chunk at max 200, each paragraph alone at max 100.
+        assert_eq!(chunk(&text, 200, 1).len(), 1);
+        assert_eq!(chunk(&text, 100, 1).len(), 2);
+        assert_eq!(chunk(&text, 50, 1).len(), 3);
+        // A cut piece shorter than min is dropped; exactly min is kept.
+        let one = "y".repeat(120);
+        assert_eq!(chunk(&one, 100, 20), vec!["y".repeat(100), "y".repeat(20)]);
+        assert_eq!(chunk(&one, 100, 21), vec!["y".repeat(100)]);
     }
 
     #[test]

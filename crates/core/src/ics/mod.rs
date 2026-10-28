@@ -56,7 +56,8 @@ pub struct Feed {
 pub struct Settings {
     pub enabled: bool,
     pub default_refresh: u64,
-    pub timeout: u64,
+    pub timeout: Duration,
+    pub poll_interval: Duration,
     pub max_bytes: u64,
     pub max_occ: u16,
     pub cache_dir: Option<PathBuf>,
@@ -72,10 +73,6 @@ fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("invalid_value", format!("ics.{key}: {why}"))
 }
 
-fn num(key: &str, v: &str) -> Result<u64> {
-    v.trim().parse::<u64>().map_err(|_| invalid(key, format!("'{v}' is not a non-negative integer")))
-}
-
 impl Settings {
     pub fn from_config(c: &Ics) -> Result<Settings> {
         let default_tz = c
@@ -83,20 +80,19 @@ impl Settings {
             .trim()
             .parse::<Tz>()
             .map_err(|_| invalid("default_tz", format!("'{}' is not an IANA zone", c.default_tz)))?;
-        let max_occ = num("max_occurrences", &c.max_occurrences)?;
-        let window_days = num("window_days", &c.window_days)?;
         Ok(Settings {
             enabled: c.enabled,
-            default_refresh: num("default_refresh_secs", &c.default_refresh_secs)?,
-            timeout: num("timeout_secs", &c.timeout_secs)?,
-            max_bytes: num("max_bytes", &c.max_bytes)?,
-            max_occ: u16::try_from(max_occ.min(u64::from(u16::MAX))).unwrap_or(u16::MAX),
+            default_refresh: c.default_refresh.secs(),
+            timeout: c.timeout.as_duration(),
+            poll_interval: c.poll_interval.as_duration(),
+            max_bytes: c.max_bytes,
+            max_occ: u16::try_from(c.max_occurrences).unwrap_or(u16::MAX),
             cache_dir: Some(c.cache_dir.trim()).filter(|s| !s.is_empty()).map(PathBuf::from),
             default_tz,
             allow_file: c.allow_file,
             webcal_https: c.webcal_scheme == IcsWebcalScheme::Https,
             stale_on_error: c.stale_on_error,
-            window_days: i64::try_from(window_days.min(36_500)).unwrap_or(36_500),
+            window_days: i64::from(c.window_days),
             parse: ParseOpts {
                 default_tz,
                 tz_fallback: c.unknown_tz == IcsUnknownTz::DefaultTz,
@@ -485,7 +481,7 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
     let prior = c.cache.read_meta(&f.name);
     let have_body = c.cache.ics(&f.name).exists();
     let opts = FetchOpts {
-        timeout_secs: c.settings.timeout,
+        timeout: c.settings.timeout,
         max_bytes: c.settings.max_bytes,
         header,
         etag: if have_body { prior.etag.clone() } else { None },
@@ -624,15 +620,20 @@ pub fn tick(engine: &Engine, now: i64) -> Vec<String> {
     done
 }
 
-/// A detached thread that calls `tick` about once a second until the engine shuts down.
+/// A detached thread that calls `tick` every `ics.poll_interval` (read live) until the engine
+/// shuts down; it sleeps in `config.poll_interval` slices so shutdown stays prompt.
 pub fn spawn_scheduler(engine: Arc<Engine>) {
     let _ = thread::Builder::new().name("oats-ics".into()).spawn(move || {
         while !engine.is_shutdown() {
-            for _ in 0..10 {
+            let cfg = engine.snapshot();
+            let every = cfg.config.ics.poll_interval.as_duration();
+            let slice = every.min(cfg.config.config.poll_interval.as_duration());
+            let start = std::time::Instant::now();
+            while start.elapsed() < every {
                 if engine.is_shutdown() {
                     return;
                 }
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(slice.min(every.saturating_sub(start.elapsed())));
             }
             let _ = tick(&engine, now_secs());
         }

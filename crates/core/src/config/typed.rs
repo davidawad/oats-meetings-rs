@@ -1,6 +1,36 @@
 //! The typed view of a resolved config. Unknown fields are an error (closed vocabulary).
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use super::keys::{format_duration_ms, parse_duration_ms};
+
+/// A duration key's typed value: milliseconds, written and read as `"15s"` / `"250ms"` text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dur(pub u64);
+
+impl Dur {
+    pub fn as_duration(self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.0)
+    }
+    pub fn secs(self) -> u64 {
+        self.0 / 1000
+    }
+}
+
+impl<'de> Deserialize<'de> for Dur {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        parse_duration_ms(&s).map(Dur).ok_or_else(|| {
+            serde::de::Error::custom(format!("'{s}' is not a duration like \"15s\" (units ms, s, m, h, d)"))
+        })
+    }
+}
+
+impl Serialize for Dur {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&format_duration_ms(self.0))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -66,11 +96,18 @@ pub struct Audio {
 #[serde(deny_unknown_fields)]
 pub struct ConfigSection {
     pub hot_reload: bool,
+    pub poll_interval: Dur,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Control {
+    pub accept_backoff: Dur,
+    pub accept_poll: Dur,
+    pub client_timeout: Dur,
+    pub connect_retry: Dur,
+    pub event_queue: u32,
+    pub max_line: u64,
     pub socket: String,
 }
 
@@ -96,6 +133,7 @@ pub struct Llm {
     pub backend: LlmBackend,
     pub base_url: String,
     pub model: String,
+    pub timeout: Dur,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -112,7 +150,10 @@ pub struct Kb {
     pub base_url: String,
     pub dir: String,
     pub embedder: KbEmbedder,
+    pub max_chunk: u32,
+    pub min_chunk: u32,
     pub model: String,
+    pub timeout: Dur,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -265,18 +306,19 @@ pub struct Ics {
     pub allow_file: bool,
     pub cache_dir: String,
     pub cancelled: IcsCancelled,
-    pub default_refresh_secs: String,
+    pub default_refresh: Dur,
     pub default_tz: String,
     pub enabled: bool,
     pub feeds: String,
-    pub max_bytes: String,
-    pub max_occurrences: String,
+    pub max_bytes: u64,
+    pub max_occurrences: u32,
     pub on_bad_event: IcsOnBadEvent,
+    pub poll_interval: Dur,
     pub stale_on_error: bool,
-    pub timeout_secs: String,
+    pub timeout: Dur,
     pub unknown_tz: IcsUnknownTz,
     pub webcal_scheme: IcsWebcalScheme,
-    pub window_days: String,
+    pub window_days: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

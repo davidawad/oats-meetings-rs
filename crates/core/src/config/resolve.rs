@@ -82,9 +82,33 @@ pub fn validate_layer(flat: &Flat, layer: &str) -> Result<()> {
                     ));
                 }
             }
+            (Kind::Int { min, max }, Value::Number(n)) => match n.as_i64() {
+                Some(i) if (min..=max).contains(&i) => {}
+                _ => {
+                    return Err(ConfigError::new(
+                        "invalid_value",
+                        format!("'{path}' = {n} in {layer}; must be a whole number from {min} to {max}"),
+                    ))
+                }
+            },
+            (Kind::Duration { min_ms, max_ms }, Value::String(s)) => match keys::parse_duration_ms(s) {
+                Some(ms) if (min_ms..=max_ms).contains(&ms) => {}
+                _ => {
+                    return Err(ConfigError::new(
+                        "invalid_value",
+                        format!(
+                            "'{path}' = \"{s}\" in {layer}; must look like \"15s\" (units ms, s, m, h, d) from {} to {}",
+                            keys::format_duration_ms(min_ms),
+                            keys::format_duration_ms(max_ms)
+                        ),
+                    ))
+                }
+            },
             (kind, other) => {
                 let want = match kind {
                     Kind::Bool => "boolean",
+                    Kind::Int { .. } => "whole number",
+                    Kind::Duration { .. } => "duration string like \"15s\"",
                     _ => "string",
                 };
                 return Err(ConfigError::new(
@@ -194,6 +218,12 @@ impl Resolved {
             return Err(ConfigError::new(
                 "invalid_combination",
                 "stt.backend = \"cloud\" needs stt.cloud.adapter other than \"none\"",
+            ));
+        }
+        if cfg.kb.min_chunk > cfg.kb.max_chunk {
+            return Err(ConfigError::new(
+                "invalid_combination",
+                format!("kb.min_chunk ({}) must not exceed kb.max_chunk ({})", cfg.kb.min_chunk, cfg.kb.max_chunk),
             ));
         }
         Ok(cfg)

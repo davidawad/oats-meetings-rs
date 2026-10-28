@@ -7,8 +7,6 @@ use serde_json::Value;
 
 use crate::config::{ConfigError, Result};
 
-pub const TIMEOUT: Duration = Duration::from_secs(120);
-
 /// Host part of an http(s) URL (userinfo and port stripped), lowercased.
 pub fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
@@ -42,9 +40,10 @@ pub fn join(base: &str, path: &str) -> String {
 }
 
 /// POST `body` as JSON and parse the JSON response.
-pub fn post_json(url: &str, bearer: Option<&str>, body: &Value) -> Result<Value> {
+/// `timeout` is the whole-request limit (`llm.timeout` / `kb.timeout`).
+pub fn post_json(url: &str, bearer: Option<&str>, body: &Value, timeout: Duration) -> Result<Value> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
+        .timeout_global(Some(timeout))
         .http_status_as_error(false)
         .build()
         .into();

@@ -61,7 +61,7 @@ pub fn classify(url: &str, webcal_https: bool) -> Result<Source> {
 
 #[derive(Clone, Debug)]
 pub struct FetchOpts {
-    pub timeout_secs: u64,
+    pub timeout: Duration,
     pub max_bytes: u64,
     pub header: Option<(String, String)>,
     pub etag: Option<String>,
@@ -107,7 +107,7 @@ fn map_ureq(e: ureq::Error) -> ConfigError {
 
 fn fetch_http(url: &str, o: &FetchOpts) -> Result<Fetched> {
     let builder = ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(o.timeout_secs.max(1))))
+        .timeout_global(Some(o.timeout))
         .http_status_as_error(false);
     #[cfg(windows)]
     let builder = builder.tls_config(

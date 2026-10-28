@@ -8,6 +8,50 @@ pub enum Kind {
     Bool,
     Str,
     Enum(&'static [&'static str]),
+    /// Whole number in `min..=max` (inclusive). Out of range vetoes the reload.
+    Int { min: i64, max: i64 },
+    /// Duration written as `<digits><unit>` with unit ms, s, m, h or d (`"15s"`, `"250ms"`),
+    /// stored in milliseconds within `min_ms..=max_ms`. Out of range vetoes the reload.
+    Duration { min_ms: u64, max_ms: u64 },
+}
+
+pub const MS: u64 = 1;
+pub const SEC: u64 = 1000;
+pub const MIN: u64 = 60 * SEC;
+pub const HOUR: u64 = 60 * MIN;
+pub const DAY: u64 = 24 * HOUR;
+
+/// Parse `"<digits><unit>"` (ms, s, m, h, d) into milliseconds. No bare numbers, no fractions.
+pub fn parse_duration_ms(s: &str) -> Option<u64> {
+    let t = s.trim();
+    let split = t.find(|c: char| !c.is_ascii_digit())?;
+    let (num, unit) = t.split_at(split);
+    if num.is_empty() {
+        return None;
+    }
+    let n: u64 = num.parse().ok()?;
+    let mult = match unit {
+        "ms" => MS,
+        "s" => SEC,
+        "m" => MIN,
+        "h" => HOUR,
+        "d" => DAY,
+        _ => return None,
+    };
+    n.checked_mul(mult)
+}
+
+/// Canonical text for a millisecond count: the largest unit that divides it exactly.
+pub fn format_duration_ms(ms: u64) -> String {
+    for (unit, mult) in [("d", DAY), ("h", HOUR), ("m", MIN), ("s", SEC)] {
+        if ms >= mult && ms % mult == 0 {
+            return format!("{}{unit}", ms / mult);
+        }
+    }
+    if ms == 0 {
+        return "0s".into();
+    }
+    format!("{ms}ms")
 }
 
 /// How a change to this key reaches the running app. Every key must be hot-reloadable; the
@@ -36,6 +80,9 @@ impl Reload {
 pub enum Def {
     B(bool),
     S(&'static str),
+    I(i64),
+    /// Milliseconds; rendered as a duration string.
+    D(u64),
 }
 
 impl Def {
@@ -43,6 +90,8 @@ impl Def {
         match self {
             Def::B(b) => Value::Bool(b),
             Def::S(s) => Value::String(s.to_string()),
+            Def::I(n) => Value::from(n),
+            Def::D(ms) => Value::String(format_duration_ms(ms)),
         }
     }
 }
@@ -75,6 +124,102 @@ pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
 pub const KEYS: &[Key] = &[
+    Key {
+        path: "llm.timeout",
+        kind: Kind::Duration { min_ms: SEC, max_ms: HOUR },
+        default: Def::D(120 * SEC),
+        doc: "Whole-request timeout for a notes-generation LLM call.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "kb.timeout",
+        kind: Kind::Duration { min_ms: SEC, max_ms: HOUR },
+        default: Def::D(120 * SEC),
+        doc: "Whole-request timeout for a KB embedding call.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "kb.max_chunk",
+        kind: Kind::Int { min: 100, max: 100_000 },
+        default: Def::I(1200),
+        doc: "Largest KB chunk, in characters; longer paragraphs are cut.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "kb.min_chunk",
+        kind: Kind::Int { min: 1, max: 1_000 },
+        default: Def::I(20),
+        doc: "Smallest KB chunk kept, in characters; shorter fragments are dropped. Must not exceed kb.max_chunk.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ics.poll_interval",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: HOUR },
+        default: Def::D(SEC),
+        doc: "How often the feed scheduler checks which feeds are due.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "config.poll_interval",
+        kind: Kind::Duration { min_ms: 10 * MS, max_ms: 10 * MIN },
+        default: Def::D(250 * MS),
+        doc: "How often the user config file is checked for changes while config.hot_reload is on.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "control.max_line",
+        kind: Kind::Int { min: 1_024, max: 67_108_864 },
+        default: Def::I(1_048_576),
+        doc: "Largest control-socket request line, in bytes; longer lines are refused.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "control.event_queue",
+        kind: Kind::Int { min: 1, max: 65_536 },
+        default: Def::I(256),
+        doc: "Events queued per subscriber before a slow one is dropped.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "control.accept_poll",
+        kind: Kind::Duration { min_ms: MS, max_ms: SEC },
+        default: Def::D(10 * MS),
+        doc: "Idle wait of the control-socket accept loop between checks.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "control.accept_backoff",
+        kind: Kind::Duration { min_ms: MS, max_ms: 10 * SEC },
+        default: Def::D(50 * MS),
+        doc: "Wait after an accept error before trying again.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "control.client_timeout",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: HOUR },
+        default: Def::D(10 * SEC),
+        doc: "Default wait of oats-ctl for events or for an engine that is still starting (its --timeout-ms flag overrides).",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "control.connect_retry",
+        kind: Kind::Duration { min_ms: MS, max_ms: 10 * SEC },
+        default: Def::D(25 * MS),
+        doc: "Pause between oats-ctl connection attempts while the engine starts.",
+        ui: false,
+        reload: Reload::Live,
+    },
     Key {
         path: "app.menubar",
         kind: Kind::Bool,
@@ -268,10 +413,10 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "ics.default_refresh_secs",
-        kind: Kind::Str,
-        default: Def::S("900"),
-        doc: "Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.",
+        path: "ics.default_refresh",
+        kind: Kind::Duration { min_ms: 0, max_ms: 30 * DAY },
+        default: Def::D(15 * MIN),
+        doc: "Time between automatic refreshes of a feed with no refresh_secs of its own; 0s means manual only.",
         ui: true,
         reload: Reload::Live,
     },
@@ -301,16 +446,16 @@ pub const KEYS: &[Key] = &[
     },
     Key {
         path: "ics.max_bytes",
-        kind: Kind::Str,
-        default: Def::S("5242880"),
+        kind: Kind::Int { min: 1, max: 1 << 30 },
+        default: Def::I(5_242_880),
         doc: "Largest feed body accepted, in bytes.",
         ui: false,
         reload: Reload::Live,
     },
     Key {
         path: "ics.max_occurrences",
-        kind: Kind::Str,
-        default: Def::S("500"),
+        kind: Kind::Int { min: 1, max: 65_535 },
+        default: Def::I(500),
         doc: "Most occurrences expanded per recurring event per query.",
         ui: false,
         reload: Reload::Live,
@@ -332,10 +477,10 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "ics.timeout_secs",
-        kind: Kind::Str,
-        default: Def::S("15"),
-        doc: "Whole-request timeout for a feed fetch, in seconds.",
+        path: "ics.timeout",
+        kind: Kind::Duration { min_ms: SEC, max_ms: 10 * MIN },
+        default: Def::D(15 * SEC),
+        doc: "Whole-request timeout for a feed fetch.",
         ui: false,
         reload: Reload::Live,
     },
@@ -357,8 +502,8 @@ pub const KEYS: &[Key] = &[
     },
     Key {
         path: "ics.window_days",
-        kind: Kind::Str,
-        default: Def::S("7"),
+        kind: Kind::Int { min: 1, max: 36_500 },
+        default: Def::I(7),
         doc: "Default length of the ics-events window in days when no end is given.",
         ui: true,
         reload: Reload::Live,
@@ -599,7 +744,23 @@ pub fn choices() -> Vec<(&'static str, Vec<String>)> {
         .filter_map(|k| match k.kind {
             Kind::Bool => Some((k.path, vec!["true".to_string(), "false".to_string()])),
             Kind::Enum(vs) => Some((k.path, vs.iter().map(|v| v.to_string()).collect())),
-            Kind::Str => None,
+            Kind::Str | Kind::Int { .. } | Kind::Duration { .. } => None,
         })
         .collect()
+}
+
+/// A key's default whole number.
+pub fn default_int(path: &str) -> i64 {
+    match find(path).map(|k| k.default) {
+        Some(Def::I(n)) => n,
+        _ => panic!("{path} is not an integer key"),
+    }
+}
+
+/// A key's default duration in milliseconds (for callers with no resolved config, like oats-ctl).
+pub fn default_duration(path: &str) -> std::time::Duration {
+    match find(path).map(|k| k.default) {
+        Some(Def::D(ms)) => std::time::Duration::from_millis(ms),
+        _ => panic!("{path} is not a duration key"),
+    }
 }

@@ -404,6 +404,10 @@ impl Engine {
                 "false" => Value::Bool(false),
                 _ => value.clone(),
             },
+            (Kind::Int { .. }, Value::String(s)) => match s.trim().parse::<i64>() {
+                Ok(n) => Value::from(n),
+                Err(_) => value.clone(),
+            },
             (Kind::Str | Kind::Enum(_), Value::Bool(b)) => Value::String(b.to_string()),
             (Kind::Str | Kind::Enum(_), Value::Number(n)) => Value::String(n.to_string()),
             _ => value.clone(),
