@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
+use crate::config::typed::DeleteMode;
 use crate::config::{ConfigError, Result};
 
 pub const SCHEMA_VERSION: u64 = 1;
@@ -238,11 +239,21 @@ impl Store {
         Ok(summary(&l))
     }
 
-    /// Callers enforce the `--confirm` policy; this removes the session directory.
-    pub fn delete(&self, id: &str) -> Result<Value> {
+    /// Callers enforce the `--confirm` policy. `Trash` moves the session directory to the OS
+    /// trash (recoverable); `Remove` deletes it for good.
+    pub fn delete(&self, id: &str, mode: DeleteMode) -> Result<Value> {
         let l = self.find(id)?;
-        std::fs::remove_dir_all(&l.dir).map_err(|e| io(&l.dir, e))?;
-        Ok(json!({"id": id, "deleted": true}))
+        match mode {
+            DeleteMode::Trash => trash::delete(&l.dir).map_err(|e| {
+                ConfigError::new("trash_failed", format!("{}: {e}", l.dir.display()))
+            })?,
+            DeleteMode::Remove => std::fs::remove_dir_all(&l.dir).map_err(|e| io(&l.dir, e))?,
+        }
+        let mode = match mode {
+            DeleteMode::Trash => "trash",
+            DeleteMode::Remove => "remove",
+        };
+        Ok(json!({"id": id, "deleted": true, "mode": mode}))
     }
 
     /// Import from an OpenOats sessions root, or a single session directory. All-or-nothing:
@@ -405,7 +416,7 @@ mod tests {
         let g = s.get(id).unwrap();
         assert_eq!(g["metadata"]["engine"], "parakeet");
         assert_eq!(g["metadata"]["speakerNames"]["remote_1"], "Dana");
-        assert_eq!(s.delete(id).unwrap()["deleted"], true);
+        assert_eq!(s.delete(id, DeleteMode::Remove).unwrap()["deleted"], true);
         assert_eq!(s.get(id).unwrap_err().code, "not_found");
         assert_eq!(ids(&s.list(None, None).unwrap()), vec![fixture_ids()[1].clone()]);
     }
@@ -426,7 +437,7 @@ mod tests {
         let s = Store::new(d.path());
         for bad in ["../x", "a/b", "", ".hidden", "a\\b", "x y"] {
             assert_eq!(s.get(bad).unwrap_err().code, "invalid_argument", "{bad}");
-            assert_eq!(s.delete(bad).unwrap_err().code, "invalid_argument", "{bad}");
+            assert_eq!(s.delete(bad, DeleteMode::Remove).unwrap_err().code, "invalid_argument", "{bad}");
         }
         assert_eq!(s.get("nope").unwrap_err().code, "not_found");
     }

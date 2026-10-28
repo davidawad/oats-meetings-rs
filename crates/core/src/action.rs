@@ -80,6 +80,7 @@ pub const EVENTS: &[&str] = &[
     "setting-changed",
     "window-changed",
     "config-reloaded",
+    "config-reload-failed",
     "recording-started",
     "segment",
     "session-saved",

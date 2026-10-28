@@ -71,6 +71,8 @@ hide_method = "none"
 [sessions]
 # Require confirm=true to delete a session.
 confirm_delete = true
+# Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.
+delete_mode = "trash"
 # Session store directory (OpenOats layout); empty means the per-user data dir.
 root = ""
 

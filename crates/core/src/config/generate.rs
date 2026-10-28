@@ -88,6 +88,7 @@ pub fn schema_json() -> String {
         leaf.insert("default".into(), k.default.to_json());
         leaf.insert("description".into(), json!(k.doc));
         leaf.insert("x-ui".into(), json!(k.ui));
+        leaf.insert("x-reload".into(), json!(k.reload.as_str()));
         let mut cur = root
             .get_mut("properties")
             .and_then(Value::as_object_mut)

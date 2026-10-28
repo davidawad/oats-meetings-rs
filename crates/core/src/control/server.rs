@@ -2,6 +2,10 @@
 //! stop the server. Every connection runs on its own thread inside `catch_unwind`; bad bytes,
 //! bad JSON, oversize lines and abrupt disconnects get an error line or a close, never a panic
 //! that reaches the accept loop.
+//!
+//! Two config-driven pieces are `Subsystem`s so they take part in whole-config reload:
+//! `control` (re-binds the socket when `control.socket` changes) and `lock` (takes or releases the
+//! single-instance lock when `app.single_instance` changes).
 
 use std::fs::{File, TryLockError};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -12,27 +16,34 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use interprocess::local_socket::{
-    traits::Listener as _,
-    GenericFilePath, ListenerNonblockingMode, ListenerOptions, Stream, ToFsName,
+    traits::{Listener as _, Stream as _},
+    GenericFilePath, Listener, ListenerNonblockingMode, ListenerOptions, Stream, ToFsName,
 };
 use serde_json::{json, Value};
 
 use super::engine::Engine;
 use super::half::Half;
+use super::subsystem::Subsystem;
 use super::{paths, MAX_LINE, PROTOCOL};
 use crate::action::{self, Action, EVENTS};
+use crate::config::typed::Config;
 use crate::config::{ConfigError, Result, SCHEMA_VERSION};
 
 pub struct ServerHandle {
     engine: Arc<Engine>,
     accept: Option<JoinHandle<()>>,
     watcher: Option<JoinHandle<()>>,
-    socket: PathBuf,
+    current: Arc<Mutex<PathBuf>>,
 }
 
 impl ServerHandle {
+    /// Where the socket is bound right now (it moves when `control.socket` is reloaded).
+    pub fn socket_path(&self) -> PathBuf {
+        self.current.lock().expect("socket path").clone()
+    }
+
     pub fn socket_display(&self) -> String {
-        self.socket.display().to_string()
+        self.socket_path().display().to_string()
     }
 
     pub fn engine(&self) -> &Arc<Engine> {
@@ -57,6 +68,9 @@ impl ServerHandle {
         if let Some(h) = self.watcher.take() {
             let _ = h.join();
         }
+        // Release the lock and stop taking part in reloads.
+        self.engine.unregister("lock");
+        self.engine.unregister("control");
     }
 }
 
@@ -71,7 +85,137 @@ fn io_err(what: &str, e: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("io_error", format!("{what}: {e}"))
 }
 
-/// Take the single-instance lock, bind the socket, and start the accept and watcher threads.
+fn acquire_lock(lock_path: &Path) -> Result<File> {
+    let lock = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(lock_path)
+        .map_err(|e| io_err(&lock_path.display().to_string(), e))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(TryLockError::WouldBlock) => Err(ConfigError::new(
+            "already_running",
+            format!("another engine holds {}", lock_path.display()),
+        )),
+        Err(TryLockError::Error(e)) => Err(io_err(&lock_path.display().to_string(), e)),
+    }
+}
+
+/// `app.single_instance`: the lock is held while the key is true.
+struct LockSubsystem {
+    path: PathBuf,
+    held: Mutex<Option<File>>,
+    pending: Mutex<Option<File>>,
+}
+
+impl Subsystem for LockSubsystem {
+    fn name(&self) -> &'static str {
+        "lock"
+    }
+
+    fn validate(&self, new: &Config) -> Result<()> {
+        if new.app.single_instance && self.held.lock().expect("lock").is_none() {
+            *self.pending.lock().expect("lock") = Some(acquire_lock(&self.path)?);
+        }
+        Ok(())
+    }
+
+    fn apply(&self, _old: &Config, new: &Config) {
+        if new.app.single_instance {
+            if let Some(f) = self.pending.lock().expect("lock").take() {
+                *self.held.lock().expect("lock") = Some(f);
+            }
+        } else {
+            *self.held.lock().expect("lock") = None;
+            *self.pending.lock().expect("lock") = None;
+        }
+    }
+
+    fn abort(&self) {
+        *self.pending.lock().expect("lock") = None;
+    }
+}
+
+fn socket_target(cfg: &Config, default: &Path) -> PathBuf {
+    if cfg.control.socket.is_empty() {
+        default.to_path_buf()
+    } else {
+        PathBuf::from(&cfg.control.socket)
+    }
+}
+
+/// A leftover socket file is removed only if nothing answers on it.
+#[cfg(unix)]
+fn clear_stale(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let live = path
+        .to_path_buf()
+        .to_fs_name::<GenericFilePath>()
+        .ok()
+        .and_then(|n| Stream::connect(n).ok())
+        .is_some();
+    if live {
+        return Err(ConfigError::new(
+            "already_running",
+            format!("{} is in use by a running engine", path.display()),
+        ));
+    }
+    std::fs::remove_file(path).map_err(|e| io_err(&path.display().to_string(), e))
+}
+
+#[cfg(not(unix))]
+fn clear_stale(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn bind(path: &Path) -> Result<Listener> {
+    clear_stale(path)?;
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty() && cfg!(unix)) {
+        std::fs::create_dir_all(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
+    }
+    let name = path
+        .to_path_buf()
+        .to_fs_name::<GenericFilePath>()
+        .map_err(|e| io_err("socket name", e))?;
+    ListenerOptions::new()
+        .name(name)
+        .nonblocking(ListenerNonblockingMode::Accept)
+        .create_sync()
+        .map_err(|e| io_err(&path.display().to_string(), e))
+}
+
+/// `control.socket`: the accept loop re-binds when the desired path changes.
+struct ControlSubsystem {
+    default: PathBuf,
+    desired: Arc<Mutex<PathBuf>>,
+}
+
+impl Subsystem for ControlSubsystem {
+    fn name(&self) -> &'static str {
+        "control"
+    }
+
+    fn validate(&self, new: &Config) -> Result<()> {
+        let target = socket_target(new, &self.default);
+        if target != *self.desired.lock().expect("desired") {
+            // Prove the new address can be bound before anything changes.
+            drop(bind(&target)?);
+            #[cfg(unix)]
+            let _ = std::fs::remove_file(&target);
+        }
+        Ok(())
+    }
+
+    fn apply(&self, _old: &Config, new: &Config) {
+        *self.desired.lock().expect("desired") = socket_target(new, &self.default);
+    }
+}
+
+/// Bind the socket, take the single-instance lock (while `app.single_instance`), and start the
+/// accept and watcher threads.
 pub fn serve(engine: Arc<Engine>, runtime_dir: &Path) -> Result<ServerHandle> {
     let poll = std::env::var("OATS_RELOAD_POLL_MS")
         .ok()
@@ -83,44 +227,48 @@ pub fn serve(engine: Arc<Engine>, runtime_dir: &Path) -> Result<ServerHandle> {
 /// `poll` is how often the watcher checks the user config file for hot reload.
 pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) -> Result<ServerHandle> {
     std::fs::create_dir_all(runtime_dir).map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
-    let lock_path = paths::lock_path(runtime_dir);
-    let lock = File::options()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|e| io_err(&lock_path.display().to_string(), e))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(TryLockError::WouldBlock) => {
-            return Err(ConfigError::new(
-                "already_running",
-                format!("another engine holds {}", lock_path.display()),
-            ))
-        }
-        Err(TryLockError::Error(e)) => return Err(io_err(&lock_path.display().to_string(), e)),
-    }
-    let socket = paths::socket_path(runtime_dir);
-    // We hold the lock, so any socket file left behind is stale.
-    #[cfg(unix)]
-    let _ = std::fs::remove_file(&socket);
-    let name = socket
-        .clone()
-        .to_fs_name::<GenericFilePath>()
-        .map_err(|e| io_err("socket name", e))?;
-    let listener = ListenerOptions::new()
-        .name(name)
-        .nonblocking(ListenerNonblockingMode::Accept)
-        .create_sync()
-        .map_err(|e| io_err(&socket.display().to_string(), e))?;
+    let cfg = engine.snapshot();
+    let held = if cfg.config.app.single_instance {
+        Some(acquire_lock(&paths::lock_path(runtime_dir))?)
+    } else {
+        None
+    };
+    let default_socket = paths::socket_path(runtime_dir);
+    let socket = socket_target(&cfg.config, &default_socket);
+    let listener = bind(&socket)?;
+    let current = Arc::new(Mutex::new(socket.clone()));
+    let desired = Arc::new(Mutex::new(socket));
+    engine.register(Arc::new(LockSubsystem {
+        path: paths::lock_path(runtime_dir),
+        held: Mutex::new(held),
+        pending: Mutex::new(None),
+    }));
+    engine.register(Arc::new(ControlSubsystem {
+        default: default_socket,
+        desired: Arc::clone(&desired),
+    }));
 
     let eng = Arc::clone(&engine);
-    let sock_for_cleanup = socket.clone();
+    let cur = Arc::clone(&current);
     let accept = thread::Builder::new()
         .name("oats-accept".into())
         .spawn(move || {
-            let _lock = lock; // held for the life of the accept loop
+            let mut listener = listener;
             while !eng.is_shutdown() {
+                let want = desired.lock().expect("desired").clone();
+                let have = cur.lock().expect("current").clone();
+                if want != have {
+                    match bind(&want) {
+                        Ok(l) => {
+                            listener = l;
+                            #[cfg(unix)]
+                            let _ = std::fs::remove_file(&have);
+                            *cur.lock().expect("current") = want;
+                        }
+                        // Validated before the swap, so this is a late race; stay put.
+                        Err(_) => *desired.lock().expect("desired") = have,
+                    }
+                }
                 match listener.accept() {
                     Ok(stream) => {
                         let e = Arc::clone(&eng);
@@ -137,9 +285,7 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
                 }
             }
             #[cfg(unix)]
-            let _ = std::fs::remove_file(&sock_for_cleanup);
-            #[cfg(not(unix))]
-            let _ = &sock_for_cleanup;
+            let _ = std::fs::remove_file(cur.lock().expect("current").clone());
         })
         .map_err(|e| io_err("spawn accept", e))?;
 
@@ -149,8 +295,9 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
         .spawn(move || {
             while !eng.is_shutdown() {
                 thread::sleep(poll);
-                // config.hot_reload is read live: turning it off stops file-driven reloads.
-                if eng.hot_reload_enabled() && eng.file_changed() {
+                // config.hot_reload is read live: turning it off stops file-driven reloads. A
+                // file that was rejected is not retried until its content changes.
+                if eng.hot_reload_enabled() && eng.file_needs_reload() {
                     let _ = eng.reload("hot-reload");
                 }
             }
@@ -164,7 +311,7 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
         engine,
         accept: Some(accept),
         watcher: Some(watcher),
-        socket,
+        current,
     })
 }
 

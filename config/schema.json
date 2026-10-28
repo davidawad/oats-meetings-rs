@@ -10,12 +10,14 @@
           "default": false,
           "description": "Show a menubar / tray item.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "single_instance": {
           "default": true,
           "description": "Refuse to start a second engine on the same control socket.",
           "type": "boolean",
+          "x-reload": "lock",
           "x-ui": true
         }
       },
@@ -28,6 +30,7 @@
           "default": true,
           "description": "Watch the user config file and reload on change.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -40,6 +43,7 @@
           "default": "",
           "description": "Control socket path; empty means the per-user runtime dir.",
           "type": "string",
+          "x-reload": "rebind",
           "x-ui": false
         }
       },
@@ -174,12 +178,14 @@
           "default": "",
           "description": "Licence holder metadata (placeholder; no licence chosen).",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         },
         "spdx": {
           "default": "LicenseRef-Undecided",
           "description": "SPDX expression for packaging metadata (placeholder).",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         }
       },
@@ -197,6 +203,7 @@
             "openai-compatible"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -209,6 +216,7 @@
           "default": false,
           "description": "Allow outward network calls (cloud STT / LLM). Off means such backends are denied.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -221,6 +229,7 @@
           "default": true,
           "description": "Hide the app window from screen capture.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "hide_method": {
@@ -232,6 +241,7 @@
             "display_affinity"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         }
       },
@@ -244,12 +254,25 @@
           "default": true,
           "description": "Require confirm=true to delete a session.",
           "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "delete_mode": {
+          "default": "trash",
+          "description": "Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.",
+          "enum": [
+            "trash",
+            "remove"
+          ],
+          "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "root": {
           "default": "",
           "description": "Session store directory (OpenOats layout); empty means the per-user data dir.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -266,6 +289,7 @@
             "cloud"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "cloud": {
@@ -279,6 +303,7 @@
                 "openai-compatible"
               ],
               "type": "string",
+              "x-reload": "live",
               "x-ui": true
             }
           },
@@ -291,6 +316,7 @@
               "default": "base.en",
               "description": "Local ASR model name.",
               "type": "string",
+              "x-reload": "live",
               "x-ui": true
             }
           },

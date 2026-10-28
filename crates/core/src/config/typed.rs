@@ -78,10 +78,18 @@ pub struct Privacy {
     pub hide_method: HideMethod,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteMode {
+    Trash,
+    Remove,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sessions {
     pub confirm_delete: bool,
+    pub delete_mode: DeleteMode,
     pub root: String,
 }
 
