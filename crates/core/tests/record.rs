@@ -163,8 +163,9 @@ fn every_audio_choice_value_takes_effect() {
     r.engine.set("audio.mic.device", &json!("fake.mic"), "test").unwrap();
     start(&r, "d");
     stop(&r);
-    r.engine.set("audio.mic.device", &json!("missing"), "test").unwrap();
-    let e = r.engine.dispatch(&Action::RecordStart { session: Some("d2".into()), title: None }).unwrap_err();
+    // An unknown device never gets into the config (the audio subsystem vetoes the reload); the
+    // record-start error for a missing default device is covered live in tests/audio_live.rs.
+    let e = r.engine.set("audio.mic.device", &json!("missing"), "test").unwrap_err();
     assert_eq!(e.code, "device_not_found");
 }
 
