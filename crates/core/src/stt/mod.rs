@@ -20,6 +20,8 @@ pub mod capture;
 pub mod cloud;
 #[cfg(feature = "whisper")]
 pub mod local;
+#[cfg(feature = "parakeet")]
+pub mod parakeet;
 pub mod wav;
 pub mod wer;
 
@@ -30,7 +32,7 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Config, Stt, SttAdapter, SttBackend};
+use crate::config::typed::{Config, Stt, SttAdapter, SttBackend, SttEngine};
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
 use crate::control::engine::Engine;
@@ -74,6 +76,7 @@ pub struct Settings {
     pub live_enabled: bool,
     pub chunk_secs: f64,
     pub final_enabled: bool,
+    pub engine: SttEngine,
     pub model: String,
     pub model_file: PathBuf,
     pub threads: u32,
@@ -123,7 +126,10 @@ impl Settings {
             PathBuf::from(c.local.models_dir.trim())
         };
         let model_file = if c.local.model_path.trim().is_empty() {
-            models_dir.join(format!("ggml-{model}.bin"))
+            match c.local.engine {
+                SttEngine::Whisper => models_dir.join(format!("ggml-{model}.bin")),
+                SttEngine::Parakeet => models_dir.join(PARAKEET_DIR),
+            }
         } else {
             PathBuf::from(c.local.model_path.trim())
         };
@@ -136,6 +142,7 @@ impl Settings {
             live_enabled: c.live.enabled,
             chunk_secs: chunk as f64,
             final_enabled: c.final_.enabled,
+            engine: c.local.engine,
             model: model.to_string(),
             model_file,
             threads: threads as u32,
@@ -167,7 +174,10 @@ impl Settings {
     /// Engine label for `session.json`.
     pub fn engine_label(&self) -> String {
         match self.backend {
-            SttBackend::Local => format!("whisper.cpp:{}", self.model),
+            SttBackend::Local => match self.engine {
+                SttEngine::Whisper => format!("whisper.cpp:{}", self.model),
+                SttEngine::Parakeet => format!("parakeet:{PARAKEET_DIR}"),
+            },
             SttBackend::Cloud => format!("{}:{}", "openai-compatible", self.cloud_model),
         }
     }
@@ -198,8 +208,37 @@ pub fn make_asr(s: &Settings, network_allow: bool, secrets: &dyn crate::secrets:
     }
 }
 
-#[cfg(feature = "whisper")]
+/// Directory (under `stt.local.models_dir`) holding the Parakeet files; ci/fetch-models.sh unpacks it.
+pub const PARAKEET_DIR: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
+
 fn local_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
+    match s.engine {
+        SttEngine::Whisper => whisper_asr(s),
+        SttEngine::Parakeet => parakeet_asr(s),
+    }
+}
+
+#[cfg(feature = "parakeet")]
+fn parakeet_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
+    if !s.model_file.is_dir() {
+        return Err(ConfigError::new(
+            "model_not_found",
+            format!("{} not found; fetch it with ci/fetch-models.sh or set stt.local.model_path", s.model_file.display()),
+        ));
+    }
+    Ok(Arc::new(parakeet::ParakeetAsr::load(&s.model_file, s.threads)?))
+}
+
+#[cfg(not(feature = "parakeet"))]
+fn parakeet_asr(_s: &Settings) -> Result<Arc<dyn Asr>> {
+    Err(ConfigError::new(
+        "backend_unavailable",
+        "this build has no Parakeet engine; rebuild with --features oats-core/parakeet",
+    ))
+}
+
+#[cfg(feature = "whisper")]
+fn whisper_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     if !s.model_file.is_file() {
         return Err(ConfigError::new(
             "model_not_found",
@@ -210,7 +249,7 @@ fn local_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
 }
 
 #[cfg(not(feature = "whisper"))]
-fn local_asr(_s: &Settings) -> Result<Arc<dyn Asr>> {
+fn whisper_asr(_s: &Settings) -> Result<Arc<dyn Asr>> {
     Err(ConfigError::new(
         "backend_unavailable",
         "this build has no local ASR; rebuild with --features oats-core/whisper",
