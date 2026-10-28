@@ -60,18 +60,21 @@
             "exclude"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "allow_file": {
           "default": true,
           "description": "Allow file:// feeds (local, not gated by network.allow).",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "cache_dir": {
           "default": "",
           "description": "Directory for cached feeds; empty means ics/ beside the sessions dir.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         },
         "cancelled": {
@@ -82,42 +85,49 @@
             "show"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "default_refresh_secs": {
           "default": "900",
           "description": "Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "default_tz": {
           "default": "UTC",
           "description": "IANA zone for floating times and for the midnight bounds of all-day events.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "enabled": {
           "default": true,
           "description": "Master switch for refreshing feeds (manual and scheduled). Cached events stay readable.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "feeds": {
           "default": "[]",
           "description": "JSON array of feeds: {name, url, enabled, refresh_secs, header}. Edit with ics-add / ics-remove.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "max_bytes": {
           "default": "5242880",
           "description": "Largest feed body accepted, in bytes.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         },
         "max_occurrences": {
           "default": "500",
           "description": "Most occurrences expanded per recurring event per query.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         },
         "on_bad_event": {
@@ -128,18 +138,21 @@
             "skip"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "stale_on_error": {
           "default": true,
           "description": "When a refresh fails, keep serving the last good cached copy.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "timeout_secs": {
           "default": "15",
           "description": "Whole-request timeout for a feed fetch, in seconds.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         },
         "unknown_tz": {
@@ -150,6 +163,7 @@
             "default_tz"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "webcal_scheme": {
@@ -160,12 +174,14 @@
             "http"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "window_days": {
           "default": "7",
           "description": "Default length of the ics-events window in days when no end is given.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         }
       },
