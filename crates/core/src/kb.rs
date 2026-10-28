@@ -315,9 +315,11 @@ mod tests {
     fn chunk_limits_are_honoured() {
         let para = "x".repeat(50);
         let text = format!("{para}\n\n{para}\n\n{para}");
-        // Everything fits one chunk at max 200, each paragraph alone at max 100.
-        assert_eq!(chunk(&text, 200, 1).len(), 1);
-        assert_eq!(chunk(&text, 100, 1).len(), 2);
+        // Three 50-char paragraphs joined by blank lines are 154 characters.
+        assert_eq!(chunk(&text, 154, 1).len(), 1);
+        assert_eq!(chunk(&text, 153, 1).len(), 2);
+        assert_eq!(chunk(&text, 102, 1).len(), 2);
+        assert_eq!(chunk(&text, 101, 1).len(), 3);
         assert_eq!(chunk(&text, 50, 1).len(), 3);
         // A cut piece shorter than min is dropped; exactly min is kept.
         let one = "y".repeat(120);
