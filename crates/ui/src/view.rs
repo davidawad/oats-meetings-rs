@@ -3,12 +3,14 @@
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, rgb, Context, IntoElement, Render, SharedString, Window};
+use gpui::{div, prelude::*, px, rgb, Context, FocusHandle, IntoElement, Render, SharedString, Window};
 use oats_core::control::engine::Engine;
 use serde_json::json;
 
 use crate::settings::{next_value, Row, Widget};
-use crate::state::{Line, State, Tab};
+use crate::state::{EditKey, Line, State, Tab};
+
+const ERR: u32 = 0xf38ba8;
 
 const BG: u32 = 0x1e1e2e;
 const PANEL: u32 = 0x313244;
@@ -19,13 +21,15 @@ const ACCENT: u32 = 0x89b4fa;
 pub struct MainWindow {
     engine: Arc<Engine>,
     pub state: State,
+    /// Keyboard focus for the settings text editor; created on first render.
+    focus: Option<FocusHandle>,
 }
 
 impl MainWindow {
     pub fn new(engine: Arc<Engine>) -> Self {
         let mut state = State::default();
         state.refresh(&engine);
-        Self { engine, state }
+        Self { engine, state, focus: None }
     }
 
     /// Apply a pending event line from the engine bus and re-render.
@@ -53,6 +57,7 @@ impl MainWindow {
                 .child(t.label())
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.state.tab = t;
+                    this.state.cancel_edit();
                     cx.notify();
                 }))
         }))
@@ -111,39 +116,112 @@ impl MainWindow {
 
     fn setting_row(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
         let (path, next) = (row.path, next_value(row));
-        let value = match &row.widget {
-            Widget::Toggle(b) => (if *b { "on" } else { "off" }).to_string(),
-            Widget::Choice { current, .. } => current.clone(),
-            Widget::Text(t) if t.is_empty() => "(default)".to_string(),
-            Widget::Text(t) => t.clone(),
-            Widget::Number { value, .. } => value.to_string(),
-            Widget::Duration { text, .. } => text.clone(),
+        let text_seed = match &row.widget {
+            Widget::Text(t) => Some(t.clone()),
+            Widget::Number { value, .. } => Some(value.to_string()),
+            Widget::Duration { text, .. } => Some(text.clone()),
+            _ => None,
+        };
+        let editing = self.state.edit.as_ref().filter(|e| e.path == path);
+        let value = match (&row.widget, editing) {
+            (_, Some(e)) => format!("{}|", e.buf),
+            (Widget::Toggle(b), _) => (if *b { "on" } else { "off" }).to_string(),
+            (Widget::Choice { current, .. }, _) => current.clone(),
+            (Widget::Text(t), _) if t.is_empty() => "(default)".to_string(),
+            (Widget::Text(t), _) => t.clone(),
+            (Widget::Number { value, .. }, _) => value.to_string(),
+            (Widget::Duration { text, .. }, _) => text.clone(),
         };
         let mut ctl = div()
             .id(SharedString::from(format!("set-{path}")))
             .px_2()
             .rounded_md()
+            .min_w(px(160.))
             .bg(rgb(PANEL))
+            .border_1()
+            .border_color(rgb(if editing.is_some() { ACCENT } else { PANEL }))
             .child(value);
         if let Some(v) = next {
             ctl = ctl.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
                 this.state.act(&this.engine, "config-set", json!({"key": path, "value": v}));
                 cx.notify();
             }));
+        } else if let Some(seed) = text_seed {
+            ctl = ctl.cursor_text().on_click(cx.listener(move |this, _, window, cx| {
+                this.state.begin_edit(path, &seed);
+                if let Some(f) = &this.focus {
+                    f.focus(window, cx);
+                }
+                cx.notify();
+            }));
         }
+        let mut top = div().flex().gap_3().items_center().child(div().w(px(260.)).flex_none().child(path)).child(ctl);
+        if let Some(e) = editing {
+            top = top
+                .child(self.chip("save", cx, move |this, _, cx| {
+                    this.state.commit_edit(&this.engine);
+                    cx.notify();
+                }))
+                .child(self.chip("cancel", cx, move |this, _, cx| {
+                    this.state.cancel_edit();
+                    cx.notify();
+                }));
+            let _ = e;
+        }
+        let mut out = div().flex().flex_col().flex_none().gap_1().w_full().child(top);
+        if let Some(err) = editing.and_then(|e| e.error.as_ref()) {
+            out = out.child(div().text_sm().text_color(rgb(ERR)).child(err.clone()));
+        }
+        if editing.is_some() && path.ends_with(".device") {
+            out = out.child(self.device_picker(path, cx));
+        }
+        out.child(div().w_full().text_color(rgb(DIM)).text_sm().child(row.doc))
+    }
+
+    fn chip(
+        &self,
+        label: &str,
+        cx: &mut Context<Self>,
+        f: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl IntoElement {
         div()
-            .flex()
-            .gap_3()
-            .items_center()
-            .child(div().w(px(260.)).child(path))
-            .child(ctl)
-            .child(div().text_color(rgb(DIM)).text_sm().child(row.doc))
+            .id(SharedString::from(format!("chip-{label}")))
+            .px_2()
+            .rounded_md()
+            .cursor_pointer()
+            .bg(rgb(PANEL))
+            .text_sm()
+            .child(label.to_string())
+            .on_click(cx.listener(move |this, _, window, cx| f(this, window, cx)))
+    }
+
+    /// Devices from `devices-list`, one click to fill the input; the empty id is the default device.
+    fn device_picker(&self, path: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
+        let opts = std::iter::once(("".to_string(), "(default)".to_string()))
+            .chain(self.state.device_opts.iter().map(|d| (d.id.clone(), format!("{} [{}]", d.name, d.kind))));
+        div().flex().flex_wrap().gap_1().children(opts.map(|(id, label)| {
+            div()
+                .id(SharedString::from(format!("dev-{path}-{id}")))
+                .px_2()
+                .rounded_md()
+                .cursor_pointer()
+                .bg(rgb(PANEL))
+                .text_sm()
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(e) = this.state.edit.as_mut() {
+                        e.buf = id.clone();
+                        e.error = None;
+                    }
+                    cx.notify();
+                }))
+        }))
     }
 
     fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut col = div().id("settings").flex().flex_col().gap_3().size_full().overflow_y_scroll();
         for g in &self.state.settings {
-            col = col.child(div().text_color(rgb(ACCENT)).child(g.name.clone()));
+            col = col.child(div().flex_none().text_color(rgb(ACCENT)).child(g.name.clone()));
             for r in &g.rows {
                 col = col.child(self.setting_row(r, cx));
             }
@@ -155,6 +233,7 @@ impl MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Oats");
+        let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let body = match self.state.tab {
             Tab::Live => self.live().into_any_element(),
             Tab::Sessions => self.sessions(cx).into_any_element(),
@@ -168,8 +247,21 @@ impl Render for MainWindow {
             .size_full()
             .bg(rgb(BG))
             .text_color(rgb(FG))
+            .track_focus(&focus)
+            .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                let k = &ev.keystroke;
+                let command = k.modifiers.control || k.modifiers.alt || k.modifiers.platform;
+                match this.state.edit_key(&k.key, k.key_char.as_deref(), command) {
+                    EditKey::Commit => this.state.commit_edit(&this.engine),
+                    EditKey::Cancel => this.state.cancel_edit(),
+                    EditKey::Handled => {}
+                    EditKey::Ignored => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .child(self.tab_bar(cx))
-            .child(div().flex_1().child(body))
+            .child(div().flex_1().min_h_0().child(body))
             .child(div().text_sm().text_color(rgb(DIM)).child(self.state.status.clone()))
     }
 }

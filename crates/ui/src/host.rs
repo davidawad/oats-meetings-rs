@@ -25,6 +25,11 @@ use crate::model::{self, BINDINGS, MENUS};
 use crate::tray::{self, TrayBackend, TrayState};
 use crate::view::MainWindow;
 
+/// Window class on Linux (Wayland app_id, X11 WM_CLASS). Must equal `StartupWMClass` in
+/// `packaging/linux/oats-meetings-rs.desktop`; the macOS bundle id is
+/// `com.davidawad.oats-meetings-rs` (packaging/macos/Info.plist.in).
+pub const APP_ID: &str = "oats-meetings-rs";
+
 /// One gpui action carries every UI dispatch: the id is an `oats_core::action` wire name.
 #[derive(Clone, PartialEq, Debug, gpui::Action)]
 #[action(namespace = oats, no_json)]
@@ -91,7 +96,12 @@ fn open_window(host: &mut Host, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
     let engine = Arc::clone(&host.engine);
     match cx.open_window(
-        WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            // Wayland app_id / X11 WM_CLASS; matches packaging/linux/*.desktop StartupWMClass.
+            app_id: Some(APP_ID.to_string()),
+            ..Default::default()
+        },
         move |_, cx| cx.new(|_| MainWindow::new(engine)),
     ) {
         Ok(h) => {
@@ -234,5 +244,15 @@ pub fn run_env() -> i32 {
             eprintln!("oats-meetings-rs: cannot start the engine");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn app_id_matches_the_desktop_file() {
+        let desktop = include_str!("../../../packaging/linux/oats-meetings-rs.desktop");
+        assert!(desktop.lines().any(|l| l == format!("StartupWMClass={}", super::APP_ID)));
+        assert!(desktop.lines().any(|l| l == format!("Icon={}", super::APP_ID)));
     }
 }

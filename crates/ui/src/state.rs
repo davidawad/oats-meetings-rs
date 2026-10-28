@@ -42,8 +42,35 @@ pub struct Line {
     pub text: String,
 }
 
+/// A capture device offered by the picker under `audio.*.device` rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceOpt {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+}
+
+/// An in-progress text edit of one settings row. `error` is the last `config-set` rejection,
+/// shown inline beside the input; the edit stays open until it is accepted or cancelled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Edit {
+    pub path: &'static str,
+    pub buf: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditKey {
+    Handled,
+    Commit,
+    Cancel,
+    Ignored,
+}
+
 #[derive(Debug, Default)]
 pub struct State {
+    pub edit: Option<Edit>,
+    pub device_opts: Vec<DeviceOpt>,
     pub tab: Tab,
     pub sessions: Vec<SessionRow>,
     pub selected: Option<String>,
@@ -88,10 +115,14 @@ impl State {
             }
             Err(e) => self.status = e.to_string(),
         }
-        self.devices = model::dispatch(engine, "devices-list", json!({}))
-            .ok()
-            .and_then(|v| v["devices"].as_array().map(Vec::len))
-            .unwrap_or(0);
+        let devs = model::dispatch(engine, "devices-list", json!({})).ok();
+        let arr = devs.as_ref().and_then(|v| v["devices"].as_array());
+        self.devices = arr.map_or(0, Vec::len);
+        self.device_opts = arr
+            .into_iter()
+            .flatten()
+            .map(|d| DeviceOpt { id: s(d, "id"), name: s(d, "name"), kind: s(d, "kind") })
+            .collect();
         self.settings = settings::build(&engine.resolved().flat);
         if let Some(id) = self.selected.clone() {
             self.select(engine, &id);
@@ -113,6 +144,52 @@ impl State {
         let Ok(v) = serde_json::from_str::<Value>(line) else { return };
         if v["event"] == "segment" {
             self.live.push(line_of(&v["data"]));
+        }
+    }
+
+    /// Open the text editor on a row, seeded with its current value.
+    pub fn begin_edit(&mut self, path: &'static str, initial: &str) {
+        self.edit = Some(Edit { path, buf: initial.to_string(), error: None });
+    }
+
+    pub fn cancel_edit(&mut self) {
+        self.edit = None;
+    }
+
+    /// Feed one key press to the open editor. `key` is the gpui key name, `key_char` the text it
+    /// would type; `command` is true when ctrl/alt/cmd is held (never typed).
+    pub fn edit_key(&mut self, key: &str, key_char: Option<&str>, command: bool) -> EditKey {
+        let Some(e) = self.edit.as_mut() else { return EditKey::Ignored };
+        match key {
+            "enter" => EditKey::Commit,
+            "escape" => EditKey::Cancel,
+            "backspace" => {
+                e.buf.pop();
+                e.error = None;
+                EditKey::Handled
+            }
+            _ => match key_char {
+                Some(c) if !command && !c.is_empty() && !c.chars().any(char::is_control) => {
+                    e.buf.push_str(c);
+                    e.error = None;
+                    EditKey::Handled
+                }
+                _ => EditKey::Ignored,
+            },
+        }
+    }
+
+    /// Write the buffer through `config-set` (the path `ctl config-set` uses). On rejection the
+    /// editor stays open with the server's message; on success it closes and the rows reload.
+    pub fn commit_edit(&mut self, engine: &Engine) {
+        let Some(e) = self.edit.clone() else { return };
+        match model::dispatch(engine, "config-set", json!({"key": e.path, "value": e.buf.trim()})) {
+            Ok(_) => {
+                self.edit = None;
+                self.status = String::new();
+                self.refresh(engine);
+            }
+            Err(err) => self.edit = Some(Edit { error: Some(err.to_string()), ..e }),
         }
     }
 
@@ -172,6 +249,56 @@ mod tests {
         let mut st = State::default();
         st.act(&engine, "session-delete", json!({"session": "nope"}));
         assert!(!st.status.is_empty());
+    }
+
+    #[test]
+    fn text_edit_types_validates_inline_and_persists_through_config_set() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut st = State::default();
+        st.refresh(&engine);
+        st.begin_edit("stt.local.model", "");
+        for c in ["b", "o", "g", "u", "s"] {
+            assert_eq!(st.edit_key(c, Some(c), false), EditKey::Handled);
+        }
+        assert_eq!(st.edit_key("a", Some("a"), true), EditKey::Ignored);
+        assert_eq!(st.edit_key("enter", None, false), EditKey::Commit);
+        st.commit_edit(&engine);
+        let e = st.edit.clone().expect("rejected edit stays open");
+        assert!(e.error.is_some(), "bogus model is rejected inline");
+        // Fix it and commit again.
+        for _ in 0..5 {
+            st.edit_key("backspace", None, false);
+        }
+        assert!(st.edit.as_ref().unwrap().error.is_none());
+        st.edit.as_mut().unwrap().buf = "base.en".into();
+        st.commit_edit(&engine);
+        assert!(st.edit.is_none(), "{:?}", st.edit);
+        let v = model::dispatch(&engine, "config-get", json!({"key": "stt.local.model"})).unwrap();
+        assert_eq!(v.to_string().contains("base.en"), true, "{v}");
+    }
+
+    #[test]
+    fn int_and_duration_edit_validate_and_persist() {
+        use oats_core::config::keys::{Kind, KEYS};
+        let (engine, _d) = testutil::engine(&[]);
+        let mut st = State::default();
+        let int = KEYS.iter().find(|k| k.ui && matches!(k.kind, Kind::Int { .. })).unwrap();
+        let Kind::Int { min, max } = int.kind else { unreachable!() };
+        st.begin_edit(int.path, "");
+        st.edit.as_mut().unwrap().buf = "not a number".into();
+        st.commit_edit(&engine);
+        assert!(st.edit.as_ref().unwrap().error.is_some());
+        st.edit.as_mut().unwrap().buf = (max + 1).to_string();
+        st.commit_edit(&engine);
+        assert!(st.edit.as_ref().unwrap().error.is_some(), "out of range rejected");
+        st.edit.as_mut().unwrap().buf = min.to_string();
+        st.commit_edit(&engine);
+        assert!(st.edit.is_none(), "{:?}", st.edit);
+        let dur = KEYS.iter().find(|k| k.ui && matches!(k.kind, Kind::Duration { .. })).unwrap();
+        st.begin_edit(dur.path, "");
+        st.edit.as_mut().unwrap().buf = "soon".into();
+        st.commit_edit(&engine);
+        assert!(st.edit.as_ref().unwrap().error.is_some());
     }
 
     #[test]
