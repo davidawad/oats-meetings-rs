@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::error::{AudioError, Result};
 
-pub const BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal"];
+pub const BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];
 pub const LAYOUTS: &[&str] = &["split", "mix"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum BackendChoice {
     Pulse,
     Pipewire,
     Cpal,
+    ScreenCaptureKit,
 }
 
 impl BackendChoice {
@@ -23,6 +24,7 @@ impl BackendChoice {
             "pulse" => Self::Pulse,
             "pipewire" => Self::Pipewire,
             "cpal" => Self::Cpal,
+            "screencapturekit" => Self::ScreenCaptureKit,
             other => {
                 return Err(AudioError::new(
                     "invalid_value",

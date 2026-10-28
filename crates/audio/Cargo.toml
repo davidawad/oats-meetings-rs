@@ -17,6 +17,8 @@ cpal = "0.15"
 # ScreenCaptureKit (macOS 13+) is the macOS system-audio source; the mic is cpal/CoreAudio.
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = "11.1.1"
+objc2 = "0.6"
+objc2-foundation = "0.3"
 
 [dev-dependencies]
 tempfile.workspace = true

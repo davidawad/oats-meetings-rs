@@ -2,13 +2,15 @@
 //! `Recorder` that mixes a system-loopback channel and a mic channel into one WAV.
 //!
 //! Backends: `pulse` (Pulse or PipeWire's pulse server: `pactl` + `parec`), `pipewire` (`pw-dump` +
-//! `pw-record`), `cpal` (WASAPI loopback + mic, Windows only). macOS is dot-4uzgol.6.
+//! `pw-record`), `cpal` (WASAPI loopback + mic, Windows only). `screencapturekit`
+//! (macOS: ScreenCaptureKit system audio + cpal mic, TCC denial is `permission_denied`).
 //! All backends deliver mono f32 at the recorder's sample rate through a callback.
 
 pub mod backend;
 pub mod cpal_backend;
 pub mod error;
 pub mod fake;
+pub mod macos;
 pub mod pipewire;
 pub mod proc;
 pub mod pulse;

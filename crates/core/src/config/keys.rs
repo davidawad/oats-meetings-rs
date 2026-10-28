@@ -114,7 +114,7 @@ pub const STT_ENGINES: &[&str] = &["whisper", "parakeet"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
-pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal"];
+pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];
 pub const AUDIO_LAYOUTS: &[&str] = &["split", "mix"];
 pub const AUDIO_TRANSCRIBE: &[&str] = &["auto", "on", "off"];
 pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
@@ -357,7 +357,7 @@ pub const KEYS: &[Key] = &[
         path: "audio.backend",
         kind: Kind::Enum(AUDIO_BACKENDS),
         default: Def::S("auto"),
-        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).",
+        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).",
         ui: true,
         reload: Reload::Live,
     },

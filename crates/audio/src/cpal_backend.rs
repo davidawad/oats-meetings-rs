@@ -5,7 +5,7 @@
 //!
 //! The cpal stream is not `Send`, so it lives on its own thread until stopped.
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod imp {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
@@ -210,5 +210,5 @@ mod imp {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub use imp::CpalBackend;

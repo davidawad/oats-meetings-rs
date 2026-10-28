@@ -196,7 +196,7 @@ fn every_backend_value_resolves_or_fails_with_a_structured_error() {
     })
     .unwrap();
     let (_, values) = keys::choices().into_iter().find(|(p, _)| *p == "audio.backend").unwrap();
-    assert_eq!(values, ["auto", "pulse", "pipewire", "cpal"]);
+    assert_eq!(values, ["auto", "pulse", "pipewire", "cpal", "screencapturekit"]);
     for v in values {
         engine.set("audio.backend", &json!(v), "test").unwrap();
         match engine.dispatch(&Action::DevicesList {}) {
