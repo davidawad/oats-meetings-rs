@@ -229,6 +229,13 @@ pub enum SttBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum SttEngine {
+    Whisper,
+    Parakeet,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SttAdapter {
     None,
     OpenaiCompatible,
@@ -247,6 +254,7 @@ pub struct SttCloud {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttLocal {
+    pub engine: SttEngine,
     pub model: String,
     pub model_path: String,
     pub models_dir: String,

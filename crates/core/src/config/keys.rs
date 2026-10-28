@@ -107,6 +107,10 @@ pub struct Key {
     pub reload: Reload,
 }
 
+/// Whisper model names `stt.local.model` accepts; ci/fetch-models.sh pins and fetches each one.
+pub const STT_LOCAL_MODELS: &[&str] = &["tiny.en", "tiny", "base.en", "base", "small.en", "small"];
+/// Local recognisers behind the `Asr` trait: whisper.cpp, or NVIDIA Parakeet TDT through sherpa-onnx.
+pub const STT_ENGINES: &[&str] = &["whisper", "parakeet"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
@@ -702,10 +706,18 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "stt.local.engine",
+        kind: Kind::Enum(STT_ENGINES),
+        default: Def::S("whisper"),
+        doc: "Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "stt.local.model_path",
         kind: Kind::Str,
         default: Def::S(""),
-        doc: "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin.",
+        doc: "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin (whisper) or <models_dir>/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 (parakeet, a directory).",
         ui: false,
         reload: Reload::Live,
     },
@@ -743,7 +755,7 @@ pub const KEYS: &[Key] = &[
     },
     Key {
         path: "stt.local.model",
-        kind: Kind::Str,
+        kind: Kind::Enum(STT_LOCAL_MODELS),
         default: Def::S("base.en"),
         doc: "Local ASR model name.",
         ui: true,

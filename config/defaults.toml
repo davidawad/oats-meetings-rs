@@ -183,9 +183,11 @@ chunk = "4s"
 enabled = true
 
 [stt.local]
+# Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).
+engine = "whisper"
 # Local ASR model name.
 model = "base.en"
-# Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin.
+# Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin (whisper) or <models_dir>/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 (parakeet, a directory).
 model_path = ""
 # Directory holding local model files; empty means models/ beside the sessions dir.
 models_dir = ""

@@ -779,16 +779,35 @@
         "local": {
           "additionalProperties": false,
           "properties": {
+            "engine": {
+              "default": "whisper",
+              "description": "Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).",
+              "enum": [
+                "whisper",
+                "parakeet"
+              ],
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
             "model": {
               "default": "base.en",
               "description": "Local ASR model name.",
+              "enum": [
+                "tiny.en",
+                "tiny",
+                "base.en",
+                "base",
+                "small.en",
+                "small"
+              ],
               "type": "string",
               "x-reload": "live",
               "x-ui": true
             },
             "model_path": {
               "default": "",
-              "description": "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin.",
+              "description": "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin (whisper) or <models_dir>/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 (parakeet, a directory).",
               "type": "string",
               "x-reload": "live",
               "x-ui": false

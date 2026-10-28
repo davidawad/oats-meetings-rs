@@ -20,10 +20,13 @@ rrule.workspace = true
 chrono-tz.workspace = true
 hound.workspace = true
 whisper-rs = { workspace = true, optional = true }
+sherpa-onnx = { workspace = true, optional = true }
 
 [features]
 # Local ASR (whisper.cpp). Off by default: it needs cmake, a C++ compiler and libclang to build.
 whisper = ["dep:whisper-rs"]
+# Local ASR (NVIDIA Parakeet TDT through sherpa-onnx). Off by default: the build fetches a prebuilt onnxruntime library.
+parakeet = ["dep:sherpa-onnx"]
 
 [dev-dependencies]
 tempfile.workspace = true
