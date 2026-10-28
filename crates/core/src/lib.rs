@@ -6,6 +6,7 @@ pub mod control;
 pub mod ics;
 pub mod secrets;
 pub mod sessions;
+pub mod stt;
 
 pub const APP_NAME: &str = "oats-meetings-rs";
 
@@ -20,6 +21,3 @@ mod tests {
         assert!(super::version_line().starts_with("oats-meetings-rs "));
     }
 }
-
-#[cfg(feature = "whisper")]
-use whisper_rs as _;

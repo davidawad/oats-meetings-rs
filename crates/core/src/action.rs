@@ -63,6 +63,8 @@ actions! {
     SecretSet, "secret-set", "Store a secret under key 'namespace/name' in the writable secrets backend (OS keychain). The value is never shown again.", "implemented", "write", { key: String, value: String };
     SecretDelete, "secret-delete", "Delete a stored secret.", "implemented", "write", { key: String };
     SecretHas, "secret-has", "Whether a secret resolves in the configured backend (never returns the value).", "implemented", "read", { key: String };
+    SttTranscribe, "stt-transcribe", "Transcribe a WAV file into a new session using the stt.* keys: stereo is you (left) / them (right), mono is one speaker (speaker=you|them).", "implemented", "write", { path: String, session: Option<String>, speaker: Option<String> };
+    SttStatus, "stt-status", "Which STT backend is selected and whether it can run (model present, network, key); never shows the key.", "implemented", "read", {};
     RecordStart, "record-start", "Start recording a session.", "planned", "control", {};
     RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
     RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};

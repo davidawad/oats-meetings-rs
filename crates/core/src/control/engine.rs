@@ -143,7 +143,7 @@ fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Res
 }
 
 impl Engine {
-    fn store(&self) -> Store {
+    pub(crate) fn store(&self) -> Store {
         let snap = self.snapshot();
         let root = if snap.config.sessions.root.is_empty() {
             self.opts.sessions_dir.clone()
@@ -183,6 +183,7 @@ impl Engine {
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(&engine))));
+        engine.register(Arc::new(crate::stt::SttSubsystem::new(Arc::downgrade(&engine))));
         Ok(engine)
     }
 
@@ -481,6 +482,7 @@ impl Engine {
                 }
                 Ok(v)
             }
+            Action::SttTranscribe { .. } | Action::SttStatus {} => crate::stt::dispatch(self, a),
             Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
                 crate::secrets::dispatch(self, a)
             }
