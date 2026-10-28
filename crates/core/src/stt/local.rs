@@ -27,7 +27,7 @@ impl WhisperAsr {
             Some((p, c)) if p == path => Arc::clone(c),
             _ => {
                 let c = Arc::new(
-                    WhisperContext::new_with_params(&path.to_string_lossy(), WhisperContextParameters::default())
+                    WhisperContext::new_with_params(path, WhisperContextParameters::default())
                         .map_err(|e| ConfigError::new("model_load_failed", format!("{}: {e}", path.display())))?,
                 );
                 *cache = Some((path.to_path_buf(), Arc::clone(&c)));

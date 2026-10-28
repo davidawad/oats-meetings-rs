@@ -274,6 +274,36 @@
       "status": "implemented"
     },
     {
+      "doc": "Transcribe a WAV file into a new session using the stt.* keys: stereo is you (left) / them (right), mono is one speaker (speaker=you|them).",
+      "effect": "write",
+      "name": "stt-transcribe",
+      "params": [
+        {
+          "name": "path",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "speaker",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Which STT backend is selected and whether it can run (model present, network, key); never shows the key.",
+      "effect": "read",
+      "name": "stt-status",
+      "params": [],
+      "status": "implemented"
+    },
+    {
       "doc": "Start recording a session.",
       "effect": "control",
       "name": "record-start",
