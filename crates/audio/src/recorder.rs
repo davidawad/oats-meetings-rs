@@ -30,6 +30,9 @@ struct Shared {
     frames: AtomicU64,
     system_in: AtomicU64,
     mic_in: AtomicU64,
+    /// False until every capture is open: sources connect at different speeds (a cold `parec` takes
+    /// ~2 s), and audio delivered before the last one is up would put the channels out of step.
+    live: AtomicBool,
     paused: AtomicBool,
     stop: AtomicBool,
 }
@@ -103,6 +106,7 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
         frames: AtomicU64::new(0),
         system_in: AtomicU64::new(0),
         mic_in: AtomicU64::new(0),
+        live: AtomicBool::new(false),
         paused: AtomicBool::new(false),
         stop: AtomicBool::new(false),
     });
@@ -112,7 +116,7 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
             kind,
             device,
             Box::new(move |samples: &[f32]| {
-                if sh.paused.load(Ordering::SeqCst) {
+                if sh.paused.load(Ordering::SeqCst) || !sh.live.load(Ordering::SeqCst) {
                     return;
                 }
                 let mut q = sh.q.lock().expect("queues");
@@ -140,6 +144,7 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
                 .map_err(|e| AudioError::new(e.code, format!("microphone: {}", e.message)))?,
         );
     }
+    shared.live.store(true, Ordering::SeqCst);
     let mut w = WavWriter::create(path, layout.channels(), SAMPLE_RATE)?;
     let sh = Arc::clone(&shared);
     let (out_path, channels) = (path.to_path_buf(), layout.channels());
