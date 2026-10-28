@@ -197,6 +197,13 @@ impl Recorder {
         self.active.lock().expect("active").as_ref().map(|a| a.id.clone())
     }
 
+    /// The recording in progress as `(session, paused, audio duration ms)`; the outer None means a
+    /// start or stop holds the recorder right now (a GUI thread must not wait for it).
+    pub fn active_state(&self) -> Option<Option<(String, bool, u64)>> {
+        let g = self.active.try_lock().ok()?;
+        Some(g.as_ref().map(|a| (a.id.clone(), a.rec.paused(), a.rec.duration_ms())))
+    }
+
     pub fn start(
         &self,
         st: &AudioSettings,

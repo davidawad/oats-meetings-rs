@@ -1002,6 +1002,45 @@
     "ui": {
       "additionalProperties": false,
       "properties": {
+        "live_follow": {
+          "default": true,
+          "description": "The Live view scrolls to the newest line while a recording adds lines.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "live_max_lines": {
+          "default": 2000,
+          "description": "Most lines the Live view keeps for one recording; older lines drop first.",
+          "maximum": 100000,
+          "minimum": 50,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "record_controls": {
+          "default": true,
+          "description": "Show the Start, Pause / Resume and Stop buttons and the recording badge in the main window.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "show_elapsed": {
+          "default": true,
+          "description": "Show the elapsed recording time in the recording badge.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "speaker_width": {
+          "default": 96,
+          "description": "Width in pixels of the speaker column in transcript views.",
+          "maximum": 400,
+          "minimum": 40,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": true
+        },
         "tick": {
           "default": "100ms",
           "description": "How often the window re-reads the engine state (window visibility, capture hiding, tray).",

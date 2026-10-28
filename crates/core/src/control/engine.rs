@@ -361,6 +361,12 @@ impl Engine {
         self.shutdown.store(true, Ordering::SeqCst);
     }
 
+    /// The recording in progress as `(session, paused, audio duration ms)`, `Some(None)` when idle;
+    /// the outer None means a start or stop is under way and holds the recorder (never blocks).
+    pub fn recording(&self) -> Option<Option<(String, bool, u64)>> {
+        self.recorder.active_state()
+    }
+
     /// The active config, as one consistent unit.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         Arc::clone(&self.state.read().expect("state").snap)

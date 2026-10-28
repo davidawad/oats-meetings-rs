@@ -179,6 +179,11 @@ pub struct Notes {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ui {
+    pub live_follow: bool,
+    pub live_max_lines: u32,
+    pub record_controls: bool,
+    pub show_elapsed: bool,
+    pub speaker_width: u32,
     pub tick: Dur,
 }
 

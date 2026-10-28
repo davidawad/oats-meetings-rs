@@ -134,6 +134,11 @@
     "dir": ""
   },
   "ui": {
+    "live_follow": true,
+    "live_max_lines": 2000,
+    "record_controls": true,
+    "show_elapsed": true,
+    "speaker_width": 96,
     "tick": "100ms"
   }
 }

@@ -168,6 +168,7 @@ fn tick(host: &Shared, cx: &mut App) {
         for line in lines {
             let _ = w.update(cx, |v, _, cx| v.event(&line, cx));
         }
+        let _ = w.update(cx, |v, _, cx| v.tick(cx));
         if changed_sessions {
             let _ = w.update(cx, |v, _, cx| v.refresh(cx));
         }
@@ -214,12 +215,18 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
         cx.bind_keys(bindings(cx));
         cx.set_menus(menus());
         let eng = Arc::clone(&h2.borrow().engine);
-        cx.on_action(move |a: &Do, _cx: &mut App| {
-            if let Err(e) = model::dispatch(&eng, &a.id, json!({})) {
-                if e.code != "not_implemented" {
-                    oats_core::elog!("oats-meetings-rs: {}: {e}", a.id);
-                }
-            }
+        cx.on_action(move |a: &Do, cx: &mut App| {
+            // Off the UI thread: a record-start loads the ASR model and must not freeze the window.
+            let (eng, id) = (Arc::clone(&eng), a.id.clone());
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(e) = model::dispatch(&eng, &id, json!({})) {
+                        if e.code != "not_implemented" {
+                            oats_core::elog!("oats-meetings-rs: {id}: {e}");
+                        }
+                    }
+                })
+                .detach();
         });
         // Show the window through the engine so `window-changed` and the control API agree.
         let _ = model::dispatch(&h2.borrow().engine, "window-show", json!({}));

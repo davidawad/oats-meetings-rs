@@ -227,5 +227,15 @@ threads = 4
 dir = ""
 
 [ui]
+# The Live view scrolls to the newest line while a recording adds lines.
+live_follow = true
+# Most lines the Live view keeps for one recording; older lines drop first.
+live_max_lines = 2000
+# Show the Start, Pause / Resume and Stop buttons and the recording badge in the main window.
+record_controls = true
+# Show the elapsed recording time in the recording badge.
+show_elapsed = true
+# Width in pixels of the speaker column in transcript views.
+speaker_width = 96
 # How often the window re-reads the engine state (window visibility, capture hiding, tray).
 tick = "100ms"
