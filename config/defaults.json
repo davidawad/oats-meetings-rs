@@ -27,15 +27,27 @@
     "webcal_scheme": "https",
     "window_days": "7"
   },
+  "kb": {
+    "base_url": "",
+    "dir": "",
+    "embedder": "hash",
+    "model": "nomic-embed-text"
+  },
   "license": {
     "holder": "",
     "spdx": "LicenseRef-Undecided"
   },
   "llm": {
-    "backend": "ollama"
+    "api_key_ref": "secret:llm/api-key",
+    "backend": "ollama",
+    "base_url": "",
+    "model": "llama3.1"
   },
   "network": {
     "allow": false
+  },
+  "notes": {
+    "enforce_headings": true
   },
   "privacy": {
     "hide_from_capture": true,
@@ -59,5 +71,8 @@
     "local": {
       "model": "base.en"
     }
+  },
+  "templates": {
+    "dir": ""
   }
 }
