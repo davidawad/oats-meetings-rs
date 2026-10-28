@@ -74,7 +74,8 @@
     "timeout": "2m"
   },
   "network": {
-    "allow": false
+    "allow": false,
+    "error_snippet": 300
   },
   "notes": {
     "enforce_headings": true
@@ -100,6 +101,7 @@
     "cloud": {
       "adapter": "none",
       "key": "secret:stt/cloud",
+      "max_response": 8388608,
       "model": "whisper-1",
       "timeout": "1m",
       "url": "https://api.openai.com/v1"

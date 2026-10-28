@@ -131,6 +131,8 @@ timeout = "2m"
 [network]
 # Allow outward network calls (cloud STT / LLM). Off means such backends are denied.
 allow = false
+# Characters of a failing HTTP reply kept in the error message (LLM, embedding and cloud STT calls).
+error_snippet = 300
 
 [notes]
 # Reject generated notes that lack a '## ' heading the template's prompt demands.
@@ -185,6 +187,8 @@ speech_peak = 10
 adapter = "none"
 # Secret reference for the cloud STT API key (never the key itself); see the secrets module.
 key = "secret:stt/cloud"
+# Largest cloud transcription reply accepted, in bytes.
+max_response = 8388608
 # Model name sent to the cloud STT service.
 model = "whisper-1"
 # Whole-request timeout for one cloud transcription.

@@ -594,6 +594,15 @@
           "type": "boolean",
           "x-reload": "live",
           "x-ui": true
+        },
+        "error_snippet": {
+          "default": 300,
+          "description": "Characters of a failing HTTP reply kept in the error message (LLM, embedding and cloud STT calls).",
+          "maximum": 10000,
+          "minimum": 20,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
         }
       },
       "type": "object"
@@ -749,6 +758,15 @@
               "default": "secret:stt/cloud",
               "description": "Secret reference for the cloud STT API key (never the key itself); see the secrets module.",
               "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "max_response": {
+              "default": 8388608,
+              "description": "Largest cloud transcription reply accepted, in bytes.",
+              "maximum": 1073741824,
+              "minimum": 1024,
+              "type": "integer",
               "x-reload": "live",
               "x-ui": false
             },
