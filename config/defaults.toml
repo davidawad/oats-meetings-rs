@@ -48,6 +48,16 @@ webcal_scheme = "https"
 # Default length of the ics-events window in days when no end is given.
 window_days = "7"
 
+[kb]
+# Embedding endpoint base URL for kb.embedder ollama / openai-compatible.
+base_url = ""
+# Knowledge-base folder of .md/.txt files; empty means <data dir>/kb.
+dir = ""
+# KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).
+embedder = "hash"
+# Embedding model name for the ollama / openai-compatible embedders.
+model = "nomic-embed-text"
+
 [license]
 # Licence holder metadata (placeholder; no licence chosen).
 holder = ""
@@ -55,18 +65,34 @@ holder = ""
 spdx = "LicenseRef-Undecided"
 
 [llm]
+# NAME of the secret holding the LLM API key (env var or keychain account). The key itself is never in config.
+api_key_name = "OATS_LLM_API_KEY"
 # Notes-generation LLM backend.
 backend = "ollama"
+# LLM endpoint base URL; empty means the backend default (required for openai-compatible).
+base_url = ""
+# Model name sent to the LLM backend.
+model = "llama3.1"
 
 [network]
 # Allow outward network calls (cloud STT / LLM). Off means such backends are denied.
 allow = false
+
+[notes]
+# Reject generated notes that lack a '## ' heading the template's prompt demands.
+enforce_headings = true
 
 [privacy]
 # Hide the app window from screen capture.
 hide_from_capture = true
 # How hiding is done; set per OS by the os axis.
 hide_method = "none"
+
+[secrets]
+# Keychain service name used when secrets.source = keychain.
+keychain_service = "oats-meetings-rs"
+# Where API keys are read from: process environment or the OS keychain.
+source = "env"
 
 [sessions]
 # Require confirm=true to delete a session.
@@ -87,3 +113,7 @@ adapter = "none"
 [stt.local]
 # Local ASR model name.
 model = "base.en"
+
+[templates]
+# Folder of note-template TOML files; empty means <config dir>/templates.
+dir = ""

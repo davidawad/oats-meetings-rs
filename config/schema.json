@@ -187,6 +187,45 @@
       },
       "type": "object"
     },
+    "kb": {
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "default": "",
+          "description": "Embedding endpoint base URL for kb.embedder ollama / openai-compatible.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "dir": {
+          "default": "",
+          "description": "Knowledge-base folder of .md/.txt files; empty means <data dir>/kb.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "embedder": {
+          "default": "hash",
+          "description": "KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).",
+          "enum": [
+            "hash",
+            "ollama",
+            "openai-compatible"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "model": {
+          "default": "nomic-embed-text",
+          "description": "Embedding model name for the ollama / openai-compatible embedders.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
     "license": {
       "additionalProperties": false,
       "properties": {
@@ -210,6 +249,13 @@
     "llm": {
       "additionalProperties": false,
       "properties": {
+        "api_key_name": {
+          "default": "OATS_LLM_API_KEY",
+          "description": "NAME of the secret holding the LLM API key (env var or keychain account). The key itself is never in config.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "backend": {
           "default": "ollama",
           "description": "Notes-generation LLM backend.",
@@ -218,6 +264,20 @@
             "openrouter",
             "openai-compatible"
           ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "base_url": {
+          "default": "",
+          "description": "LLM endpoint base URL; empty means the backend default (required for openai-compatible).",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "model": {
+          "default": "llama3.1",
+          "description": "Model name sent to the LLM backend.",
           "type": "string",
           "x-reload": "live",
           "x-ui": true
@@ -231,6 +291,19 @@
         "allow": {
           "default": false,
           "description": "Allow outward network calls (cloud STT / LLM). Off means such backends are denied.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
+    "notes": {
+      "additionalProperties": false,
+      "properties": {
+        "enforce_headings": {
+          "default": true,
+          "description": "Reject generated notes that lack a '## ' heading the template's prompt demands.",
           "type": "boolean",
           "x-reload": "live",
           "x-ui": true
@@ -259,6 +332,30 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": false
+        }
+      },
+      "type": "object"
+    },
+    "secrets": {
+      "additionalProperties": false,
+      "properties": {
+        "keychain_service": {
+          "default": "oats-meetings-rs",
+          "description": "Keychain service name used when secrets.source = keychain.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "source": {
+          "default": "env",
+          "description": "Where API keys are read from: process environment or the OS keychain.",
+          "enum": [
+            "env",
+            "keychain"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"
@@ -337,6 +434,19 @@
             }
           },
           "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "templates": {
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "default": "",
+          "description": "Folder of note-template TOML files; empty means <config dir>/templates.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"
