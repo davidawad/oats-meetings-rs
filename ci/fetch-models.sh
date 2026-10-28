@@ -9,7 +9,7 @@ _dir=${OATS_MODELS_DIR:-${TMPDIR:-/tmp}/oats-models}
 mkdir -p "$_dir"
 _f=$_dir/$_model
 if ! { [ -f "$_f" ] && echo "$_sha  $_f" | sha256sum -c --status -; }; then
-  curl -fL --retry 3 --retry-delay 5 -o "$_f.part" "$_url"
+  env -u LD_LIBRARY_PATH /usr/bin/curl -fL --retry 3 --retry-delay 5 -o "$_f.part" "$_url"
   echo "$_sha  $_f.part" | sha256sum -c -
   mv "$_f.part" "$_f"
 fi
