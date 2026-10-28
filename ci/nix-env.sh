@@ -28,7 +28,7 @@ done
 # shellcheck disable=SC2086
 for out in $(nix "${nixf[@]}" path-info -r $roots | sort -u); do
   # The host libc must stay the host libc: nix glibc/gcc in LD_LIBRARY_PATH breaks every host binary.
-  case "$out" in *-glibc-*|*-gcc-*|*-libgcc*|*-binutils*|*-bash-*) continue ;; esac
+  case "$out" in *-glibc-*|*-gcc-*|*-libgcc*|*-binutils*|*-bash-*|*-ncurses-*|*-libffi-*|*-libxml2-*|*-libedit-*) continue ;; esac
   [ -d "$out/bin" ] && paths="$paths:$out/bin"
   [ -d "$out/lib/pkgconfig" ] && pc="$pc:$out/lib/pkgconfig"
   [ -d "$out/share/pkgconfig" ] && pc="$pc:$out/share/pkgconfig"
