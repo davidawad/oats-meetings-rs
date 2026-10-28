@@ -14,11 +14,11 @@ if [ -n "${CROSS_TARGET:-}" ]; then
 fi
 # Local ASR (whisper.cpp) is built and tested here; the model is fetched and checksummed, not committed.
 source "$(dirname "$0")/fetch-models.sh"
-cargo build --workspace --locked --features oats-core/whisper
-cargo test --workspace --locked --features oats-core/whisper
+cargo build --workspace --locked --features oats-core/whisper,oats-core/parakeet
+cargo test --workspace --locked --features oats-core/whisper,oats-core/parakeet
 # One WER pass per allowed stt.local.model value, printed as WER_ROW lines (the recorded table).
 set -o pipefail
-cargo test -p oats-core --locked --features whisper --test stt_whisper -- --nocapture --test-threads=1 2>&1 | grep "WER_ROW\|test result" | cut -c1-220
+cargo test -p oats-core --locked --features whisper,parakeet --test stt_whisper -- --nocapture --test-threads=1 2>&1 | grep "WER_ROW\|test result" | cut -c1-220
 # The same engine tests without the local backend compiled in (backend_unavailable branch).
 cargo test -p oats-core --locked --test stt_engine
 # GUI-hosts-engine proof needs a virtual display. The pod has no GPU and nix's software Vulkan

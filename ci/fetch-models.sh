@@ -24,5 +24,18 @@ for _m in ${OATS_FETCH_MODELS:-tiny.en tiny base.en base small.en small}; do
   fi
   echo "model: $_f ($(stat -c %s "$_f") bytes, sha256 ok)"
 done
+# Parakeet TDT 0.6b v2 int8 (sherpa-onnx release asset), unpacked to $_dir/<PARAKEET_DIR>. OATS_FETCH_PARAKEET=0 skips.
+if [ "${OATS_FETCH_PARAKEET:-1}" = 1 ]; then
+  _pk=sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8
+  _pk_sha=157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad
+  if [ ! -f "$_dir/$_pk/.sha-ok-$_pk_sha" ]; then
+    env -u LD_LIBRARY_PATH /usr/bin/curl -fL --retry 3 --retry-delay 5 -o "$_dir/$_pk.tar.bz2.part" "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$_pk.tar.bz2"
+    echo "$_pk_sha  $_dir/$_pk.tar.bz2.part" | sha256sum -c -
+    tar -xjf "$_dir/$_pk.tar.bz2.part" -C "$_dir"
+    : > "$_dir/$_pk.tar.bz2.part"
+    touch "$_dir/$_pk/.sha-ok-$_pk_sha"
+  fi
+  echo "model: $_dir/$_pk (archive sha256 ok)"
+fi
 export OATS_WHISPER_MODELS_DIR=$_dir
 export OATS_WHISPER_MODEL=$_dir/ggml-tiny.en.bin

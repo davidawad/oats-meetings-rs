@@ -1,4 +1,4 @@
-#![cfg(feature = "whisper")]
+#![cfg(any(feature = "whisper", feature = "parakeet"))]
 //! Local ASR acceptance: whisper.cpp transcribes the synthetic fixtures under the agreed word
 //! error rate, alone and through the whole engine (live + final, you/them) into a session store.
 //! The model comes from `ci/fetch-models.sh` (OATS_WHISPER_MODEL); it is never committed.
@@ -10,7 +10,9 @@ use oats_core::action::Action;
 use oats_core::config::keys::STT_LOCAL_MODELS;
 use oats_core::control::engine::{Engine, EngineOpts};
 use oats_core::stt::wer::wer;
-use oats_core::stt::{local::WhisperAsr, wav, Asr};
+#[cfg(feature = "whisper")]
+use oats_core::stt::local::WhisperAsr;
+use oats_core::stt::{wav, Asr};
 use serde_json::Value;
 
 /// Agreed acceptance threshold: word error rate per channel with ggml-tiny.en on clean TTS.
@@ -22,16 +24,19 @@ fn models_dir() -> PathBuf {
     PathBuf::from(p)
 }
 
+#[cfg(feature = "whisper")]
 fn model(name: &str) -> PathBuf {
     let p = models_dir().join(format!("ggml-{name}.bin"));
     assert!(p.is_file(), "{} is not a file", p.display());
     p
 }
 
+#[cfg(feature = "whisper")]
 fn only() -> Option<String> {
     std::env::var("OATS_ONLY_MODEL").ok().filter(|m| !m.is_empty())
 }
 
+#[cfg(feature = "whisper")]
 fn models() -> Vec<&'static str> {
     STT_LOCAL_MODELS.iter().copied().filter(|m| only().as_deref().is_none_or(|o| o == *m)).collect()
 }
@@ -54,6 +59,7 @@ fn expected(name: &str) -> String {
     v[name].as_str().unwrap().to_string()
 }
 
+#[cfg(feature = "whisper")]
 #[test]
 fn whisper_meets_the_wer_threshold_on_each_fixture() {
     for m in models() {
@@ -83,14 +89,36 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+#[cfg(feature = "whisper")]
 #[test]
 fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
     for m in models() {
-        engine_case(m);
+        engine_case(m, &format!("model = \"{m}\"\n"), "whisper.cpp");
     }
 }
 
-fn engine_case(m: &str) {
+#[cfg(feature = "parakeet")]
+#[test]
+fn parakeet_meets_the_wer_threshold_on_each_fixture() {
+    let dir = models_dir().join(oats_core::stt::PARAKEET_DIR);
+    let asr = oats_core::stt::parakeet::ParakeetAsr::load(&dir, 4).unwrap();
+    for name in ["you.wav", "them.wav"] {
+        let pcm = wav::read(&fixture(name)).unwrap().you;
+        let segs = asr.transcribe(&pcm, "en").unwrap();
+        let text = segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(" ");
+        let w = wer(&expected(name), &text);
+        eprintln!("WER_ROW model=parakeet-tdt-0.6b-v2 stage=asr file={name} wer={w:.3} :: {text}");
+        assert!(w <= MAX_WER, "parakeet {name}: WER {w:.3} > {MAX_WER} :: {text}");
+    }
+}
+
+#[cfg(feature = "parakeet")]
+#[test]
+fn engine_parakeet_transcribes_a_two_channel_call_into_a_session() {
+    engine_case("parakeet-tdt-0.6b-v2", "engine = \"parakeet\"\n", "parakeet");
+}
+
+fn engine_case(m: &str, local_toml: &str, backend: &str) {
     let dir = tempfile::tempdir().unwrap();
     let you = wav::read(&fixture("you.wav")).unwrap().you;
     let them = wav::read(&fixture("them.wav")).unwrap().you;
@@ -107,7 +135,7 @@ fn engine_case(m: &str) {
 
     let cfg = dir.path().join("cfg").join("config.toml");
     std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
-    std::fs::write(&cfg, format!("[stt.local]\nmodel = \"{m}\"\nmodels_dir = '{}'\nthreads = \"4\"\n", models_dir().display())).unwrap();
+    std::fs::write(&cfg, format!("[stt.local]\n{local_toml}models_dir = '{}'\nthreads = \"4\"\n", models_dir().display())).unwrap();
     let engine: Arc<Engine> = Engine::new(EngineOpts {
         user_config: cfg,
         pack: None,
@@ -122,7 +150,7 @@ fn engine_case(m: &str) {
     let r = engine
         .dispatch(&Action::SttTranscribe { path: call.display().to_string(), session: Some(id.into()), speaker: None })
         .unwrap();
-    assert_eq!(r["backend"], "whisper.cpp");
+    assert_eq!(r["backend"], backend);
     assert!(r["live_utterances"].as_u64().unwrap() >= 2 && r["final_utterances"].as_u64().unwrap() >= 2, "{r}");
 
     for source in ["final", "live"] {
