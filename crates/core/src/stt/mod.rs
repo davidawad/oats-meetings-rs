@@ -230,8 +230,21 @@ fn peak(x: &[f32]) -> f32 {
     x.iter().fold(0.0f32, |m, v| m.max(v.abs()))
 }
 
-/// Below this peak a window is treated as silence and not sent to the recogniser.
-const SILENCE_PEAK: f32 = 0.004;
+/// A 10 ms frame with a peak below this is silence.
+const SPEECH_PEAK: f32 = 0.01;
+/// Silence kept around the speech that is sent on.
+const PAD_SAMPLES: usize = SAMPLE_RATE as usize / 4;
+
+/// First and last sample worth sending: the span from the first to the last non-silent 10 ms
+/// frame, padded. `None` if the audio is all silence. Whisper's segment times drift inside long
+/// silences, so leading silence is cut and its length added back as the offset.
+fn speech_bounds(x: &[f32]) -> Option<(usize, usize)> {
+    let frame = SAMPLE_RATE as usize / 100;
+    let loud = |c: &[f32]| peak(c) >= SPEECH_PEAK;
+    let first = x.chunks(frame).position(loud)?;
+    let last = x.chunks(frame).rposition(loud)?;
+    Some(((first * frame).saturating_sub(PAD_SAMPLES), ((last + 1) * frame + PAD_SAMPLES).min(x.len())))
+}
 
 fn utts(segs: Vec<Segment>, offset: f64, speaker: &str) -> Vec<Utt> {
     segs.into_iter()
@@ -242,10 +255,11 @@ fn utts(segs: Vec<Segment>, offset: f64, speaker: &str) -> Vec<Utt> {
 }
 
 fn run_asr(asr: &dyn Asr, pcm: &[f32], offset: f64, speaker: &str, language: &str) -> Result<Vec<Utt>> {
-    if pcm.is_empty() || peak(pcm) < SILENCE_PEAK {
+    let Some((from, to)) = speech_bounds(pcm) else {
         return Ok(vec![]);
-    }
-    Ok(utts(asr.transcribe(pcm, language)?, offset, speaker))
+    };
+    let at = offset + from as f64 / f64::from(SAMPLE_RATE);
+    Ok(utts(asr.transcribe(&pcm[from..to], language)?, at, speaker))
 }
 
 // ---- live ----------------------------------------------------------------------------------
@@ -590,6 +604,19 @@ mod tests {
         let you = rest.iter().find(|u| u.speaker == "you").unwrap();
         assert!(you.start >= 3.2 && you.start <= 4.0, "{}", you.start); // second window starts at the cut
         assert_eq!(rest.iter().find(|u| u.speaker == "remote_1").unwrap().start, 0.0);
+    }
+
+    #[test]
+    fn leading_silence_is_cut_and_added_back_as_offset() {
+        let asr = Arc::new(Fake { calls: Mutex::new(vec![]) });
+        let mut pcm = vec![0.0f32; 16_000 * 2];
+        pcm.extend(tone(1.0));
+        pcm.extend(vec![0.0f32; 16_000 * 3]);
+        let us = run_asr(&*asr, &pcm, 10.0, "you", "en").unwrap();
+        assert_eq!(us.len(), 1);
+        assert!((us[0].start - 11.75).abs() < 0.02, "{}", us[0].start); // 10 + 2 s - 0.25 s pad
+        let sent = asr.calls.lock().unwrap()[0] as f64 / 16_000.0;
+        assert!((sent - 1.5).abs() < 0.03, "{sent}"); // 1 s tone + 0.25 s pad each side
     }
 
     #[test]
