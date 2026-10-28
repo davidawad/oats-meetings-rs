@@ -28,6 +28,8 @@ struct Queues {
 struct Shared {
     q: Mutex<Queues>,
     frames: AtomicU64,
+    system_in: AtomicU64,
+    mic_in: AtomicU64,
     paused: AtomicBool,
     stop: AtomicBool,
 }
@@ -39,6 +41,10 @@ pub struct Summary {
     pub rate: u32,
     pub channels: u16,
     pub duration_ms: u64,
+    /// Samples each source delivered (before lock-step padding); a source far below the other
+    /// delivered audio slower than real time.
+    pub system_samples: u64,
+    pub mic_samples: u64,
 }
 
 pub struct Recording {
@@ -95,6 +101,8 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
     let shared = Arc::new(Shared {
         q: Mutex::new(Queues::default()),
         frames: AtomicU64::new(0),
+        system_in: AtomicU64::new(0),
+        mic_in: AtomicU64::new(0),
         paused: AtomicBool::new(false),
         stop: AtomicBool::new(false),
     });
@@ -110,8 +118,10 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
                 let mut q = sh.q.lock().expect("queues");
                 if is_sys {
                     q.system.extend(samples);
+                    sh.system_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
                 } else {
                     q.mic.extend(samples);
+                    sh.mic_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
                 }
             }),
         )
@@ -147,7 +157,15 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
             std::thread::sleep(Duration::from_millis(40));
         }
         let frames = w.finish()?;
-        Ok(Summary { path: out_path, frames, rate: SAMPLE_RATE, channels, duration_ms: ms(frames) })
+        Ok(Summary {
+            path: out_path,
+            frames,
+            rate: SAMPLE_RATE,
+            channels,
+            duration_ms: ms(frames),
+            system_samples: sh.system_in.load(Ordering::SeqCst),
+            mic_samples: sh.mic_in.load(Ordering::SeqCst),
+        })
     });
     Ok(Recording { shared, captures, writer: Some(writer), path: path.to_path_buf(), layout })
 }

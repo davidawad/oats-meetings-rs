@@ -189,7 +189,8 @@ impl Recorder {
         let summary = rec.stop().map_err(audio_err)?;
         write_meta(&dir, &meta_for(&id, &title, started, Some(ended), summary.duration_ms, summary.channels))?;
         Ok(json!({"session": id, "path": summary.path, "duration_ms": summary.duration_ms,
-            "frames": summary.frames, "rate": summary.rate, "channels": summary.channels}))
+            "frames": summary.frames, "rate": summary.rate, "channels": summary.channels,
+            "system_samples": summary.system_samples, "mic_samples": summary.mic_samples}))
     }
 
     /// Toggle pause; returns the new state.

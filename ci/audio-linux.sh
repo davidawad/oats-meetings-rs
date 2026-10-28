@@ -38,6 +38,9 @@ pactl load-module module-null-sink sink_name=oats_sink sink_properties=device.de
 pactl load-module module-null-sink sink_name=oats_mic_sink sink_properties=device.description=OatsMic
 pactl set-default-sink oats_sink
 pactl list short sources
+# Diagnostic: how many bytes parec delivers from a monitor in 5 s of wall clock (48 kHz mono f32: 960000 expected).
+(pacat --playback --device=oats_sink --format=float32le --rate=48000 --channels=1 < /dev/zero & tp=$!; sleep 0.5; \
+  n=$(timeout 5 parec --device=oats_sink.monitor --format=float32le --rate=48000 --channels=1 | wc -c); kill $tp; echo "parec 5s bytes=$n (expect ~960000)") || true
 set -x
 cargo build --locked --workspace
 cargo test --locked --workspace --no-fail-fast

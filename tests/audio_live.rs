@@ -183,6 +183,7 @@ fn five_second_loopback_recording_is_non_silent_stereo() {
         assert_eq!(live_get["data"]["state"], "recording");
         let (code, v) = e.json(&["record", "stop"]);
         assert_eq!(code, 0, "{be}: {v}");
+        eprintln!("audio_live[{be}]: stop -> {v}");
         let (code, got) = e.json(&["session", "get", "live_a"]);
         assert_eq!(code, 0, "{be}: {got}");
         let dur = got["data"]["duration_ms"].as_u64().unwrap();
