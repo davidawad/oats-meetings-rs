@@ -36,12 +36,14 @@
             "cpal"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "dir": {
           "default": "",
           "description": "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "layout": {
@@ -52,6 +54,7 @@
             "mix"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "mic": {
@@ -61,12 +64,14 @@
               "default": "",
               "description": "Microphone device id (see `ctl devices list`); empty means the default mic.",
               "type": "string",
+              "x-reload": "live",
               "x-ui": true
             },
             "enabled": {
               "default": true,
               "description": "Record the microphone.",
               "type": "boolean",
+              "x-reload": "live",
               "x-ui": true
             }
           },
@@ -79,12 +84,14 @@
               "default": "",
               "description": "System-audio loopback device id (see `ctl devices list`); empty means the default loopback.",
               "type": "string",
+              "x-reload": "live",
               "x-ui": true
             },
             "enabled": {
               "default": true,
               "description": "Record system audio (what the machine plays).",
               "type": "boolean",
+              "x-reload": "live",
               "x-ui": true
             }
           },
