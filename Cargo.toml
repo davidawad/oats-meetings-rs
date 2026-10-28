@@ -42,6 +42,7 @@ oats-ui = { workspace = true, optional = true }
 [dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true
+tiny_http.workspace = true
 
 [features]
 default = ["gui"]

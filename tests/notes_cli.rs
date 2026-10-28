@@ -143,7 +143,7 @@ fn ctl_cloud_backend_with_network_allow_off_is_network_denied() {
 fn ctl_kb_search_ranking_is_deterministic() {
     let mock = Mock::start();
     let e = Engine::start(&mock.base);
-    let kb = format!("{}/../kb", e.rt);
+    let kb = format!("{}/../data/kb", e.rt);
     std::fs::create_dir_all(&kb).unwrap();
     for f in std::fs::read_dir(fx("kb")).unwrap().flatten() {
         std::fs::copy(f.path(), format!("{kb}/{}", f.file_name().to_string_lossy())).unwrap();
