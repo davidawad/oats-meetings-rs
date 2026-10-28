@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/ui", "crates/ctl", "."]
+members = ["crates/core", "crates/ui", "crates/ctl", "crates/audio", "."]
 
 [workspace.package]
 version = "0.0.1"
@@ -30,6 +30,7 @@ keyring = "4"
 hound = "3"
 whisper-rs = "0.16"
 oats-core = { path = "crates/core" }
+oats-audio = { path = "crates/audio" }
 oats-ui = { path = "crates/ui" }
 oats-ctl = { path = "crates/ctl" }
 
@@ -46,6 +47,7 @@ oats-ctl.workspace = true
 oats-ui = { workspace = true, optional = true }
 
 [dev-dependencies]
+oats-audio.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 tiny_http.workspace = true

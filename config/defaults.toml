@@ -6,6 +6,26 @@ menubar = false
 # Refuse to start a second engine on the same control socket.
 single_instance = true
 
+[audio]
+# Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).
+backend = "auto"
+# Directory recordings are written under (one folder per session); empty means the per-user sessions dir.
+dir = ""
+# WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
+layout = "split"
+
+[audio.mic]
+# Microphone device id (see `ctl devices list`); empty means the default mic.
+device = ""
+# Record the microphone.
+enabled = true
+
+[audio.system]
+# System-audio loopback device id (see `ctl devices list`); empty means the default loopback.
+device = ""
+# Record system audio (what the machine plays).
+enabled = true
+
 [config]
 # Watch the user config file and reload on change.
 hot_reload = true

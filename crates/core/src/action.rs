@@ -54,6 +54,10 @@ actions! {
     WindowHide, "window-hide", "Hide the main window.", "implemented", "control", {};
     WindowToggle, "window-toggle", "Toggle the main window.", "implemented", "control", {};
     PrivacyToggle, "privacy-toggle", "Toggle hiding the window from screen capture.", "implemented", "write", {};
+    DevicesList, "devices-list", "List audio capture devices (loopback and mic) for the selected backend.", "implemented", "read", {};
+    RecordStart, "record-start", "Start recording a session (system loopback + mic to one WAV).", "implemented", "control", { session: Option<String>, title: Option<String> };
+    RecordStop, "record-stop", "Stop recording and save the session.", "implemented", "control", {};
+    RecordPause, "record-pause", "Pause or resume recording.", "implemented", "control", {};
     SessionImport, "session-import", "Import sessions from an OpenOats sessions root or one session dir.", "implemented", "write", { from: String, overwrite: Option<bool> };
     IcsAdd, "ics-add", "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.", "implemented", "write", { name: String, url: String, enabled: Option<bool>, refresh_secs: Option<u64>, header: Option<String> };
     IcsRemove, "ics-remove", "Unsubscribe from a feed and drop its cache.", "implemented", "write", { name: String };
@@ -65,9 +69,6 @@ actions! {
     SecretHas, "secret-has", "Whether a secret resolves in the configured backend (never returns the value).", "implemented", "read", { key: String };
     SttTranscribe, "stt-transcribe", "Transcribe a WAV file into a new session using the stt.* keys: stereo is you (left) / them (right), mono is one speaker (speaker=you|them).", "implemented", "write", { path: String, session: Option<String>, speaker: Option<String> };
     SttStatus, "stt-status", "Which STT backend is selected and whether it can run (model present, network, key); never shows the key.", "implemented", "read", {};
-    RecordStart, "record-start", "Start recording a session.", "planned", "control", {};
-    RecordStop, "record-stop", "Stop recording.", "planned", "control", {};
-    RecordPause, "record-pause", "Pause or resume recording.", "planned", "control", {};
     SessionList, "session-list", "List sessions, optionally in a time window (RFC 3339).", "implemented", "read", { from: Option<String>, to: Option<String> };
     SessionGet, "session-get", "One session with its metadata.", "implemented", "read", { session: String };
     SessionRename, "session-rename", "Rename (retitle) a session.", "implemented", "write", { session: String, name: String };
@@ -89,6 +90,8 @@ pub const EVENTS: &[&str] = &[
     "config-reloaded",
     "config-reload-failed",
     "recording-started",
+    "recording-paused",
+    "recording-stopped",
     "segment",
     "session-saved",
     "session-deleted",

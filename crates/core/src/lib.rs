@@ -3,6 +3,7 @@
 pub mod action;
 pub mod config;
 pub mod control;
+pub mod record;
 pub mod http;
 pub mod kb;
 pub mod notes;

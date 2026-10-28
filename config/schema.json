@@ -23,6 +23,83 @@
       },
       "type": "object"
     },
+    "audio": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "default": "auto",
+          "description": "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).",
+          "enum": [
+            "auto",
+            "pulse",
+            "pipewire",
+            "cpal"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "dir": {
+          "default": "",
+          "description": "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "layout": {
+          "default": "split",
+          "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",
+          "enum": [
+            "split",
+            "mix"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "mic": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "default": "",
+              "description": "Microphone device id (see `ctl devices list`); empty means the default mic.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": true,
+              "description": "Record the microphone.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "system": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "default": "",
+              "description": "System-audio loopback device id (see `ctl devices list`); empty means the default loopback.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": true,
+              "description": "Record system audio (what the machine plays).",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
     "config": {
       "additionalProperties": false,
       "properties": {

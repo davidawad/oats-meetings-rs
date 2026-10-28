@@ -26,6 +26,8 @@ use crate::sessions::Store;
 use crate::{kb, notes, templates};
 use std::path::Path;
 
+use crate::record::{self, Recorder};
+
 use super::bus::Bus;
 use super::subsystem::Subsystem;
 
@@ -68,6 +70,7 @@ pub struct Engine {
     pub bus: Bus,
     shutdown: AtomicBool,
     window_visible: AtomicBool,
+    recorder: Recorder,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -208,6 +211,7 @@ impl Engine {
             bus: Bus::default(),
             shutdown: AtomicBool::new(false),
             window_visible: AtomicBool::new(false),
+            recorder: Recorder::default(),
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
@@ -240,6 +244,20 @@ impl Engine {
             machine: &opts.machine,
             user_toml: user,
         })
+    }
+
+    /// Replace the capture backend factory (tests inject a fake; the default is the OS backend).
+    pub fn set_audio_factory(&self, f: record::Factory) {
+        self.recorder.set_factory(f);
+    }
+
+    fn audio_settings(&self) -> Result<oats_audio::AudioSettings> {
+        record::settings_from(&self.snapshot().resolved.flat)
+    }
+
+    /// Recordings are sessions: `audio.dir` if set, else the session store root.
+    fn record_root(&self) -> std::path::PathBuf {
+        record::record_root(&self.snapshot().resolved.flat, self.store().root)
     }
 
     /// Register a subsystem (audio, hotkeys, ...). It sees every later reload.
@@ -428,6 +446,10 @@ impl Engine {
             .ok_or_else(|| ConfigError::new("unknown_key", format!("unknown key '{key}'")))
     }
 
+    fn session_saved(&self, id: &Value) {
+        self.bus.publish("session-saved", json!({"id": id, "change": "record"}));
+    }
+
     fn set_window(&self, visible: bool) -> Value {
         let was = self.window_visible.swap(visible, Ordering::SeqCst);
         if was != visible {
@@ -481,8 +503,29 @@ impl Engine {
                 let cur = matches!(self.get("privacy.hide_from_capture")?, Value::Bool(true));
                 self.set("privacy.hide_from_capture", &Value::Bool(!cur), "privacy-toggle")
             }
+            Action::DevicesList {} => self.recorder.devices(&self.audio_settings()?),
+            Action::RecordStart { session, title } => {
+                let v = self.recorder.start(&self.audio_settings()?, &self.record_root(), session.as_deref(), title.as_deref())?;
+                self.bus.publish("recording-started", v.clone());
+                Ok(v)
+            }
+            Action::RecordStop {} => {
+                let v = self.recorder.stop()?;
+                self.bus.publish("recording-stopped", v.clone());
+                self.session_saved(&v["session"]);
+                Ok(v)
+            }
+            Action::RecordPause {} => {
+                let v = self.recorder.pause()?;
+                self.bus.publish("recording-paused", v.clone());
+                Ok(v)
+            }
             Action::SessionList { from, to } => self.store().list(from.as_deref(), to.as_deref()),
-            Action::SessionGet { session } => self.store().get(session),
+            Action::SessionGet { session } => {
+                let mut v = self.store().get(session)?;
+                self.recorder.annotate(&mut v, session);
+                Ok(v)
+            }
             Action::TranscriptGet { session } => self.store().transcript(session),
             Action::SessionRename { session, name } => {
                 let v = self.store().rename(session, name)?;
