@@ -143,14 +143,14 @@ fn every_audio_choice_value_takes_effect() {
     for (sys, mic) in [(true, true), (true, false), (false, true), (false, false)] {
         let r = rig();
         r.engine.set("audio.system.enabled", &json!(sys), "test").unwrap();
-        r.engine.set("audio.mic.enabled", &json!(mic), "test").unwrap();
-        let res = r.engine.dispatch(&Action::RecordStart { session: Some("e".into()), title: None });
         if !sys && !mic {
-            assert_eq!(res.unwrap_err().code, "invalid_config");
-            assert!(!r.dir.path().join("rec/e").exists(), "failed start left a folder");
+            // Both off never gets into the config: the audio subsystem vetoes it.
+            assert_eq!(r.engine.set("audio.mic.enabled", &json!(false), "test").unwrap_err().code, "invalid_config");
+            assert!(!r.dir.path().join("rec/e").exists());
             continue;
         }
-        res.unwrap();
+        r.engine.set("audio.mic.enabled", &json!(mic), "test").unwrap();
+        r.engine.dispatch(&Action::RecordStart { session: Some("e".into()), title: None }).unwrap();
         std::thread::sleep(Duration::from_millis(500));
         stop(&r);
         let d = wav::read(&r.dir.path().join("rec/e/audio.wav")).unwrap();

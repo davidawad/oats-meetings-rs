@@ -47,5 +47,7 @@ pactl list short sources
 source "$(dirname "$0")/fetch-models.sh"
 set -x
 cargo build --locked --workspace --features oats-core/whisper
-cargo test --locked --workspace --features oats-core/whisper --no-fail-fast
-OATS_AUDIO_LIVE=1 OATS_AUDIO_BACKENDS="$backends" cargo test --locked --features oats-core/whisper --test audio_live -- --nocapture --test-threads=1
+rc=0
+cargo test --locked --workspace --features oats-core/whisper --no-fail-fast || rc=$?
+OATS_AUDIO_LIVE=1 OATS_AUDIO_BACKENDS="$backends" cargo test --locked --features oats-core/whisper --test audio_live -- --nocapture --test-threads=1 || rc=$?
+exit $rc
