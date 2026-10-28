@@ -334,6 +334,70 @@ fn read_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     Ok(out)
 }
 
+/// Writing sessions (the transcription engine and, later, the recorder).
+impl Store {
+    /// Make an empty session directory with its `session.json`; `exists` if the id is taken.
+    pub fn create(&self, id: &str, started_at: &str, title: &str, engine: &str) -> Result<PathBuf> {
+        check_id(id)?;
+        let dir = self.root.join(id);
+        if dir.exists() {
+            return Err(ConfigError::new("exists", format!("session '{id}' already exists")));
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
+        let mut meta = Map::new();
+        meta.insert("id".into(), json!(id));
+        meta.insert("startedAt".into(), json!(started_at));
+        meta.insert("title".into(), json!(title));
+        meta.insert("utteranceCount".into(), json!(0));
+        meta.insert("hasNotes".into(), json!(false));
+        meta.insert("engine".into(), json!(engine));
+        meta.insert("speakerNames".into(), json!({}));
+        meta.insert("schemaVersion".into(), json!(SCHEMA_VERSION));
+        write_meta(&dir, &meta)?;
+        Ok(dir)
+    }
+
+    fn transcript_path(&self, id: &str, kind: &str) -> Result<PathBuf> {
+        let l = self.find(id)?;
+        let file = TRANSCRIPTS.iter().find(|(k, _)| *k == kind).map(|(_, f)| *f).ok_or_else(|| {
+            ConfigError::new("invalid_argument", "transcript kind must be 'live' or 'final'")
+        })?;
+        Ok(l.dir.join(file))
+    }
+
+    /// Replace one transcript file (`live` or `final`) with `utterances`, one JSON object per line.
+    pub fn write_transcript(&self, id: &str, kind: &str, utterances: &[Value]) -> Result<()> {
+        let path = self.transcript_path(id, kind)?;
+        let mut text = String::new();
+        for u in utterances {
+            text.push_str(&u.to_string());
+            text.push('\n');
+        }
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        std::fs::write(&tmp, text)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| io(&path, e))
+    }
+
+    /// Append one utterance line to `live` or `final`.
+    pub fn append_utterance(&self, id: &str, kind: &str, utterance: &Value) -> Result<()> {
+        use std::io::Write;
+        let path = self.transcript_path(id, kind)?;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| io(&path, e))?;
+        writeln!(f, "{utterance}").map_err(|e| io(&path, e))
+    }
+
+    /// Stamp `endedAt` and the utterance count (of the transcript the app reads first).
+    pub fn finish(&self, id: &str, ended_at: &str) -> Result<Value> {
+        let mut l = self.find(id)?;
+        let (_, utterances) = transcript(&l.dir);
+        l.meta.insert("endedAt".into(), json!(ended_at));
+        l.meta.insert("utteranceCount".into(), json!(utterances.len()));
+        write_meta(&l.dir, &l.meta)?;
+        Ok(summary(&l))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
