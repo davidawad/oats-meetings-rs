@@ -8,7 +8,7 @@ use oats_core::config::keys::{self, Kind, KEYS};
 use oats_core::control::engine::{Engine, EngineOpts};
 use serde_json::{json, Value};
 
-fn engine(dir: &Path) -> (Engine, PathBuf) {
+fn engine(dir: &Path) -> (std::sync::Arc<Engine>, PathBuf) {
     let cfg = dir.join("config.toml");
     let e = Engine::new(EngineOpts {
         user_config: cfg.clone(),
