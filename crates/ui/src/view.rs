@@ -116,6 +116,8 @@ impl MainWindow {
             Widget::Choice { current, .. } => current.clone(),
             Widget::Text(t) if t.is_empty() => "(default)".to_string(),
             Widget::Text(t) => t.clone(),
+            Widget::Number { value, .. } => value.to_string(),
+            Widget::Duration { text, .. } => text.clone(),
         };
         let mut ctl = div()
             .id(SharedString::from(format!("set-{path}")))

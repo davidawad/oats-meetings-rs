@@ -14,6 +14,10 @@ pub enum Widget {
     Toggle(bool),
     Choice { options: Vec<&'static str>, current: String },
     Text(String),
+    /// Whole number within `min..=max`.
+    Number { value: i64, min: i64, max: i64 },
+    /// Duration text (`"15s"`) within `min_ms..=max_ms`.
+    Duration { text: String, min_ms: u64, max_ms: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +42,12 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
             current: value.and_then(Value::as_str).unwrap_or_default().to_string(),
         },
         Kind::Str => Widget::Text(value.and_then(Value::as_str).unwrap_or_default().to_string()),
+        Kind::Int { min, max } => Widget::Number { value: value.and_then(Value::as_i64).unwrap_or(min), min, max },
+        Kind::Duration { min_ms, max_ms } => Widget::Duration {
+            text: value.and_then(Value::as_str).unwrap_or_default().to_string(),
+            min_ms,
+            max_ms,
+        },
     }
 }
 
@@ -68,7 +78,7 @@ pub fn next_value(row: &Row) -> Option<Value> {
             let i = options.iter().position(|o| *o == current).map_or(0, |i| i + 1);
             options.get(i % options.len().max(1)).map(|o| json!(o))
         }
-        Widget::Text(_) => None,
+        Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } => None,
     }
 }
 
@@ -112,6 +122,11 @@ mod tests {
                 Kind::Bool => vec![json!(true), json!(false)],
                 Kind::Enum(o) => o.iter().map(|s| json!(s)).collect(),
                 Kind::Str => continue,
+                // The bounds are the values a number / duration row must be able to write.
+                Kind::Int { min, max } => vec![json!(min), json!(max)],
+                Kind::Duration { min_ms, max_ms } => {
+                    vec![json!(keys::format_duration_ms(min_ms)), json!(keys::format_duration_ms(max_ms))]
+                }
             };
             for v in values {
                 // A value can be rejected by a subsystem (e.g. cloud STT without a key); the point
