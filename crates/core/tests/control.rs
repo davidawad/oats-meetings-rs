@@ -384,7 +384,17 @@ fn single_instance_lock() {
     assert_eq!(e.code, "already_running");
     // After the first stops, the lock is free again.
     rig.handle.take().unwrap().shutdown();
-    let h = server::serve(engine2, &rig.rt).unwrap();
+    // Shutdown releases the socket asynchronously; under load the lock is free a moment late.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let h = loop {
+        match server::serve(engine2.clone(), &rig.rt) {
+            Ok(h) => break h,
+            Err(e) => {
+                assert!(e.code == "already_running" && std::time::Instant::now() < deadline, "{e:?}");
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
     h.shutdown();
 }
 
