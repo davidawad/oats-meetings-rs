@@ -42,6 +42,9 @@ export RUSTFLAGS="${RUSTFLAGS:-} $(echo "${ld#:}" | tr ':' '\n' | sed 's/^/-L na
 # (stddef.h, ...) come from the clang package and are passed explicitly.
 for d in $roots; do
   for inc in "$d"/lib/clang/*/include; do
-    [ -d "$inc" ] && export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} -isystem $inc"
+    if [ -d "$inc" ]; then
+      export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-} -isystem $inc"
+    fi
   done
 done
+true
