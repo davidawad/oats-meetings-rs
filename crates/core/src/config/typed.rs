@@ -52,7 +52,7 @@ pub struct Audio {
     pub backend: AudioBackend,
     pub layout: AudioLayout,
     pub mic: AudioEndpoint,
-    pub record_dir: String,
+    pub dir: String,
     pub system: AudioEndpoint,
 }
 

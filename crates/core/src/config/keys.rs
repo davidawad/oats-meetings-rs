@@ -87,7 +87,7 @@ pub const KEYS: &[Key] = &[
         ui: true,
     },
     Key {
-        path: "audio.record_dir",
+        path: "audio.dir",
         kind: Kind::Str,
         default: Def::S(""),
         doc: "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",

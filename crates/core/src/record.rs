@@ -63,10 +63,10 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
     })
 }
 
-/// Where recordings go: `audio.record_dir`, else the per-user sessions dir (same default as the
+/// Where recordings go: `audio.dir`, else the per-user sessions dir (same default as the
 /// session store, so recordings show up as sessions).
 pub fn record_root(flat: &Flat, env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
-    let cfg = s(flat, "audio.record_dir");
+    let cfg = s(flat, "audio.dir");
     if !cfg.is_empty() {
         return PathBuf::from(cfg);
     }

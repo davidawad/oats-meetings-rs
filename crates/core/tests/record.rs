@@ -27,7 +27,7 @@ fn rig() -> Rig {
         machine: "default".into(),
     })
     .unwrap();
-    engine.set("audio.record_dir", &json!(dir.path().join("rec").to_str().unwrap()), "test").unwrap();
+    engine.set("audio.dir", &json!(dir.path().join("rec").to_str().unwrap()), "test").unwrap();
     engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
     Rig { dir, engine }
 }
