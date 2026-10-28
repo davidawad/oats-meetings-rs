@@ -226,7 +226,7 @@ fn control_max_line_boundary_and_live_change() {
     assert_eq!(c2.read_line().unwrap()["error"]["code"], "request_too_large");
     // Raise the limit through the engine; the open connection `c` picks it up on its next line.
     let r = c.call("config-set", p(&[("key", json!("control.max_line")), ("value", json!(4096))])).unwrap();
-    assert_eq!(r["ok"], true);
+    assert_eq!(r["ok"], true, "{r}");
     let mut big = vec![b'x'; 3000];
     big.push(b'\n');
     c.send_raw(&big).unwrap();
