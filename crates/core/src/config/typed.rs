@@ -105,7 +105,6 @@ pub struct Control {
     pub accept_backoff: Dur,
     pub accept_poll: Dur,
     pub client_timeout: Dur,
-    pub connect_retry: Dur,
     pub event_queue: u32,
     pub max_line: u64,
     pub socket: String,

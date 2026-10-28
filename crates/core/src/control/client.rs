@@ -107,14 +107,15 @@ impl Client {
     }
 }
 
-/// Connect, retrying until `timeout` (the engine may still be starting).
-pub fn connect_retry(runtime_dir: &Path, timeout: Duration) -> Result<Client> {
+/// Connect, retrying every `interval` (`control.connect_retry`) until `timeout` (the engine
+/// may still be starting).
+pub fn connect_retry(runtime_dir: &Path, timeout: Duration, interval: Duration) -> Result<Client> {
     let start = Instant::now();
     loop {
         match Client::connect(runtime_dir) {
             Ok(c) => return Ok(c),
             Err(e) if start.elapsed() > timeout => return Err(e),
-            Err(_) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => std::thread::sleep(interval),
         }
     }
 }

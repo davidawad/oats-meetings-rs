@@ -354,6 +354,93 @@ mod tests {
         }
     }
 
+    fn lit_for(path: &str, lit: &str) -> String {
+        let (table, leaf) = path.rsplit_once('.').unwrap();
+        format!("[{table}]\n{leaf} = {lit}\n")
+    }
+
+    /// Every integer key: both bounds resolve into the typed view; one past either bound, a
+    /// string, a float and a bool are all vetoed.
+    #[test]
+    fn every_int_key_accepts_its_bounds_and_vetoes_everything_else() {
+        let mut seen = 0;
+        for k in KEYS {
+            let Kind::Int { min, max } = k.kind else { continue };
+            seen += 1;
+            for v in [min, max] {
+                let r = with_user(&lit_for(k.path, &v.to_string())).unwrap_or_else(|e| panic!("{}={v}: {e}", k.path));
+                assert_eq!(r.flat[k.path], Value::from(v), "{}", k.path);
+                r.typed().unwrap_or_else(|e| panic!("{}={v}: {e}", k.path));
+            }
+            for v in [min - 1, max + 1] {
+                let e = with_user(&lit_for(k.path, &v.to_string())).unwrap_err();
+                assert_eq!(e.code, "invalid_value", "{}={v}", k.path);
+            }
+            for lit in ["\"7\"", "1.5", "true"] {
+                let e = with_user(&lit_for(k.path, lit)).unwrap_err();
+                assert!(matches!(e.code, "type_mismatch" | "invalid_value"), "{}={lit}: {}", k.path, e.code);
+            }
+            assert!(matches!(k.default, keys::Def::I(d) if (min..=max).contains(&d)), "{} default in range", k.path);
+        }
+        assert!(seen >= 6, "int keys present");
+    }
+
+    /// Every duration key: both bounds resolve; one millisecond outside either bound, bare
+    /// numbers, unknown units, fractions, negatives and the wrong type are all vetoed.
+    #[test]
+    fn every_duration_key_accepts_its_bounds_and_vetoes_everything_else() {
+        let mut seen = 0;
+        for k in KEYS {
+            let Kind::Duration { min_ms, max_ms } = k.kind else { continue };
+            seen += 1;
+            for ms in [min_ms, max_ms] {
+                let text = keys::format_duration_ms(ms);
+                let r = with_user(&lit_for(k.path, &format!("\"{text}\""))).unwrap_or_else(|e| panic!("{}={text}: {e}", k.path));
+                assert_eq!(r.flat[k.path], Value::String(text.clone()), "{}", k.path);
+                r.typed().unwrap_or_else(|e| panic!("{}={text}: {e}", k.path));
+            }
+            let mut outside = vec![format!("{}ms", max_ms + 1)];
+            if min_ms > 0 {
+                outside.push(format!("{}ms", min_ms - 1));
+            }
+            for text in outside.into_iter().chain(["15", "15x", "1.5s", "-1s", "", "s", "1 s"].map(String::from)) {
+                let e = with_user(&lit_for(k.path, &format!("\"{text}\""))).unwrap_err();
+                assert_eq!(e.code, "invalid_value", "{}={text:?}", k.path);
+            }
+            let e = with_user(&lit_for(k.path, "15")).unwrap_err();
+            assert_eq!(e.code, "type_mismatch", "{}", k.path);
+            assert!(matches!(k.default, keys::Def::D(d) if (min_ms..=max_ms).contains(&d)), "{} default in range", k.path);
+        }
+        assert!(seen >= 8, "duration keys present");
+    }
+
+    #[test]
+    fn duration_text_round_trips_and_units_are_exact() {
+        for (t, ms) in [("0s", 0), ("1ms", 1), ("999ms", 999), ("1s", 1000), ("90s", 90_000), ("2m", 120_000), ("1h", 3_600_000), ("30d", 2_592_000_000)] {
+            assert_eq!(keys::parse_duration_ms(t), Some(ms), "{t}");
+        }
+        for ms in [0, 1, 999, 1000, 1500, 60_000, 90_000, 3_600_000, 86_400_000, 2_592_000_000] {
+            assert_eq!(keys::parse_duration_ms(&keys::format_duration_ms(ms)), Some(ms), "{ms}");
+        }
+        assert_eq!(keys::format_duration_ms(120_000), "2m");
+        assert_eq!(keys::format_duration_ms(1500), "1500ms");
+        assert_eq!(keys::parse_duration_ms("99999999999999999999d"), None);
+    }
+
+    #[test]
+    fn equal_durations_written_differently_are_the_same_typed_config() {
+        let a = with_user("[ics]\ntimeout = \"60s\"\n").unwrap().typed().unwrap();
+        let b = with_user("[ics]\ntimeout = \"1m\"\n").unwrap().typed().unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn kb_chunk_bounds_must_be_ordered() {
+        assert!(with_user("[kb]\nmin_chunk = 100\nmax_chunk = 100\n").is_ok());
+        let e = with_user("[kb]\nmin_chunk = 101\nmax_chunk = 100\n").unwrap_err();
+        assert_eq!(e.code, "invalid_combination");
+    }
+
     #[test]
     fn every_non_choice_key_takes_a_string() {
         for k in KEYS.iter().filter(|k| k.kind == Kind::Str) {

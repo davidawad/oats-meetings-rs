@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use super::engine::Engine;
 use super::half::Half;
 use super::subsystem::Subsystem;
-use super::{paths, MAX_LINE, PROTOCOL};
+use super::{paths, PROTOCOL};
 use crate::action::{self, Action, EVENTS};
 use crate::config::typed::Config;
 use crate::config::{ConfigError, Result, SCHEMA_VERSION};
@@ -217,15 +217,20 @@ impl Subsystem for ControlSubsystem {
 /// Bind the socket, take the single-instance lock (while `app.single_instance`), and start the
 /// accept and watcher threads.
 pub fn serve(engine: Arc<Engine>, runtime_dir: &Path) -> Result<ServerHandle> {
+    // OATS_RELOAD_POLL_MS overrides `config.poll_interval` (read live) for the watcher.
     let poll = std::env::var("OATS_RELOAD_POLL_MS")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(250u64);
-    serve_with_poll(engine, runtime_dir, Duration::from_millis(poll))
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis);
+    serve_inner(engine, runtime_dir, poll)
 }
 
 /// `poll` is how often the watcher checks the user config file for hot reload.
 pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) -> Result<ServerHandle> {
+    serve_inner(engine, runtime_dir, Some(poll))
+}
+
+fn serve_inner(engine: Arc<Engine>, runtime_dir: &Path, poll: Option<Duration>) -> Result<ServerHandle> {
     std::fs::create_dir_all(runtime_dir).map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
     let cfg = engine.snapshot();
     let held = if cfg.config.app.single_instance {
@@ -279,9 +284,9 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
                             });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
+                        thread::sleep(eng.snapshot().config.control.accept_poll.as_duration());
                     }
-                    Err(_) => thread::sleep(Duration::from_millis(50)),
+                    Err(_) => thread::sleep(eng.snapshot().config.control.accept_backoff.as_duration()),
                 }
             }
             #[cfg(unix)]
@@ -294,7 +299,7 @@ pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) 
         .name("oats-watch".into())
         .spawn(move || {
             while !eng.is_shutdown() {
-                thread::sleep(poll);
+                thread::sleep(poll.unwrap_or_else(|| eng.snapshot().config.config.poll_interval.as_duration()));
                 // config.hot_reload is read live: turning it off stops file-driven reloads. A
                 // file that was rejected is not retried until its content changes.
                 if eng.hot_reload_enabled() && eng.file_needs_reload() {
@@ -354,15 +359,21 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
     let mut buf: Vec<u8> = Vec::new();
     loop {
         buf.clear();
-        let n = match reader.by_ref().take(MAX_LINE + 1).read_until(b'\n', &mut buf) {
+        // control.max_line is read per request, so a reload applies to open connections.
+        let max_line = engine.snapshot().config.control.max_line;
+        let n = match reader.by_ref().take(max_line + 1).read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
-        if n as u64 > MAX_LINE && buf.last() != Some(&b'\n') {
+        if n as u64 > max_line && buf.last() != Some(&b'\n') {
             // Discard the rest of the line (bounded) so the error line is not lost to a reset
             // from unread data, then resync on the next line; give up on an endless line.
             let resynced = drain_line(&mut reader);
-            let _ = conn.send(&err_envelope(&Value::Null, "request_too_large", "request line exceeds 1 MiB"));
+            let _ = conn.send(&err_envelope(
+                &Value::Null,
+                "request_too_large",
+                &format!("request line exceeds control.max_line ({max_line} bytes)"),
+            ));
             if resynced {
                 continue;
             }
@@ -443,7 +454,7 @@ fn subscribe(engine: &Arc<Engine>, conn: &Arc<Conn>, id: &Value, topics: Vec<Str
             &format!("unknown topic '{bad}'; known: {}", EVENTS.join(", ")),
         ));
     }
-    let rx = engine.bus.subscribe(topics.clone());
+    let rx = engine.bus.subscribe_with(topics.clone(), engine.snapshot().config.control.event_queue as usize);
     let subscribed = if topics.is_empty() { json!(EVENTS) } else { json!(topics) };
     if conn.send(&ok_envelope(id, json!({"subscribed": subscribed}))).is_err() {
         return None;

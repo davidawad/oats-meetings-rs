@@ -7,8 +7,6 @@ use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
-const QUEUE: usize = 256;
-
 struct Sub {
     topics: Vec<String>,
     tx: SyncSender<String>,
@@ -23,7 +21,13 @@ pub struct Bus {
 impl Bus {
     /// Empty `topics` means every topic.
     pub fn subscribe(&self, topics: Vec<String>) -> Receiver<String> {
-        let (tx, rx) = sync_channel(QUEUE);
+        let cap = crate::config::keys::default_int("control.event_queue") as usize;
+        self.subscribe_with(topics, cap)
+    }
+
+    /// Like `subscribe`, with the queue length (`control.event_queue`) given.
+    pub fn subscribe_with(&self, topics: Vec<String>, cap: usize) -> Receiver<String> {
+        let (tx, rx) = sync_channel(cap);
         self.subs.lock().expect("bus lock").push(Sub { topics, tx });
         rx
     }

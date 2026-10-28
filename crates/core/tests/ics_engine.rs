@@ -139,7 +139,7 @@ impl Rig {
 
     /// Network on, short timeout: for tests that talk to the local server.
     fn net() -> Rig {
-        Self::with_config("[network]\nallow = true\n[ics]\ntimeout_secs = \"2\"\n")
+        Self::with_config("[network]\nallow = true\n[ics]\ntimeout = \"2s\"\n")
     }
 
     fn with_config(toml: &str) -> Rig {
@@ -345,11 +345,11 @@ fn events_window_arguments() {
     assert_eq!(a["from"], "2026-03-02T00:00:00Z");
     // No `to`: from + ics.window_days.
     assert_eq!(e(Some("2026-03-01T00:00:00Z"), None).unwrap()["to"], "2026-03-08T00:00:00Z");
-    r.set("ics.window_days", json!("30"));
+    r.set("ics.window_days", json!(30));
     let w = e(Some("2026-03-01T00:00:00Z"), None).unwrap();
     assert_eq!(w["to"], "2026-03-31T00:00:00Z");
     assert_eq!(w["events"].as_array().unwrap().len(), 4); // Mar 2, 9, 23 (moved), 30
-    r.set("ics.window_days", json!("1"));
+    r.set("ics.window_days", json!(1));
     assert_eq!(e(Some("2026-03-02T00:00:00Z"), None).unwrap()["events"].as_array().unwrap().len(), 1);
     // No `from`: starts now, so the 2026 fixture series is behind us or ahead: either way no panic.
     e(None, None).unwrap();
@@ -473,7 +473,7 @@ fn secret_backend_choice_resolves_header_references() {
     }));
     std::env::set_var("OATS_SECRET_ICS_BACKENDS", "tok-from-env");
     for backend in ["env", "keyring", "env-then-keyring"] {
-        let r = Rig::with_config(&format!("[network]\nallow = true\n[secrets]\nbackend = \"{backend}\"\n[ics]\ntimeout_secs = \"2\"\n"));
+        let r = Rig::with_config(&format!("[network]\nallow = true\n[secrets]\nbackend = \"{backend}\"\n[ics]\ntimeout = \"2s\"\n"));
         r.add_full("s", &h.url("/s.ics"), None, None, Some("X-Token: secret:ics/backends")).unwrap();
         let res = r.refresh(Some("s"));
         if backend == "keyring" {
@@ -515,7 +515,7 @@ fn webcal_scheme_choice_http_and_https() {
     let body = fixture("lf-only.ics");
     let h = Http::start(Arc::new(move |_, _| Resp::ok(&body)));
     for scheme in ["http", "https"] {
-        let r = Rig::with_config(&format!("[network]\nallow = true\n[ics]\nwebcal_scheme = \"{scheme}\"\ntimeout_secs = \"1\"\n"));
+        let r = Rig::with_config(&format!("[network]\nallow = true\n[ics]\nwebcal_scheme = \"{scheme}\"\ntimeout = \"1s\"\n"));
         r.add("w", &format!("webcal://127.0.0.1:{}/a.ics", h.port)).unwrap();
         let res = r.refresh(Some("w"));
         if scheme == "http" {
@@ -570,7 +570,7 @@ fn http_failures_have_stable_codes() {
         "/slow" => Resp { delay: Duration::from_secs(4), ..Resp::ok(&good) },
         _ => Resp::ok(&good),
     }));
-    let r = Rig::with_config("[network]\nallow = true\n[ics]\ntimeout_secs = \"1\"\nmax_bytes = \"500\"\n");
+    let r = Rig::with_config("[network]\nallow = true\n[ics]\ntimeout = \"1s\"\nmax_bytes = 500\n");
     for (path, want) in [
         ("/404", "http_status"),
         ("/500", "http_status"),
@@ -602,7 +602,7 @@ fn stale_on_error_serves_the_last_good_cache_or_fails_loudly() {
         let up = Arc::new(AtomicBool::new(true));
         let (u2, body) = (Arc::clone(&up), fixture("lf-only.ics"));
         let h = Http::start(Arc::new(move |_, _| if u2.load(Ordering::SeqCst) { Resp::ok(&body) } else { Resp::status(503) }));
-        let r = Rig::with_config(&format!("[network]\nallow = true\n[ics]\nstale_on_error = {stale}\ntimeout_secs = \"2\"\n"));
+        let r = Rig::with_config(&format!("[network]\nallow = true\n[ics]\nstale_on_error = {stale}\ntimeout = \"2s\"\n"));
         r.add("s", &h.url("/s.ics")).unwrap();
         r.refresh(Some("s")).unwrap();
         up.store(false, Ordering::SeqCst);
@@ -712,7 +712,7 @@ fn max_occurrences_choice() {
     let r = Rig::new();
     r.add("l", &file_url("london-bst-end.ics")).unwrap();
     r.refresh(None).unwrap();
-    for (cap, want) in [("2", 2), ("500", 6)] {
+    for (cap, want) in [(1, 1), (2, 2), (500, 6)] {
         r.set("ics.max_occurrences", json!(cap));
         assert_eq!(r.events("2026-10-01", "2026-12-01")["events"].as_array().unwrap().len(), want, "{cap}");
     }
@@ -723,10 +723,6 @@ fn a_bad_ics_value_vetoes_the_change_and_keeps_the_running_config() {
     let r = Rig::new();
     r.add("keep", "https://example.invalid/a.ics").unwrap();
     for (key, bad) in [
-        ("ics.timeout_secs", "soon"),
-        ("ics.max_bytes", "-1"),
-        ("ics.default_refresh_secs", "1.5"),
-        ("ics.window_days", ""),
         ("ics.default_tz", "Mars/Base"),
         ("ics.feeds", "not json"),
         ("ics.feeds", r#"[{"name":"x","url":"ftp://h/a.ics"}]"#),
@@ -790,8 +786,8 @@ fn tick_honours_each_feeds_interval() {
 
 #[test]
 fn tick_default_interval_zero_means_manual_only() {
-    for (secs, want) in [("0", 0usize), ("900", 1)] {
-        let r = Rig::with_config(&format!("[ics]\ndefault_refresh_secs = \"{secs}\"\n"));
+    for (secs, want) in [("0s", 0usize), ("15m", 1), ("900s", 1)] {
+        let r = Rig::with_config(&format!("[ics]\ndefault_refresh = \"{secs}\"\n"));
         r.add("a", &file_url("lf-only.ics")).unwrap();
         assert_eq!(oats_core::ics::tick(&r.engine, 5_000).len(), want, "{secs}");
     }

@@ -73,7 +73,10 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut runtime_dir = None;
     let mut socket = None;
     let mut count = None;
-    let mut timeout_ms = 10_000;
+    let mut timeout_ms = u64::try_from(
+        oats_core::config::keys::default_duration("control.client_timeout").as_millis(),
+    )
+    .unwrap_or(u64::MAX);
     let mut words: Vec<String> = vec![];
     let mut flags: Vec<(String, String)> = vec![];
     let mut topics: Vec<String> = vec![];

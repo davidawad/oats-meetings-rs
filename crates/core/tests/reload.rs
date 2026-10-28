@@ -9,7 +9,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
 
-use oats_core::config::keys::{Kind, Reload, KEYS};
+use oats_core::config::keys::{self, Kind, Reload, KEYS};
 use oats_core::config::resolve::{defaults_flat, nest};
 use oats_core::config::typed::Config;
 use oats_core::control::client::Client;
@@ -69,6 +69,11 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
     match k.kind {
         Kind::Bool => vec![json!(true), json!(false)],
         Kind::Enum(vs) => vs.iter().map(|v| json!(v)).collect(),
+        // Both ends of the allowed range: the boundaries are the interesting values.
+        Kind::Int { min, max } => vec![json!(min), json!(max)],
+        Kind::Duration { min_ms, max_ms } => {
+            vec![json!(keys::format_duration_ms(min_ms)), json!(keys::format_duration_ms(max_ms))]
+        }
         Kind::Str if k.path == "control.socket" => vec![json!(dir.join("alt.sock").to_str().unwrap()), json!("")],
         Kind::Str if k.path == "llm.api_key_ref" => vec![json!("secret:llm/other"), json!("secret:ns/x")],
         Kind::Str if k.path.ends_with("base_url") => vec![json!("http://127.0.0.1:9"), json!("")],
@@ -79,7 +84,6 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         ],
         Kind::Str if matches!(k.path, "stt.live.chunk_secs" | "stt.local.threads" | "stt.cloud.timeout_secs") => vec![json!("11"), json!("22")],
         Kind::Str if k.path == "ics.default_tz" => vec![json!("Europe/Paris"), json!("Asia/Tokyo")],
-        Kind::Str if k.path.starts_with("ics.") && k.path != "ics.cache_dir" => vec![json!("11"), json!("22")],
         Kind::Str => vec![json!("sample-x"), json!("sample-y")],
     }
 }

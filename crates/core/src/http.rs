@@ -86,6 +86,24 @@ mod tests {
         }
     }
 
+    /// The caller's timeout is the whole-request limit: a server that accepts and never answers
+    /// fails in about that long, whether the timeout is llm.timeout or kb.timeout.
+    #[test]
+    fn timeout_is_the_callers() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/x", l.local_addr().unwrap());
+        let hold = std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            std::thread::sleep(Duration::from_secs(3));
+            drop(s);
+        });
+        let t = std::time::Instant::now();
+        let e = post_json(&url, None, &serde_json::json!({}), Duration::from_secs(1)).unwrap_err();
+        assert_eq!(e.code, "backend_unreachable");
+        assert!(t.elapsed() < Duration::from_millis(2500), "{:?}", t.elapsed());
+        hold.join().unwrap();
+    }
+
     #[test]
     fn join_handles_slashes() {
         assert_eq!(join("http://a/b/", "/c"), "http://a/b/c");

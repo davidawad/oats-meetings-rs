@@ -213,14 +213,6 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "control.connect_retry",
-        kind: Kind::Duration { min_ms: MS, max_ms: 10 * SEC },
-        default: Def::D(25 * MS),
-        doc: "Pause between oats-ctl connection attempts while the engine starts.",
-        ui: false,
-        reload: Reload::Live,
-    },
-    Key {
         path: "app.menubar",
         kind: Kind::Bool,
         default: Def::B(false),
