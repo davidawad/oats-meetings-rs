@@ -251,7 +251,7 @@ pub const KEYS: &[Key] = &[
     },
     Key {
         path: "sessions.max_id_len",
-        kind: Kind::Int { min: 8, max: 255 },
+        kind: Kind::Int { min: 32, max: 255 },
         default: Def::I(200),
         doc: "Longest session id (it becomes a directory name).",
         ui: false,
@@ -259,7 +259,7 @@ pub const KEYS: &[Key] = &[
     },
     Key {
         path: "secrets.max_key_len",
-        kind: Kind::Int { min: 8, max: 512 },
+        kind: Kind::Int { min: 16, max: 512 },
         default: Def::I(128),
         doc: "Longest secret key (namespace/name).",
         ui: false,

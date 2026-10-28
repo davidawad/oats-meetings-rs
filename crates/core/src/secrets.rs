@@ -355,7 +355,7 @@ mod tests {
     /// secrets.max_key_len at its boundary, for the check used by actions and references.
     #[test]
     fn key_length_cap_boundary() {
-        for max in [8usize, 128, 512] {
+        for max in [16usize, 128, 512] {
             let at = format!("ns/{}", "k".repeat(max - 3));
             assert_eq!(at.len(), max);
             check_len(&at, max).unwrap();
