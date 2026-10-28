@@ -28,7 +28,7 @@ done
 # shellcheck disable=SC2086
 for out in $(nix "${nixf[@]}" path-info -r $roots | sort -u); do
   # The host libc must stay the host libc: nix glibc/gcc in LD_LIBRARY_PATH breaks every host binary.
-  case "$out" in *-glibc-*|*-gcc-*|*-libgcc*|*-binutils*|*-bash-*) continue ;; esac
+  case "$out" in *-glibc-*|*-gcc-*|*-libgcc*|*-binutils*|*-bash-*|*-ncurses-*|*-libffi-*|*-libxml2-*|*-libedit-*) continue ;; esac
   [ -d "$out/bin" ] && paths="$paths:$out/bin"
   [ -d "$out/lib/pkgconfig" ] && pc="$pc:$out/lib/pkgconfig"
   [ -d "$out/share/pkgconfig" ] && pc="$pc:$out/share/pkgconfig"
@@ -38,3 +38,11 @@ export PATH="${PATH}${paths}"
 export PKG_CONFIG_PATH="${pc#:}"
 export LD_LIBRARY_PATH="${ld#:}"
 export RUSTFLAGS="${RUSTFLAGS:-} $(echo "${ld#:}" | tr ':' '\n' | sed 's/^/-L native=/' | tr '\n' ' ')"
+# bindgen (whisper-rs-sys) must load the HOST libclang: a nix one drags in nix's glibc, which cannot
+# live in the same process as the host libc.
+for d in /usr/lib/llvm-*/lib; do
+  if ls "$d"/libclang-*.so* > /dev/null 2>&1; then
+    export LIBCLANG_PATH="$d"
+  fi
+done
+true

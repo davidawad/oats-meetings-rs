@@ -3,37 +3,106 @@
     "menubar": false,
     "single_instance": true
   },
+  "audio": {
+    "backend": "auto",
+    "dir": "",
+    "layout": "split",
+    "mic": {
+      "device": "",
+      "enabled": true
+    },
+    "system": {
+      "device": "",
+      "enabled": true
+    }
+  },
   "config": {
     "hot_reload": true
   },
   "control": {
     "socket": ""
   },
+  "ics": {
+    "all_day": "include",
+    "allow_file": true,
+    "cache_dir": "",
+    "cancelled": "hide",
+    "default_refresh_secs": "900",
+    "default_tz": "UTC",
+    "enabled": true,
+    "feeds": "[]",
+    "max_bytes": "5242880",
+    "max_occurrences": "500",
+    "on_bad_event": "error",
+    "stale_on_error": true,
+    "timeout_secs": "15",
+    "unknown_tz": "error",
+    "webcal_scheme": "https",
+    "window_days": "7"
+  },
+  "kb": {
+    "base_url": "",
+    "dir": "",
+    "embedder": "hash",
+    "model": "nomic-embed-text"
+  },
   "license": {
     "holder": "",
     "spdx": "LicenseRef-Undecided"
   },
   "llm": {
-    "backend": "ollama"
+    "api_key_ref": "secret:llm/api-key",
+    "backend": "ollama",
+    "base_url": "",
+    "model": "llama3.1"
   },
   "network": {
     "allow": false
+  },
+  "notes": {
+    "enforce_headings": true
   },
   "privacy": {
     "hide_from_capture": true,
     "hide_method": "none"
   },
+  "secrets": {
+    "backend": "env-then-keyring",
+    "env_prefix": "OATS_SECRET_",
+    "keyring_service": "oats-meetings-rs"
+  },
   "sessions": {
     "confirm_delete": true,
+    "delete_mode": "trash",
     "root": ""
   },
   "stt": {
     "backend": "local",
     "cloud": {
-      "adapter": "none"
+      "adapter": "none",
+      "key": "secret:stt/cloud",
+      "model": "whisper-1",
+      "timeout_secs": "60",
+      "url": "https://api.openai.com/v1"
+    },
+    "final": {
+      "enabled": true
+    },
+    "language": "en",
+    "live": {
+      "chunk_secs": "4",
+      "enabled": true
     },
     "local": {
-      "model": "base.en"
-    }
+      "model": "base.en",
+      "model_path": "",
+      "models_dir": "",
+      "threads": "4"
+    },
+    "speaker_them": "remote_1",
+    "speaker_you": "you"
+  },
+  "templates": {
+    "dir": ""
   }
 }

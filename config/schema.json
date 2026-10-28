@@ -10,13 +10,92 @@
           "default": false,
           "description": "Show a menubar / tray item.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "single_instance": {
           "default": true,
           "description": "Refuse to start a second engine on the same control socket.",
           "type": "boolean",
+          "x-reload": "lock",
           "x-ui": true
+        }
+      },
+      "type": "object"
+    },
+    "audio": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "default": "auto",
+          "description": "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).",
+          "enum": [
+            "auto",
+            "pulse",
+            "pipewire",
+            "cpal"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "dir": {
+          "default": "",
+          "description": "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "layout": {
+          "default": "split",
+          "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",
+          "enum": [
+            "split",
+            "mix"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "mic": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "default": "",
+              "description": "Microphone device id (see `ctl devices list`); empty means the default mic.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": true,
+              "description": "Record the microphone.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "system": {
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "default": "",
+              "description": "System-audio loopback device id (see `ctl devices list`); empty means the default loopback.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": true,
+              "description": "Record system audio (what the machine plays).",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
         }
       },
       "type": "object"
@@ -28,6 +107,7 @@
           "default": true,
           "description": "Watch the user config file and reload on change.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -40,7 +120,185 @@
           "default": "",
           "description": "Control socket path; empty means the per-user runtime dir.",
           "type": "string",
+          "x-reload": "rebind",
           "x-ui": false
+        }
+      },
+      "type": "object"
+    },
+    "ics": {
+      "additionalProperties": false,
+      "properties": {
+        "all_day": {
+          "default": "include",
+          "description": "Whether all-day events appear in ics-events.",
+          "enum": [
+            "include",
+            "exclude"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "allow_file": {
+          "default": true,
+          "description": "Allow file:// feeds (local, not gated by network.allow).",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "cache_dir": {
+          "default": "",
+          "description": "Directory for cached feeds; empty means ics/ beside the sessions dir.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "cancelled": {
+          "default": "hide",
+          "description": "Whether STATUS:CANCELLED events appear in ics-events.",
+          "enum": [
+            "hide",
+            "show"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "default_refresh_secs": {
+          "default": "900",
+          "description": "Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "default_tz": {
+          "default": "UTC",
+          "description": "IANA zone for floating times and for the midnight bounds of all-day events.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "enabled": {
+          "default": true,
+          "description": "Master switch for refreshing feeds (manual and scheduled). Cached events stay readable.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "feeds": {
+          "default": "[]",
+          "description": "JSON array of feeds: {name, url, enabled, refresh_secs, header}. Edit with ics-add / ics-remove.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "max_bytes": {
+          "default": "5242880",
+          "description": "Largest feed body accepted, in bytes.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "max_occurrences": {
+          "default": "500",
+          "description": "Most occurrences expanded per recurring event per query.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "on_bad_event": {
+          "default": "error",
+          "description": "A malformed event fails the whole feed (error) or is dropped and counted (skip).",
+          "enum": [
+            "error",
+            "skip"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "stale_on_error": {
+          "default": true,
+          "description": "When a refresh fails, keep serving the last good cached copy.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "timeout_secs": {
+          "default": "15",
+          "description": "Whole-request timeout for a feed fetch, in seconds.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "unknown_tz": {
+          "default": "error",
+          "description": "An unknown TZID fails the event (error) or falls back to ics.default_tz.",
+          "enum": [
+            "error",
+            "default_tz"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "webcal_scheme": {
+          "default": "https",
+          "description": "Scheme webcal:// URLs are fetched with.",
+          "enum": [
+            "https",
+            "http"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "window_days": {
+          "default": "7",
+          "description": "Default length of the ics-events window in days when no end is given.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
+    "kb": {
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "default": "",
+          "description": "Embedding endpoint base URL for kb.embedder ollama / openai-compatible.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "dir": {
+          "default": "",
+          "description": "Knowledge-base folder of .md/.txt files; empty means <data dir>/kb.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "embedder": {
+          "default": "hash",
+          "description": "KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).",
+          "enum": [
+            "hash",
+            "ollama",
+            "openai-compatible"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "model": {
+          "default": "nomic-embed-text",
+          "description": "Embedding model name for the ollama / openai-compatible embedders.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"
@@ -52,12 +310,14 @@
           "default": "",
           "description": "Licence holder metadata (placeholder; no licence chosen).",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         },
         "spdx": {
           "default": "LicenseRef-Undecided",
           "description": "SPDX expression for packaging metadata (placeholder).",
           "type": "string",
+          "x-reload": "live",
           "x-ui": false
         }
       },
@@ -66,6 +326,13 @@
     "llm": {
       "additionalProperties": false,
       "properties": {
+        "api_key_ref": {
+          "default": "secret:llm/api-key",
+          "description": "Reference (secret:<namespace>/<name>) to the LLM API key in the secrets backend. The key itself is never in config; store it with secret-set.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "backend": {
           "default": "ollama",
           "description": "Notes-generation LLM backend.",
@@ -75,6 +342,21 @@
             "openai-compatible"
           ],
           "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "base_url": {
+          "default": "",
+          "description": "LLM endpoint base URL; empty means the backend default (required for openai-compatible).",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "model": {
+          "default": "llama3.1",
+          "description": "Model name sent to the LLM backend.",
+          "type": "string",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -87,6 +369,20 @@
           "default": false,
           "description": "Allow outward network calls (cloud STT / LLM). Off means such backends are denied.",
           "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
+    "notes": {
+      "additionalProperties": false,
+      "properties": {
+        "enforce_headings": {
+          "default": true,
+          "description": "Reject generated notes that lack a '## ' heading the template's prompt demands.",
+          "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -99,6 +395,7 @@
           "default": true,
           "description": "Hide the app window from screen capture.",
           "type": "boolean",
+          "x-reload": "live",
           "x-ui": true
         },
         "hide_method": {
@@ -110,6 +407,39 @@
             "display_affinity"
           ],
           "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        }
+      },
+      "type": "object"
+    },
+    "secrets": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "default": "env-then-keyring",
+          "description": "Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.",
+          "enum": [
+            "env",
+            "keyring",
+            "env-then-keyring"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "env_prefix": {
+          "default": "OATS_SECRET_",
+          "description": "Prefix of the environment variable holding a secret: secret:ics/work reads OATS_SECRET_ICS_WORK.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "keyring_service": {
+          "default": "oats-meetings-rs",
+          "description": "Service name secrets are filed under in the OS keychain.",
+          "type": "string",
+          "x-reload": "live",
           "x-ui": false
         }
       },
@@ -122,12 +452,25 @@
           "default": true,
           "description": "Require confirm=true to delete a session.",
           "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "delete_mode": {
+          "default": "trash",
+          "description": "Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.",
+          "enum": [
+            "trash",
+            "remove"
+          ],
+          "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "root": {
           "default": "",
           "description": "Session store directory (OpenOats layout); empty means the per-user data dir.",
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         }
       },
@@ -144,6 +487,7 @@
             "cloud"
           ],
           "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "cloud": {
@@ -157,6 +501,75 @@
                 "openai-compatible"
               ],
               "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "key": {
+              "default": "secret:stt/cloud",
+              "description": "Secret reference for the cloud STT API key (never the key itself); see the secrets module.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "model": {
+              "default": "whisper-1",
+              "description": "Model name sent to the cloud STT service.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "timeout_secs": {
+              "default": "60",
+              "description": "Whole-request timeout for one cloud transcription, in seconds.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "url": {
+              "default": "https://api.openai.com/v1",
+              "description": "Base URL of the OpenAI-compatible transcription API.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "final": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Re-transcribe the whole recording when it stops and write transcript.final.jsonl.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "language": {
+          "default": "en",
+          "description": "Spoken language code passed to the recogniser.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "live": {
+          "additionalProperties": false,
+          "properties": {
+            "chunk_secs": {
+              "default": "4",
+              "description": "Seconds of audio per live transcription window.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": true,
+              "description": "Transcribe while recording and write transcript.live.jsonl.",
+              "type": "boolean",
+              "x-reload": "live",
               "x-ui": true
             }
           },
@@ -169,10 +582,59 @@
               "default": "base.en",
               "description": "Local ASR model name.",
               "type": "string",
+              "x-reload": "live",
               "x-ui": true
+            },
+            "model_path": {
+              "default": "",
+              "description": "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "models_dir": {
+              "default": "",
+              "description": "Directory holding local model files; empty means models/ beside the sessions dir.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "threads": {
+              "default": "4",
+              "description": "CPU threads for local transcription.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": false
             }
           },
           "type": "object"
+        },
+        "speaker_them": {
+          "default": "remote_1",
+          "description": "Speaker id written for the system-audio (them) channel.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "speaker_you": {
+          "default": "you",
+          "description": "Speaker id written for the microphone (you) channel.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        }
+      },
+      "type": "object"
+    },
+    "templates": {
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "default": "",
+          "description": "Folder of note-template TOML files; empty means <config dir>/templates.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"

@@ -44,15 +44,18 @@ fn toml_lit(v: &Value) -> String {
 }
 
 pub fn defaults_toml() -> String {
-    let mut out = format!("# {MARKER}\n");
-    let mut last_table = String::new();
+    // One header per table, parents before children, whatever order the key paths sort in.
+    let mut tables: std::collections::BTreeMap<&str, Vec<(&str, &super::keys::Key)>> = std::collections::BTreeMap::new();
     for k in sorted_keys() {
         let (table, leaf) = k.path.rsplit_once('.').expect("keys are dotted");
-        if table != last_table {
-            out.push_str(&format!("\n[{table}]\n"));
-            last_table = table.to_string();
+        tables.entry(table).or_default().push((leaf, k));
+    }
+    let mut out = format!("# {MARKER}\n");
+    for (table, leaves) in tables {
+        out.push_str(&format!("\n[{table}]\n"));
+        for (leaf, k) in leaves {
+            out.push_str(&format!("# {}\n{leaf} = {}\n", k.doc, toml_lit(&k.default.to_json())));
         }
-        out.push_str(&format!("# {}\n{leaf} = {}\n", k.doc, toml_lit(&k.default.to_json())));
     }
     out
 }
@@ -88,6 +91,7 @@ pub fn schema_json() -> String {
         leaf.insert("default".into(), k.default.to_json());
         leaf.insert("description".into(), json!(k.doc));
         leaf.insert("x-ui".into(), json!(k.ui));
+        leaf.insert("x-reload".into(), json!(k.reload.as_str()));
         let mut cur = root
             .get_mut("properties")
             .and_then(Value::as_object_mut)
@@ -112,6 +116,14 @@ pub fn schema_json() -> String {
     s
 }
 
+/// Re-emit JSON text with every object's keys sorted (independent of serde_json's map type).
+fn resort(text: &str) -> String {
+    let v: Value = serde_json::from_str(text).expect("generated JSON parses");
+    let mut s = serde_json::to_string_pretty(&sorted(&v)).expect("serializable");
+    s.push('\n');
+    s
+}
+
 pub fn actions_json() -> String {
     let mut s = serde_json::to_string_pretty(&sorted(&crate::action::manifest_json())).expect("serializable");
     s.push('\n');
@@ -124,6 +136,7 @@ pub fn projections() -> Vec<(&'static str, String)> {
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
         ("actions.json", actions_json()),
+        ("template.schema.json", resort(&crate::templates::schema_json())),
     ]
 }
 

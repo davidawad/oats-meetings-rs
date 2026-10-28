@@ -15,6 +15,7 @@ use serde_json::{json, Map, Value};
 struct Parsed {
     json: bool,
     runtime_dir: Option<PathBuf>,
+    socket: Option<PathBuf>,
     count: Option<usize>,
     timeout_ms: u64,
     action: String,
@@ -57,7 +58,7 @@ fn absolutize(raw: &str) -> String {
 }
 
 fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
-    if wire == "session-import" && param == "from" {
+    if (wire == "session-import" && param == "from") || (wire == "stt-transcribe" && param == "path") {
         return Value::String(absolutize(raw));
     }
     let t = param_type(wire, param).replace(' ', "");
@@ -70,6 +71,7 @@ fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
 fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut json = false;
     let mut runtime_dir = None;
+    let mut socket = None;
     let mut count = None;
     let mut timeout_ms = 10_000;
     let mut words: Vec<String> = vec![];
@@ -80,13 +82,14 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         let a = args[i].as_str();
         match a {
             "--json" => json = true,
-            "--runtime-dir" | "--count" | "--timeout-ms" | "--topic" => {
+            "--runtime-dir" | "--socket" | "--count" | "--timeout-ms" | "--topic" => {
                 i += 1;
                 let Some(v) = args.get(i) else {
                     return usage(&format!("{a} needs a value"));
                 };
                 match a {
                     "--runtime-dir" => runtime_dir = Some(PathBuf::from(v)),
+                    "--socket" => socket = Some(PathBuf::from(v)),
                     "--count" => count = v.parse().ok(),
                     "--timeout-ms" => timeout_ms = v.parse().unwrap_or(timeout_ms),
                     _ => topics.push(v.clone()),
@@ -136,7 +139,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if !topics.is_empty() {
         params.insert("topics".into(), json!(topics));
     }
-    Ok(Parsed { json, runtime_dir, count, timeout_ms, action: wire, params })
+    Ok(Parsed { json, runtime_dir, socket, count, timeout_ms, action: wire, params })
 }
 
 pub fn run(args: &[String]) -> i32 {
@@ -167,7 +170,11 @@ pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
         }
     };
     let dir = p.runtime_dir.clone().unwrap_or_else(|| paths::runtime_dir(env));
-    let mut client = match Client::connect(&dir) {
+    let connected = match &p.socket {
+        Some(s) => Client::connect_socket(s),
+        None => Client::connect(&dir),
+    };
+    let mut client = match connected {
         Ok(c) => c,
         Err(e) => {
             if p.json {

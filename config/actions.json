@@ -123,6 +123,45 @@
       "status": "implemented"
     },
     {
+      "doc": "List audio capture devices (loopback and mic) for the selected backend.",
+      "effect": "read",
+      "name": "devices-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Start recording a session (system loopback + mic to one WAV).",
+      "effect": "control",
+      "name": "record-start",
+      "params": [
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "title",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Stop recording and save the session.",
+      "effect": "control",
+      "name": "record-stop",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Pause or resume recording.",
+      "effect": "control",
+      "name": "record-pause",
+      "params": [],
+      "status": "implemented"
+    },
+    {
       "doc": "Import sessions from an OpenOats sessions root or one session dir.",
       "effect": "write",
       "name": "session-import",
@@ -141,25 +180,167 @@
       "status": "implemented"
     },
     {
-      "doc": "Start recording a session.",
-      "effect": "control",
-      "name": "record-start",
-      "params": [],
-      "status": "planned"
+      "doc": "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.",
+      "effect": "write",
+      "name": "ics-add",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "url",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "refresh_secs",
+          "required": false,
+          "type": "Option<u64>"
+        },
+        {
+          "name": "header",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
     },
     {
-      "doc": "Stop recording.",
-      "effect": "control",
-      "name": "record-stop",
-      "params": [],
-      "status": "planned"
+      "doc": "Unsubscribe from a feed and drop its cache.",
+      "effect": "write",
+      "name": "ics-remove",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
     },
     {
-      "doc": "Pause or resume recording.",
-      "effect": "control",
-      "name": "record-pause",
+      "doc": "Subscribed feeds with cache and refresh state.",
+      "effect": "read",
+      "name": "ics-list",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
+    },
+    {
+      "doc": "Fetch one feed (or every enabled feed) now; gated by network.allow.",
+      "effect": "write",
+      "name": "ics-refresh",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Events from the cached feeds in a time window (RFC 3339 or YYYY-MM-DD), recurrences expanded.",
+      "effect": "read",
+      "name": "ics-events",
+      "params": [
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "feed",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Store a secret under key 'namespace/name' in the writable secrets backend (OS keychain). The value is never shown again.",
+      "effect": "write",
+      "name": "secret-set",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Delete a stored secret.",
+      "effect": "write",
+      "name": "secret-delete",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Whether a secret resolves in the configured backend (never returns the value).",
+      "effect": "read",
+      "name": "secret-has",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Transcribe a WAV file into a new session using the stt.* keys: stereo is you (left) / them (right), mono is one speaker (speaker=you|them).",
+      "effect": "write",
+      "name": "stt-transcribe",
+      "params": [
+        {
+          "name": "path",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "speaker",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Which STT backend is selected and whether it can run (model present, network, key); never shows the key.",
+      "effect": "read",
+      "name": "stt-status",
+      "params": [],
+      "status": "implemented"
     },
     {
       "doc": "List sessions, optionally in a time window (RFC 3339).",
@@ -278,7 +459,7 @@
       "status": "planned"
     },
     {
-      "doc": "Generate notes from a template.",
+      "doc": "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.",
       "effect": "write",
       "name": "notes-generate",
       "params": [
@@ -291,19 +472,55 @@
           "name": "template",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "dry_run",
+          "required": false,
+          "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "List note templates.",
       "effect": "read",
       "name": "template-list",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Search the knowledge base.",
+      "doc": "One note template.",
+      "effect": "read",
+      "name": "template-get",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Import an OpenOats templates.json into the templates folder.",
+      "effect": "write",
+      "name": "template-import",
+      "params": [
+        {
+          "name": "from",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Search the knowledge base (deterministic ranking).",
       "effect": "read",
       "name": "kb-search",
       "params": [
@@ -311,26 +528,35 @@
           "name": "query",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "Option<u64>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Rebuild the knowledge base index.",
       "effect": "write",
       "name": "kb-reindex",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     }
   ],
   "events": [
     "setting-changed",
     "window-changed",
     "config-reloaded",
+    "config-reload-failed",
     "recording-started",
+    "recording-paused",
+    "recording-stopped",
     "segment",
     "session-saved",
     "session-deleted",
+    "ics-updated",
     "quit"
   ],
   "schema_version": 1

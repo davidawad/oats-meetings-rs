@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
+use crate::config::typed::DeleteMode;
 use crate::config::{ConfigError, Result};
 
 pub const SCHEMA_VERSION: u64 = 1;
@@ -238,11 +239,38 @@ impl Store {
         Ok(summary(&l))
     }
 
-    /// Callers enforce the `--confirm` policy; this removes the session directory.
-    pub fn delete(&self, id: &str) -> Result<Value> {
+    /// Write `notes.md` into the session and record how it was made in `session.json`.
+    pub fn set_notes(&self, id: &str, notes: &str, template: &str, backend: &str, model: &str) -> Result<PathBuf> {
+        let mut l = self.find(id)?;
+        let path = l.dir.join("notes.md");
+        let tmp = l.dir.join(format!(".notes.md.tmp{}", std::process::id()));
+        std::fs::write(&tmp, notes)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| io(&path, e))?;
+        l.meta.insert("hasNotes".into(), json!(true));
+        l.meta.insert("notesTemplate".into(), json!(template));
+        l.meta.insert("notesBackend".into(), json!(backend));
+        l.meta.insert("notesModel".into(), json!(model));
+        l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+        write_meta(&l.dir, &l.meta)?;
+        Ok(path)
+    }
+
+    /// Callers enforce the `--confirm` policy. `Trash` moves the session directory to the OS
+    /// trash (recoverable); `Remove` deletes it for good.
+    pub fn delete(&self, id: &str, mode: DeleteMode) -> Result<Value> {
         let l = self.find(id)?;
-        std::fs::remove_dir_all(&l.dir).map_err(|e| io(&l.dir, e))?;
-        Ok(json!({"id": id, "deleted": true}))
+        match mode {
+            DeleteMode::Trash => trash::delete(&l.dir).map_err(|e| {
+                ConfigError::new("trash_failed", format!("{}: {e}", l.dir.display()))
+            })?,
+            DeleteMode::Remove => std::fs::remove_dir_all(&l.dir).map_err(|e| io(&l.dir, e))?,
+        }
+        let mode = match mode {
+            DeleteMode::Trash => "trash",
+            DeleteMode::Remove => "remove",
+        };
+        Ok(json!({"id": id, "deleted": true, "mode": mode}))
     }
 
     /// Import from an OpenOats sessions root, or a single session directory. All-or-nothing:
@@ -321,6 +349,70 @@ fn read_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// Writing sessions (the transcription engine and, later, the recorder).
+impl Store {
+    /// Make an empty session directory with its `session.json`; `exists` if the id is taken.
+    pub fn create(&self, id: &str, started_at: &str, title: &str, engine: &str) -> Result<PathBuf> {
+        check_id(id)?;
+        let dir = self.root.join(id);
+        if dir.exists() {
+            return Err(ConfigError::new("exists", format!("session '{id}' already exists")));
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
+        let mut meta = Map::new();
+        meta.insert("id".into(), json!(id));
+        meta.insert("startedAt".into(), json!(started_at));
+        meta.insert("title".into(), json!(title));
+        meta.insert("utteranceCount".into(), json!(0));
+        meta.insert("hasNotes".into(), json!(false));
+        meta.insert("engine".into(), json!(engine));
+        meta.insert("speakerNames".into(), json!({}));
+        meta.insert("schemaVersion".into(), json!(SCHEMA_VERSION));
+        write_meta(&dir, &meta)?;
+        Ok(dir)
+    }
+
+    fn transcript_path(&self, id: &str, kind: &str) -> Result<PathBuf> {
+        let l = self.find(id)?;
+        let file = TRANSCRIPTS.iter().find(|(k, _)| *k == kind).map(|(_, f)| *f).ok_or_else(|| {
+            ConfigError::new("invalid_argument", "transcript kind must be 'live' or 'final'")
+        })?;
+        Ok(l.dir.join(file))
+    }
+
+    /// Replace one transcript file (`live` or `final`) with `utterances`, one JSON object per line.
+    pub fn write_transcript(&self, id: &str, kind: &str, utterances: &[Value]) -> Result<()> {
+        let path = self.transcript_path(id, kind)?;
+        let mut text = String::new();
+        for u in utterances {
+            text.push_str(&u.to_string());
+            text.push('\n');
+        }
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        std::fs::write(&tmp, text)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| io(&path, e))
+    }
+
+    /// Append one utterance line to `live` or `final`.
+    pub fn append_utterance(&self, id: &str, kind: &str, utterance: &Value) -> Result<()> {
+        use std::io::Write;
+        let path = self.transcript_path(id, kind)?;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| io(&path, e))?;
+        writeln!(f, "{utterance}").map_err(|e| io(&path, e))
+    }
+
+    /// Stamp `endedAt` and the utterance count (of the transcript the app reads first).
+    pub fn finish(&self, id: &str, ended_at: &str) -> Result<Value> {
+        let mut l = self.find(id)?;
+        let (_, utterances) = transcript(&l.dir);
+        l.meta.insert("endedAt".into(), json!(ended_at));
+        l.meta.insert("utteranceCount".into(), json!(utterances.len()));
+        write_meta(&l.dir, &l.meta)?;
+        Ok(summary(&l))
+    }
 }
 
 #[cfg(test)]
@@ -405,7 +497,7 @@ mod tests {
         let g = s.get(id).unwrap();
         assert_eq!(g["metadata"]["engine"], "parakeet");
         assert_eq!(g["metadata"]["speakerNames"]["remote_1"], "Dana");
-        assert_eq!(s.delete(id).unwrap()["deleted"], true);
+        assert_eq!(s.delete(id, DeleteMode::Remove).unwrap()["deleted"], true);
         assert_eq!(s.get(id).unwrap_err().code, "not_found");
         assert_eq!(ids(&s.list(None, None).unwrap()), vec![fixture_ids()[1].clone()]);
     }
@@ -426,7 +518,7 @@ mod tests {
         let s = Store::new(d.path());
         for bad in ["../x", "a/b", "", ".hidden", "a\\b", "x y"] {
             assert_eq!(s.get(bad).unwrap_err().code, "invalid_argument", "{bad}");
-            assert_eq!(s.delete(bad).unwrap_err().code, "invalid_argument", "{bad}");
+            assert_eq!(s.delete(bad, DeleteMode::Remove).unwrap_err().code, "invalid_argument", "{bad}");
         }
         assert_eq!(s.get("nope").unwrap_err().code, "not_found");
     }
