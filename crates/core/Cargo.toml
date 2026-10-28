@@ -17,6 +17,7 @@ icalendar.workspace = true
 rrule.workspace = true
 chrono-tz.workspace = true
 ureq.workspace = true
+keyring.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -13,6 +13,7 @@ pub struct Config {
     pub llm: Llm,
     pub network: Network,
     pub privacy: Privacy,
+    pub secrets: Secrets,
     pub sessions: Sessions,
     pub stt: Stt,
 }
@@ -181,4 +182,20 @@ pub struct Ics {
     pub unknown_tz: IcsUnknownTz,
     pub webcal_scheme: IcsWebcalScheme,
     pub window_days: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SecretsBackend {
+    Env,
+    Keyring,
+    EnvThenKeyring,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Secrets {
+    pub backend: SecretsBackend,
+    pub env_prefix: String,
+    pub keyring_service: String,
 }

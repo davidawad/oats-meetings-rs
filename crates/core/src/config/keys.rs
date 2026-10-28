@@ -67,6 +67,7 @@ pub const ICS_ON_BAD_EVENT: &[&str] = &["error", "skip"];
 pub const ICS_UNKNOWN_TZ: &[&str] = &["error", "default_tz"];
 pub const ICS_ALL_DAY: &[&str] = &["include", "exclude"];
 pub const DELETE_MODES: &[&str] = &["trash", "remove"];
+pub const SECRETS_BACKENDS: &[&str] = &["env", "keyring", "env-then-keyring"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
@@ -276,6 +277,30 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Enum(HIDE_METHODS),
         default: Def::S("none"),
         doc: "How hiding is done; set per OS by the os axis.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.backend",
+        kind: Kind::Enum(SECRETS_BACKENDS),
+        default: Def::S("env-then-keyring"),
+        doc: "Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.env_prefix",
+        kind: Kind::Str,
+        default: Def::S("OATS_SECRET_"),
+        doc: "Prefix of the environment variable holding a secret: secret:ics/work reads OATS_SECRET_ICS_WORK.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "secrets.keyring_service",
+        kind: Kind::Str,
+        default: Def::S("oats-meetings-rs"),
+        doc: "Service name secrets are filed under in the OS keychain.",
         ui: false,
         reload: Reload::Live,
     },
