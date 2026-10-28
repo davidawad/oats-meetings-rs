@@ -10,8 +10,12 @@ if [ -n "${CROSS_TARGET:-}" ]; then
   # Metal shaders cannot be compiled off macOS: compile them at runtime for the check (feature forwarded by oats-ui).
   exec cargo check --locked --workspace --target "$CROSS_TARGET" --features "oats-ui/runtime_shaders"
 fi
-cargo build --workspace --locked
-cargo test --workspace --locked
+# Local ASR (whisper.cpp) is built and tested here; the model is fetched and checksummed, not committed.
+source "$(dirname "$0")/fetch-models.sh"
+cargo build --workspace --locked --features oats-core/whisper
+cargo test --workspace --locked --features oats-core/whisper
+# The same engine tests without the local backend compiled in (backend_unavailable branch).
+cargo test -p oats-core --locked --test stt_engine
 cargo run -q --locked -- --headless --version
 cargo build --locked -p oats-meetings-rs --no-default-features
 cargo run -q --locked --no-default-features -- --headless --version
