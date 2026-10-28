@@ -392,7 +392,7 @@ fn api_keys_cannot_live_in_the_config_file() {
 
 #[test]
 fn keyring_backend_is_used_when_selected() {
-    // No test secret store: the engine builds its own from secrets.source. In a sandbox the
+    // No test secret store: the engine builds its own from secrets.backend. In a sandbox the
     // keychain is empty or unavailable; both must surface as clear errors, never as a request.
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
     let dir = tempfile::tempdir().unwrap();
