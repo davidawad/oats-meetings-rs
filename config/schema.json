@@ -45,6 +45,128 @@
       },
       "type": "object"
     },
+    "ics": {
+      "additionalProperties": false,
+      "properties": {
+        "all_day": {
+          "default": "include",
+          "description": "Whether all-day events appear in ics-events.",
+          "enum": [
+            "include",
+            "exclude"
+          ],
+          "type": "string",
+          "x-ui": true
+        },
+        "allow_file": {
+          "default": true,
+          "description": "Allow file:// feeds (local, not gated by network.allow).",
+          "type": "boolean",
+          "x-ui": true
+        },
+        "cache_dir": {
+          "default": "",
+          "description": "Directory for cached feeds; empty means ics/ beside the sessions dir.",
+          "type": "string",
+          "x-ui": false
+        },
+        "cancelled": {
+          "default": "hide",
+          "description": "Whether STATUS:CANCELLED events appear in ics-events.",
+          "enum": [
+            "hide",
+            "show"
+          ],
+          "type": "string",
+          "x-ui": true
+        },
+        "default_refresh_secs": {
+          "default": "900",
+          "description": "Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.",
+          "type": "string",
+          "x-ui": true
+        },
+        "default_tz": {
+          "default": "UTC",
+          "description": "IANA zone for floating times and for the midnight bounds of all-day events.",
+          "type": "string",
+          "x-ui": true
+        },
+        "enabled": {
+          "default": true,
+          "description": "Master switch for refreshing feeds (manual and scheduled). Cached events stay readable.",
+          "type": "boolean",
+          "x-ui": true
+        },
+        "feeds": {
+          "default": "[]",
+          "description": "JSON array of feeds: {name, url, enabled, refresh_secs, header}. Edit with ics-add / ics-remove.",
+          "type": "string",
+          "x-ui": true
+        },
+        "max_bytes": {
+          "default": "5242880",
+          "description": "Largest feed body accepted, in bytes.",
+          "type": "string",
+          "x-ui": false
+        },
+        "max_occurrences": {
+          "default": "500",
+          "description": "Most occurrences expanded per recurring event per query.",
+          "type": "string",
+          "x-ui": false
+        },
+        "on_bad_event": {
+          "default": "error",
+          "description": "A malformed event fails the whole feed (error) or is dropped and counted (skip).",
+          "enum": [
+            "error",
+            "skip"
+          ],
+          "type": "string",
+          "x-ui": true
+        },
+        "stale_on_error": {
+          "default": true,
+          "description": "When a refresh fails, keep serving the last good cached copy.",
+          "type": "boolean",
+          "x-ui": true
+        },
+        "timeout_secs": {
+          "default": "15",
+          "description": "Whole-request timeout for a feed fetch, in seconds.",
+          "type": "string",
+          "x-ui": false
+        },
+        "unknown_tz": {
+          "default": "error",
+          "description": "An unknown TZID fails the event (error) or falls back to ics.default_tz.",
+          "enum": [
+            "error",
+            "default_tz"
+          ],
+          "type": "string",
+          "x-ui": true
+        },
+        "webcal_scheme": {
+          "default": "https",
+          "description": "Scheme webcal:// URLs are fetched with.",
+          "enum": [
+            "https",
+            "http"
+          ],
+          "type": "string",
+          "x-ui": true
+        },
+        "window_days": {
+          "default": "7",
+          "description": "Default length of the ics-events window in days when no end is given.",
+          "type": "string",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
     "license": {
       "additionalProperties": false,
       "properties": {

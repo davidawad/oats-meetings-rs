@@ -141,6 +141,95 @@
       "status": "implemented"
     },
     {
+      "doc": "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.",
+      "effect": "write",
+      "name": "ics-add",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "url",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "refresh_secs",
+          "required": false,
+          "type": "Option<u64>"
+        },
+        {
+          "name": "header",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Unsubscribe from a feed and drop its cache.",
+      "effect": "write",
+      "name": "ics-remove",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Subscribed feeds with cache and refresh state.",
+      "effect": "read",
+      "name": "ics-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Fetch one feed (or every enabled feed) now; gated by network.allow.",
+      "effect": "write",
+      "name": "ics-refresh",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Events from the cached feeds in a time window (RFC 3339 or YYYY-MM-DD), recurrences expanded.",
+      "effect": "read",
+      "name": "ics-events",
+      "params": [
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "feed",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Start recording a session.",
       "effect": "control",
       "name": "record-start",
@@ -331,6 +420,7 @@
     "segment",
     "session-saved",
     "session-deleted",
+    "ics-updated",
     "quit"
   ],
   "schema_version": 1

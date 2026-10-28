@@ -9,6 +9,24 @@
   "control": {
     "socket": ""
   },
+  "ics": {
+    "all_day": "include",
+    "allow_file": true,
+    "cache_dir": "",
+    "cancelled": "hide",
+    "default_refresh_secs": "900",
+    "default_tz": "UTC",
+    "enabled": true,
+    "feeds": "[]",
+    "max_bytes": "5242880",
+    "max_occurrences": "500",
+    "on_bad_event": "error",
+    "stale_on_error": true,
+    "timeout_secs": "15",
+    "unknown_tz": "error",
+    "webcal_scheme": "https",
+    "window_days": "7"
+  },
   "license": {
     "holder": "",
     "spdx": "LicenseRef-Undecided"
