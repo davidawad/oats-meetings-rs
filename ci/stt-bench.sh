@@ -9,7 +9,9 @@ source "$(dirname "$0")/fetch-models.sh" >&2
 source "$(dirname "$0")/fetch-bench-corpus.sh" >&2
 echo "BENCH_HOST cpu=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs) nproc=$(nproc) threads=4 commit=$(git rev-parse --short HEAD)"
 run() { # features, engine, model
-  OATS_BENCH_ENGINE=$2 OATS_BENCH_MODEL=$3 cargo test --locked --release -p oats-core --features "$1" --test stt_bench -- --nocapture --test-threads=1 2>&1 | grep '^BENCH_'
+  OATS_BENCH_ENGINE=$2 OATS_BENCH_MODEL=$3 cargo test --locked --release -p oats-core --features "$1" --test stt_bench -- --nocapture --test-threads=1 2>&1 | grep -a -o 'BENCH_.*'
 }
-for m in tiny.en tiny base.en base small.en small; do run whisper whisper "$m"; done
-run parakeet parakeet -
+# OATS_BENCH_ONLY="base.en parakeet" runs a subset (default: everything).
+only=" ${OATS_BENCH_ONLY:-tiny.en tiny base.en base small.en small parakeet} "
+for m in tiny.en tiny base.en base small.en small; do [[ $only == *" $m "* ]] && run whisper whisper "$m"; done
+[[ $only == *" parakeet "* ]] && run parakeet parakeet - || true
