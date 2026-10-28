@@ -433,6 +433,21 @@ impl Store {
     }
 }
 
+/// Move `path` to the OS trash. On macOS use NSFileManager: the crate's default (Finder via
+/// AppleScript) is slow and raises an Automation permission prompt.
+#[cfg(target_os = "macos")]
+fn trash_path(path: &std::path::Path) -> std::result::Result<(), trash::Error> {
+    use trash::macos::{DeleteMethod, TrashContextExtMacos};
+    let mut ctx = trash::TrashContext::default();
+    ctx.set_delete_method(DeleteMethod::NsFileManager);
+    ctx.delete(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn trash_path(path: &std::path::Path) -> std::result::Result<(), trash::Error> {
+    trash::delete(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,19 +588,4 @@ mod tests {
         assert_eq!(s.create("abcdefghi", "2026-01-01T00:00:00Z", "", "t").unwrap_err().code, "invalid_argument");
         assert!(s.sibling().valid_id("12345678") && !s.sibling().valid_id("123456789"));
     }
-}
-
-/// Move `path` to the OS trash. On macOS use NSFileManager: the crate's default (Finder via
-/// AppleScript) is slow and raises an Automation permission prompt.
-#[cfg(target_os = "macos")]
-fn trash_path(path: &std::path::Path) -> std::result::Result<(), trash::Error> {
-    use trash::macos::{DeleteMethod, TrashContextExtMacos};
-    let mut ctx = trash::TrashContext::default();
-    ctx.set_delete_method(DeleteMethod::NsFileManager);
-    ctx.delete(path)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn trash_path(path: &std::path::Path) -> std::result::Result<(), trash::Error> {
-    trash::delete(path)
 }
