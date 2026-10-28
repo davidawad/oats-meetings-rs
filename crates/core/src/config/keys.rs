@@ -190,6 +190,10 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Str,
         default: Def::S(""),
         doc: "Folder of note-template TOML files; empty means <config dir>/templates.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "ics.all_day",
         kind: Kind::Enum(ICS_ALL_DAY),
         default: Def::S("include"),

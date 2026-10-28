@@ -22,10 +22,3 @@ ureq.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 tiny_http.workspace = true
-
-# HTTPS: rustls everywhere except Windows, where the system TLS (schannel) avoids a C build.
-[target.'cfg(not(windows))'.dependencies]
-ureq = { version = "2", default-features = false, features = ["json", "tls"] }
-
-[target.'cfg(windows)'.dependencies]
-ureq = { version = "2", default-features = false, features = ["json", "native-tls"] }

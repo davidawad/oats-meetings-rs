@@ -43,24 +43,29 @@ pub fn join(base: &str, path: &str) -> String {
 
 /// POST `body` as JSON and parse the JSON response.
 pub fn post_json(url: &str, bearer: Option<&str>, body: &Value) -> Result<Value> {
-    let agent = ureq::AgentBuilder::new().timeout(TIMEOUT).build();
-    let mut req = agent.post(url).set("Content-Type", "application/json");
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(TIMEOUT))
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut req = agent.post(url).header("Content-Type", "application/json");
     if let Some(b) = bearer {
-        req = req.set("Authorization", &format!("Bearer {b}"));
+        req = req.header("Authorization", format!("Bearer {b}"));
     }
-    match req.send_json(body.clone()) {
-        Ok(resp) => resp
-            .into_json::<Value>()
-            .map_err(|e| ConfigError::new("backend_bad_response", format!("{url}: not JSON: {e}"))),
-        Err(ureq::Error::Status(code, resp)) => {
-            let text = resp.into_string().unwrap_or_default();
-            let snippet: String = text.chars().take(300).collect();
-            Err(ConfigError::new("backend_error", format!("{url}: HTTP {code}: {snippet}")))
-        }
-        Err(ureq::Error::Transport(t)) => {
-            Err(ConfigError::new("backend_unreachable", format!("{url}: {}", t.kind())))
-        }
+    let mut resp = req
+        .send(body.to_string())
+        .map_err(|e| ConfigError::new("backend_unreachable", format!("{url}: {e}")))?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| ConfigError::new("backend_bad_response", format!("{url}: reading reply: {e}")))?;
+    if !(200..300).contains(&status) {
+        let snippet: String = text.chars().take(300).collect();
+        return Err(ConfigError::new("backend_error", format!("{url}: HTTP {status}: {snippet}")));
     }
+    serde_json::from_str(&text)
+        .map_err(|e| ConfigError::new("backend_bad_response", format!("{url}: not JSON: {e}")))
 }
 
 #[cfg(test)]
