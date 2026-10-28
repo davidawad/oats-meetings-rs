@@ -174,6 +174,7 @@ const TRUE_CONSTANTS: &[(&str, &str, &str)] = &[
     ("crates/ui/src/view.rs", "FG", "colour palette"),
     ("crates/ui/src/view.rs", "DIM", "colour palette"),
     ("crates/ui/src/view.rs", "ACCENT", "colour palette"),
+    ("crates/ui/src/view.rs", "ERR", "colour palette"),
 ];
 
 fn numeric_consts(prod: &str) -> Vec<(usize, String)> {
