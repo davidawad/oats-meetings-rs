@@ -97,8 +97,11 @@ impl WavData {
     /// Rising zero crossings per second: a cheap dominant-frequency estimate for a tone.
     pub fn tone_hz(&self, channel: usize) -> f64 {
         let s = &self.samples[channel];
-        let ups = s.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
-        ups as f64 / self.duration_secs().max(1e-9)
+        // Measured over the audible span: a source that lagged (CPU starvation) is zero-padded
+        // at the tail on stop, and that padding is not part of the tone.
+        let end = s.iter().rposition(|x| *x != 0.0).map_or(0, |i| i + 1);
+        let ups = s[..end].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        ups as f64 / (end as f64 / f64::from(self.rate.max(1))).max(1e-9)
     }
 }
 
