@@ -25,7 +25,7 @@ if [ "$TASK" = shaders ]; then
   hlsl_dir=$(dirname "$(find "${CARGO_HOME:-/usr/local/cargo}" "$HOME/.cargo" -path '*gpui_windows/src/shaders.hlsl' 2> /dev/null | head -1)")
   [ -f "$hlsl_dir/shaders.hlsl" ] || { echo "no gpui_windows HLSL sources found" >&2; exit 1; }
 else
-  NO_WINE=1 bash ci/package-windows.sh headless
+  NO_WINE=1 bash ci/package-windows.sh "${VARIANT:-headless}"
   exe=$PWD/dist/oats-meetings-rs.exe
 fi
 sha256sum "$exe"
