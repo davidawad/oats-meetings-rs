@@ -13,6 +13,17 @@ use std::thread::JoinHandle;
 use serde::Serialize;
 
 use crate::backend::{Capture, CaptureBackend, DeviceKind};
+
+/// Which input a sample came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    System,
+    Mic,
+}
+
+/// Per-source tap: called with every live (non-paused) sample block of that source, at
+/// `SAMPLE_RATE`, from the capture thread. It must not block (queue the work).
+pub type TapFactory<'a> = &'a dyn Fn(Source) -> Box<dyn FnMut(&[f32]) + Send>;
 use crate::error::{AudioError, Result};
 use crate::settings::{AudioSettings, Layout};
 use crate::wav::WavWriter;
@@ -74,9 +85,10 @@ fn drain_into(w: &mut WavWriter, q: &mut Queues, sys: bool, mic: bool, layout: L
         let s = if sys { q.system.pop_front().unwrap_or(0.0) } else { 0.0 };
         let m = if mic { q.mic.pop_front().unwrap_or(0.0) } else { 0.0 };
         match layout {
+            // Left = mic, right = system: the same convention `stt-transcribe` reads (left "you").
             Layout::Split => {
-                buf.push(s);
                 buf.push(m);
+                buf.push(s);
             }
             Layout::Mix => buf.push((s + m).clamp(-1.0, 1.0)),
         }
@@ -89,7 +101,12 @@ fn drain_into(w: &mut WavWriter, q: &mut Queues, sys: bool, mic: bool, layout: L
 }
 
 /// Start capturing per `settings` into a WAV at `path` (parent dirs are created).
-pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path) -> Result<Recording> {
+pub fn start(
+    backend: &dyn CaptureBackend,
+    settings: &AudioSettings,
+    path: &Path,
+    tap: Option<TapFactory>,
+) -> Result<Recording> {
     if !settings.system_enabled && !settings.mic_enabled {
         return Err(AudioError::new(
             "invalid_config",
@@ -111,6 +128,7 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
     });
     let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Box<dyn Capture>> {
         let sh = Arc::clone(&shared);
+        let mut tap_fn = tap.map(|f| f(if is_sys { Source::System } else { Source::Mic }));
         backend.open(
             kind,
             device,
@@ -125,6 +143,10 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings, path: &Path
                 } else {
                     q.mic.extend(samples);
                     sh.mic_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
+                }
+                drop(q);
+                if let Some(t) = tap_fn.as_mut() {
+                    t(samples);
                 }
             }),
         )
@@ -233,7 +255,7 @@ mod tests {
     fn record(settings: &AudioSettings, secs: f64) -> (Summary, wav::WavData) {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("nested/a.wav");
-        let r = start(&FakeBackend::default(), settings, &p).unwrap();
+        let r = start(&FakeBackend::default(), settings, &p, None).unwrap();
         std::thread::sleep(Duration::from_millis((secs * 1000.0) as u64));
         let s = r.stop().unwrap();
         let data = wav::read(&p).unwrap();
@@ -245,8 +267,8 @@ mod tests {
         let (s, d) = record(&crate::settings::test_settings(), 1.2);
         assert_eq!((d.channels, d.rate, s.channels), (2, 48000, 2));
         assert!(d.duration_secs() > 1.0 && d.duration_secs() < 1.6, "{}", d.duration_secs());
-        assert!((d.tone_hz(0) - 440.0).abs() < 15.0, "left {}", d.tone_hz(0));
-        assert!((d.tone_hz(1) - 880.0).abs() < 25.0, "right {}", d.tone_hz(1));
+        assert!((d.tone_hz(0) - 880.0).abs() < 25.0, "left (mic) {}", d.tone_hz(0));
+        assert!((d.tone_hz(1) - 440.0).abs() < 15.0, "right (system) {}", d.tone_hz(1));
         assert!(d.rms(0) > 0.3 && d.rms(1) > 0.3);
     }
 
@@ -262,10 +284,10 @@ mod tests {
     fn disabled_sources_are_silent_channels() {
         let st = AudioSettings { mic_enabled: false, ..crate::settings::test_settings() };
         let (_, d) = record(&st, 0.6);
-        assert!(d.rms(0) > 0.3 && d.rms(1) == 0.0);
+        assert!(d.rms(1) > 0.3 && d.rms(0) == 0.0, "system only: right channel");
         let st = AudioSettings { system_enabled: false, ..crate::settings::test_settings() };
         let (_, d) = record(&st, 0.6);
-        assert!(d.rms(0) == 0.0 && d.rms(1) > 0.3);
+        assert!(d.rms(1) == 0.0 && d.rms(0) > 0.3, "mic only: left channel");
     }
 
     #[test]
@@ -273,9 +295,9 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
         let st = AudioSettings { system_enabled: false, mic_enabled: false, ..crate::settings::test_settings() };
-        assert_eq!(start(&FakeBackend::default(), &st, &p).err().unwrap().code, "invalid_config");
+        assert_eq!(start(&FakeBackend::default(), &st, &p, None).err().unwrap().code, "invalid_config");
         let st = AudioSettings { mic_device: "nope".into(), ..crate::settings::test_settings() };
-        let e = start(&FakeBackend::default(), &st, &p).err().unwrap();
+        let e = start(&FakeBackend::default(), &st, &p, None).err().unwrap();
         assert_eq!(e.code, "device_not_found");
         assert!(e.message.starts_with("microphone:"));
     }
@@ -284,7 +306,7 @@ mod tests {
     fn pause_drops_audio_and_duration_tracks_writes() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
-        let r = start(&FakeBackend::default(), &crate::settings::test_settings(), &p).unwrap();
+        let r = start(&FakeBackend::default(), &crate::settings::test_settings(), &p, None).unwrap();
         std::thread::sleep(Duration::from_millis(500));
         r.set_paused(true);
         std::thread::sleep(Duration::from_millis(100));

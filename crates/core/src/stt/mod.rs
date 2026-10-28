@@ -16,6 +16,7 @@
 //! `stt_failed`, `stt_http_status`, `stt_bad_response`, `bad_audio`, `invalid_value`, `exists`,
 //! `nothing_enabled`.
 
+pub mod capture;
 pub mod cloud;
 #[cfg(feature = "whisper")]
 pub mod local;
@@ -455,7 +456,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             let asr = make_asr(&s, cfg.network.allow, &*engine.secret_store(&cfg))?;
             let now = Utc::now();
             let id = session.clone().unwrap_or_else(|| format!("session_{}", now.format("%Y-%m-%d_%H-%M-%S")));
-            run(&engine.store(), Some(&engine.bus), asr, &s, &chans, &id, now)
+            run(&engine.store(), Some(&*engine.bus), asr, &s, &chans, &id, now)
         }
         Action::SttStatus {} => {
             let key = if s.cloud_key.is_empty() {

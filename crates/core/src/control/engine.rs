@@ -46,6 +46,36 @@ pub struct EngineOpts {
 
 type Stamp = Option<(SystemTime, u64)>;
 
+/// Takes part in config reload for audio: both sources off, or a named device that the backend can
+/// see is not there, vetoes the change. A running recording keeps the devices and layout it started
+/// with; `apply` says so on the bus (`recording-config-deferred`) and the new values take effect at
+/// the next `record start`.
+struct AudioSubsystem {
+    recorder: Arc<Recorder>,
+    bus: Arc<Bus>,
+}
+
+impl Subsystem for AudioSubsystem {
+    fn name(&self) -> &'static str {
+        "audio"
+    }
+
+    fn validate(&self, new: &Config) -> Result<()> {
+        self.recorder.validate(&record::settings_of(new))
+    }
+
+    fn apply(&self, old: &Config, new: &Config) {
+        if old.audio != new.audio {
+            if let Some(session) = self.recorder.active_id() {
+                self.bus.publish(
+                    "recording-config-deferred",
+                    json!({"session": session, "note": "the running recording keeps its devices and layout; the new audio settings apply to the next record start"}),
+                );
+            }
+        }
+    }
+}
+
 /// One complete, validated config. Never mutated; replaced wholesale.
 #[derive(Debug)]
 pub struct Snapshot {
@@ -67,10 +97,10 @@ pub struct Engine {
     subsystems: RwLock<Vec<Arc<dyn Subsystem>>>,
     // Serializes read-modify-write of the user file (config-set vs reload vs watcher).
     write_lock: Mutex<()>,
-    pub bus: Bus,
+    pub bus: Arc<Bus>,
     shutdown: AtomicBool,
     window_visible: AtomicBool,
-    recorder: Recorder,
+    recorder: Arc<Recorder>,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -209,15 +239,16 @@ impl Engine {
             }),
             subsystems: RwLock::new(vec![]),
             write_lock: Mutex::new(()),
-            bus: Bus::default(),
+            bus: Arc::new(Bus::default()),
             shutdown: AtomicBool::new(false),
             window_visible: AtomicBool::new(false),
-            recorder: Recorder::default(),
+            recorder: Arc::new(Recorder::default()),
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
         engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(&engine))));
         engine.register(Arc::new(crate::stt::SttSubsystem::new(Arc::downgrade(&engine))));
+        engine.register(Arc::new(AudioSubsystem { recorder: Arc::clone(&engine.recorder), bus: Arc::clone(&engine.bus) }));
         Ok(engine)
     }
 
@@ -252,13 +283,38 @@ impl Engine {
         self.recorder.set_factory(f);
     }
 
+    /// Replace the ASR used by recordings (tests inject a fake; the default is `stt::make_asr`).
+    pub fn set_asr_factory(&self, f: record::AsrFactory) {
+        self.recorder.set_asr_factory(f);
+    }
+
     fn audio_settings(&self) -> Result<oats_audio::AudioSettings> {
         record::settings_from(&self.snapshot().resolved.flat)
     }
 
-    /// Recordings are sessions: `audio.dir` if set, else the session store root.
-    fn record_root(&self) -> std::path::PathBuf {
-        record::record_root(&self.snapshot().resolved.flat, self.store().root)
+    /// Transcription plan for a new recording per `audio.transcribe`: the plan (if any) and, when
+    /// there is none, why not.
+    fn transcribe_plan(&self, cfg: &Config) -> Result<(Option<crate::stt::capture::Plan>, Value)> {
+        use crate::config::typed::AudioTranscribe;
+        if cfg.audio.transcribe == AudioTranscribe::Off {
+            return Ok((None, json!({"state": "off", "reason": "audio.transcribe = off"})));
+        }
+        let built = (|| -> Result<crate::stt::capture::Plan> {
+            let settings = crate::stt::Settings::from_config(&cfg.stt, self.default_sessions_dir())?;
+            if !settings.live_enabled && !settings.final_enabled {
+                return Err(ConfigError::new("nothing_enabled", "stt.live.enabled and stt.final.enabled are both off"));
+            }
+            let secrets = self.secret_store(cfg);
+            let asr = self.recorder.make_asr(&settings, &|s| crate::stt::make_asr(s, cfg.network.allow, &*secrets))?;
+            Ok(crate::stt::capture::Plan { asr, settings, bus: Arc::clone(&self.bus) })
+        })();
+        match built {
+            Ok(p) => Ok((Some(p), Value::Null)),
+            Err(e) if cfg.audio.transcribe == AudioTranscribe::Auto => {
+                Ok((None, json!({"state": "unavailable", "code": e.code, "reason": e.message})))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Register a subsystem (audio, hotkeys, ...). It sees every later reload.
@@ -510,7 +566,9 @@ impl Engine {
             }
             Action::DevicesList {} => self.recorder.devices(&self.audio_settings()?),
             Action::RecordStart { session, title } => {
-                let v = self.recorder.start(&self.audio_settings()?, &self.record_root(), session.as_deref(), title.as_deref())?;
+                let cfg = self.snapshot().config.clone();
+                let (plan, why) = self.transcribe_plan(&cfg)?;
+                let v = self.recorder.start(&self.audio_settings()?, &self.store(), session.as_deref(), title.as_deref(), plan, why)?;
                 self.bus.publish("recording-started", v.clone());
                 Ok(v)
             }

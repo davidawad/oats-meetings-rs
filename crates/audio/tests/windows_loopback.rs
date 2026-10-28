@@ -65,13 +65,13 @@ fn five_second_wasapi_loopback_is_non_silent() {
     let path = d.join("loopback.wav");
     // System audio only: a Windows VM may have no microphone.
     let st = AudioSettings { mic_enabled: false, ..AudioSettings::new(timing()) };
-    let rec = recorder::start(&CpalBackend::new(timing()), &st, &path).unwrap();
+    let rec = recorder::start(&CpalBackend::new(timing()), &st, &path, None).unwrap();
     std::thread::sleep(Duration::from_secs(5));
     let s = rec.stop().unwrap();
     drop(stream);
     let w = wav::read(&path).unwrap();
-    eprintln!("windows_loopback: {:.2}s rms {:.3} tone {:.0} Hz", w.duration_secs(), w.rms(0), w.tone_hz(0));
+    eprintln!("windows_loopback: {:.2}s rms {:.3} tone {:.0} Hz", w.duration_secs(), w.rms(1), w.tone_hz(1));
     assert!(s.duration_ms >= 4000, "duration {}", s.duration_ms);
-    assert!(w.rms(0) > 0.05, "loopback rms {}", w.rms(0));
-    assert!((w.tone_hz(0) - 440.0).abs() < 20.0, "tone {}", w.tone_hz(0));
+    assert!(w.rms(1) > 0.05, "loopback rms {}", w.rms(1));
+    assert!((w.tone_hz(1) - 440.0).abs() < 20.0, "tone {}", w.tone_hz(1));
 }

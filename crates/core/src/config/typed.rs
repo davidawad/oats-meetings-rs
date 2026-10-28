@@ -75,6 +75,14 @@ pub enum AudioLayout {
     Mix,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioTranscribe {
+    Auto,
+    On,
+    Off,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioEndpoint {
@@ -88,10 +96,10 @@ pub struct Audio {
     pub backend: AudioBackend,
     pub layout: AudioLayout,
     pub mic: AudioEndpoint,
-    pub dir: String,
     pub open_timeout: Dur,
     pub poll_interval: Dur,
     pub system: AudioEndpoint,
+    pub transcribe: AudioTranscribe,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

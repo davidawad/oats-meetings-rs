@@ -112,6 +112,7 @@ pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
 pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal"];
 pub const AUDIO_LAYOUTS: &[&str] = &["split", "mix"];
+pub const AUDIO_TRANSCRIBE: &[&str] = &["auto", "on", "off"];
 pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
 pub const ICS_WEBCAL_SCHEMES: &[&str] = &["https", "http"];
 pub const ICS_CANCELLED: &[&str] = &["hide", "show"];
@@ -277,14 +278,6 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "audio.dir",
-        kind: Kind::Str,
-        default: Def::S(""),
-        doc: "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
-        ui: true,
-        reload: Reload::Live,
-    },
-    Key {
         path: "audio.system.device",
         kind: Kind::Str,
         default: Def::S(""),
@@ -297,6 +290,14 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Bool,
         default: Def::B(true),
         doc: "Record system audio (what the machine plays).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "audio.transcribe",
+        kind: Kind::Enum(AUDIO_TRANSCRIBE),
+        default: Def::S("auto"),
+        doc: "Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.",
         ui: true,
         reload: Reload::Live,
     },

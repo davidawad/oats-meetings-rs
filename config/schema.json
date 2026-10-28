@@ -39,13 +39,6 @@
           "x-reload": "live",
           "x-ui": true
         },
-        "dir": {
-          "default": "",
-          "description": "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
-          "type": "string",
-          "x-reload": "live",
-          "x-ui": true
-        },
         "layout": {
           "default": "split",
           "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",
@@ -124,6 +117,18 @@
             }
           },
           "type": "object"
+        },
+        "transcribe": {
+          "default": "auto",
+          "description": "Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"

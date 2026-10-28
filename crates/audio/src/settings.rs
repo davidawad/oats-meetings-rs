@@ -33,7 +33,8 @@ impl BackendChoice {
     }
 }
 
-/// `split`: two-channel WAV, left = system loopback, right = mic. `mix`: one channel, the sum.
+/// `split`: two-channel WAV, left = mic ("you"), right = system loopback ("them"), the layout
+/// `stt-transcribe` reads. `mix`: one channel, the sum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
     Split,
