@@ -586,6 +586,14 @@
             "model": {
               "default": "base.en",
               "description": "Local ASR model name.",
+              "enum": [
+                "tiny.en",
+                "tiny",
+                "base.en",
+                "base",
+                "small.en",
+                "small"
+              ],
               "type": "string",
               "x-reload": "live",
               "x-ui": true
