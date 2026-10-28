@@ -687,8 +687,8 @@ fn tick_honours_each_feeds_interval() {
     assert!(oats_core::ics::tick(&r.engine, 1_030).is_empty());
     assert_eq!(oats_core::ics::tick(&r.engine, 1_060), ["a"]);
     assert_eq!(oats_core::ics::tick(&r.engine, 1_300), ["a", "b"]);
-    let due = r.list();
-    assert_eq!(due["feeds"][0]["due"], false);
+    // ics-list judges "due" against the real clock, long after the fake t=1300 attempts.
+    assert_eq!(r.list()["feeds"][0]["due"], true);
 }
 
 #[test]
