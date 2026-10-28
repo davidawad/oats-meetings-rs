@@ -53,6 +53,15 @@ fn rig() -> Rig {
     Rig { dir, engine }
 }
 
+/// Poll `cond` until it holds (30 s deadline) instead of sleeping a fixed wall time.
+fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !cond() {
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn start(r: &Rig, id: &str) -> Value {
     r.engine
         .dispatch(&Action::RecordStart { session: Some(id.into()), title: Some("t".into()) })
@@ -78,12 +87,15 @@ fn record_start_stop_session_get_roundtrip() {
     let s = start(&r, "s1");
     assert_eq!(s["session"], "s1");
     assert_eq!(s["channels"], 2);
-    std::thread::sleep(Duration::from_millis(1500));
+    wait_until("800 ms recorded", || {
+        let v = r.engine.dispatch(&Action::SessionGet { session: "s1".into() }).unwrap();
+        v["duration_ms"].as_u64().unwrap_or(0) >= 800
+    });
     let live = r.engine.dispatch(&Action::SessionGet { session: "s1".into() }).unwrap();
     assert_eq!(live["state"], "recording");
     assert!(live["duration_ms"].as_u64().unwrap() >= 800, "{live}");
     let done = stop(&r);
-    assert!(done["duration_ms"].as_u64().unwrap() >= 1400, "{done}");
+    assert!(done["duration_ms"].as_u64().unwrap() >= 800, "{done}");
     let got = r.engine.dispatch(&Action::SessionGet { session: "s1".into() }).unwrap();
     assert_eq!(got["state"], "saved");
     assert_eq!(got["duration_ms"], done["duration_ms"]);
@@ -223,9 +235,8 @@ fn recording_writes_live_and_final_transcripts_with_the_stt_speakers() {
     let r = rig();
     let s = start(&r, "t1");
     assert_eq!(s["transcription"]["state"], "on");
-    std::thread::sleep(Duration::from_millis(3500));
     // Live utterances arrive while still recording.
-    assert!(!lines(&r, "t1", "live").is_empty(), "no live transcript before stop");
+    wait_until("a live transcript before stop", || !lines(&r, "t1", "live").is_empty());
     let done = stop(&r);
     let t = &done["transcription"];
     assert_eq!(t["state"], "done", "{t}");

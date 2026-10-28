@@ -68,8 +68,17 @@ impl CaptureBackend for FakeBackend {
         let th = std::thread::spawn(move || {
             let chunk = SAMPLE_RATE as usize / 100; // 10 ms of audio per delivery
             let pace = Duration::from_secs_f64(chunk as f64 / f64::from(SAMPLE_RATE));
+            let t0 = std::time::Instant::now();
             let mut n: u64 = 0;
             while !flag.load(Ordering::SeqCst) {
+                // Deliver by media time, not by loop count: a thread starved by CPU load
+                // catches up with the audio it owes instead of dropping it (a slept-through
+                // 10 ms chunk is delivered late, never lost).
+                let owed = (t0.elapsed().as_secs_f64() * f64::from(SAMPLE_RATE)) as u64;
+                if n + chunk as u64 > owed {
+                    std::thread::sleep(pace);
+                    continue;
+                }
                 let buf: Vec<f32> = (0..chunk)
                     .map(|i| {
                         let t = (n + i as u64) as f32 / SAMPLE_RATE as f32;
@@ -78,7 +87,6 @@ impl CaptureBackend for FakeBackend {
                     .collect();
                 n += chunk as u64;
                 on_samples(&buf);
-                std::thread::sleep(pace);
             }
         });
         Ok(Box::new(FakeCapture { stop, th: Some(th) }))

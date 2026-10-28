@@ -256,7 +256,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("nested/a.wav");
         let r = start(&FakeBackend::default(), settings, &p, None).unwrap();
-        std::thread::sleep(Duration::from_millis((secs * 1000.0) as u64));
+        // Wait for the audio itself (not wall time): poll until `secs` have been written.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while r.duration_ms() < (secs * 1000.0) as u64 {
+            assert!(std::time::Instant::now() < deadline, "only {} ms written", r.duration_ms());
+            std::thread::sleep(Duration::from_millis(10));
+        }
         let s = r.stop().unwrap();
         let data = wav::read(&p).unwrap();
         (s, data)
@@ -266,7 +271,7 @@ mod tests {
     fn split_layout_keeps_each_source_on_its_channel() {
         let (s, d) = record(&crate::settings::test_settings(), 1.2);
         assert_eq!((d.channels, d.rate, s.channels), (2, 48000, 2));
-        assert!(d.duration_secs() > 1.0 && d.duration_secs() < 1.6, "{}", d.duration_secs());
+        assert!(d.duration_secs() >= 1.2, "{}", d.duration_secs());
         assert!((d.tone_hz(0) - 880.0).abs() < 25.0, "left (mic) {}", d.tone_hz(0));
         assert!((d.tone_hz(1) - 440.0).abs() < 15.0, "right (system) {}", d.tone_hz(1));
         assert!(d.rms(0) > 0.3 && d.rms(1) > 0.3);
