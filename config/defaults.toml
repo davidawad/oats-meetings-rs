@@ -87,6 +87,12 @@ root = ""
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
+# Spoken language code passed to the recogniser.
+language = "en"
+# Speaker id written for the system-audio (them) channel.
+speaker_them = "remote_1"
+# Speaker id written for the microphone (you) channel.
+speaker_you = "you"
 
 [stt.cloud]
 # Cloud STT adapter; must not be none when stt.backend is cloud.
@@ -104,10 +110,6 @@ url = "https://api.openai.com/v1"
 # Re-transcribe the whole recording when it stops and write transcript.final.jsonl.
 enabled = true
 
-[stt]
-# Spoken language code passed to the recogniser.
-language = "en"
-
 [stt.live]
 # Seconds of audio per live transcription window.
 chunk_secs = "4"
@@ -123,9 +125,3 @@ model_path = ""
 models_dir = ""
 # CPU threads for local transcription.
 threads = "4"
-
-[stt]
-# Speaker id written for the system-audio (them) channel.
-speaker_them = "remote_1"
-# Speaker id written for the microphone (you) channel.
-speaker_you = "you"
