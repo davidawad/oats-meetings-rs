@@ -37,6 +37,22 @@ impl Resampler {
     }
 }
 
+/// 48 kHz -> 16 kHz by averaging each group of three samples (a box filter: cheap, and enough
+/// anti-aliasing for speech). Streaming: a partial group carries to the next call.
+#[derive(Default)]
+pub struct Decimate3 {
+    carry: Vec<f32>,
+}
+
+impl Decimate3 {
+    pub fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        self.carry.extend_from_slice(input);
+        let whole = self.carry.len() / 3 * 3;
+        out.extend(self.carry[..whole].chunks_exact(3).map(|g| (g[0] + g[1] + g[2]) / 3.0));
+        self.carry.drain(..whole);
+    }
+}
+
 /// Average interleaved frames of `channels` into mono.
 pub fn downmix(interleaved: &[f32], channels: usize, out: &mut Vec<f32>) {
     if channels <= 1 {
@@ -82,6 +98,18 @@ mod tests {
         let mut out = vec![];
         r.push(&vec![0.5; 4410], &mut out);
         assert!(out.iter().all(|s| (s - 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn decimate3_thirds_across_chunks() {
+        let mut d = Decimate3::default();
+        let mut out = vec![];
+        d.push(&[3.0, 3.0], &mut out);
+        assert!(out.is_empty());
+        d.push(&[3.0, 6.0, 6.0, 6.0, 9.0], &mut out);
+        assert_eq!(out, vec![3.0, 6.0]);
+        d.push(&[9.0, 9.0], &mut out);
+        assert_eq!(out, vec![3.0, 6.0, 9.0]);
     }
 
     #[test]

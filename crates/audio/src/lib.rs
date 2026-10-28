@@ -20,7 +20,7 @@ pub mod wav;
 
 pub use backend::{select, Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
 pub use error::{AudioError, Result};
-pub use recorder::{Recording, Summary};
+pub use recorder::{Recording, Source, Summary};
 pub use settings::{AudioSettings, BackendChoice, Layout};
 
 /// Fixed output rate of the recorder and of every backend's callback.
