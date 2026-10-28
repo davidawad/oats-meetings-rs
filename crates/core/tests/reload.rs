@@ -397,7 +397,16 @@ fn single_instance_key_releases_and_retakes_the_lock() {
     let _ = rx;
     // Once the other engine stops, it succeeds.
     h2.shutdown();
-    assert_eq!(c.call("config-set", p(&[("key", json!("app.single_instance")), ("value", json!(true))])).unwrap()["ok"], true);
+    // Shutdown frees the lock asynchronously; under load retry until it is free (30 s deadline).
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let r = c.call("config-set", p(&[("key", json!("app.single_instance")), ("value", json!(true))])).unwrap();
+        if r["ok"] == true {
+            break;
+        }
+        assert!(r["error"]["code"] == "already_running" && std::time::Instant::now() < deadline, "{r}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
     drop(rig);
 }
 
