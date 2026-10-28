@@ -26,6 +26,8 @@
     "accept_backoff": "50ms",
     "accept_poll": "10ms",
     "client_timeout": "10s",
+    "drain_chunk": 65536,
+    "drain_max": 8388608,
     "event_queue": 256,
     "max_line": 1048576,
     "socket": ""
@@ -40,6 +42,7 @@
     "enabled": true,
     "feeds": "[]",
     "max_bytes": 5242880,
+    "max_name_len": 64,
     "max_occurrences": 500,
     "on_bad_event": "error",
     "poll_interval": "1s",
@@ -53,6 +56,7 @@
     "base_url": "",
     "dir": "",
     "embedder": "hash",
+    "hash_dims": 256,
     "max_chunk": 1200,
     "min_chunk": 20,
     "model": "nomic-embed-text",
@@ -82,11 +86,13 @@
   "secrets": {
     "backend": "env-then-keyring",
     "env_prefix": "OATS_SECRET_",
-    "keyring_service": "oats-meetings-rs"
+    "keyring_service": "oats-meetings-rs",
+    "max_key_len": 128
   },
   "sessions": {
     "confirm_delete": true,
     "delete_mode": "trash",
+    "max_id_len": 200,
     "root": ""
   },
   "stt": {
@@ -98,9 +104,11 @@
       "timeout": "1m",
       "url": "https://api.openai.com/v1"
     },
+    "feed": "500ms",
     "final": {
       "enabled": true
     },
+    "final_piece": "10m",
     "language": "en",
     "live": {
       "chunk": "4s",
@@ -113,8 +121,10 @@
       "models_dir": "",
       "threads": 4
     },
+    "pad": "250ms",
     "speaker_them": "remote_1",
-    "speaker_you": "you"
+    "speaker_you": "you",
+    "speech_peak": 10
   },
   "templates": {
     "dir": ""

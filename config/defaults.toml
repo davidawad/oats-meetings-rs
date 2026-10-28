@@ -43,6 +43,10 @@ accept_backoff = "50ms"
 accept_poll = "10ms"
 # Default wait of oats-ctl for events or for an engine that is still starting (its --timeout-ms flag overrides).
 client_timeout = "10s"
+# Bytes read per step while discarding the rest of an oversize request line.
+drain_chunk = 65536
+# Most bytes discarded from one oversize request line before the connection is closed.
+drain_max = 8388608
 # Events queued per subscriber before a slow one is dropped.
 event_queue = 256
 # Largest control-socket request line, in bytes; longer lines are refused.
@@ -69,6 +73,8 @@ enabled = true
 feeds = "[]"
 # Largest feed body accepted, in bytes.
 max_bytes = 5242880
+# Longest feed name.
+max_name_len = 64
 # Most occurrences expanded per recurring event per query.
 max_occurrences = 500
 # A malformed event fails the whole feed (error) or is dropped and counted (skip).
@@ -93,6 +99,8 @@ base_url = ""
 dir = ""
 # KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).
 embedder = "hash"
+# Vector length of the local hash embedder. An index records it: changing it makes kb-search refuse the old index until kb-reindex rebuilds it.
+hash_dims = 256
 # Largest KB chunk, in characters; longer paragraphs are cut.
 max_chunk = 1200
 # Smallest KB chunk kept, in characters; shorter fragments are dropped. Must not exceed kb.max_chunk.
@@ -141,24 +149,36 @@ backend = "env-then-keyring"
 env_prefix = "OATS_SECRET_"
 # Service name secrets are filed under in the OS keychain.
 keyring_service = "oats-meetings-rs"
+# Longest secret key (namespace/name).
+max_key_len = 128
 
 [sessions]
 # Require confirm=true to delete a session.
 confirm_delete = true
 # Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.
 delete_mode = "trash"
+# Longest session id (it becomes a directory name).
+max_id_len = 200
 # Session store directory (OpenOats layout); empty means the per-user data dir.
 root = ""
 
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
+# Window used to feed a recorded file to the live pass as if it were arriving.
+feed = "500ms"
+# Longest stretch sent in one request in the final pass (cloud uploads are size-limited).
+final_piece = "10m"
 # Spoken language code passed to the recogniser.
 language = "en"
+# Silence kept around the speech that is sent to the recogniser.
+pad = "250ms"
 # Speaker id written for the system-audio (them) channel.
 speaker_them = "remote_1"
 # Speaker id written for the microphone (you) channel.
 speaker_you = "you"
+# Per-mille of full scale: a 10 ms frame whose peak is below this is silence (10 = 0.01).
+speech_peak = 10
 
 [stt.cloud]
 # Cloud STT adapter; must not be none when stt.backend is cloud.

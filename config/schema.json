@@ -205,6 +205,24 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "drain_chunk": {
+          "default": 65536,
+          "description": "Bytes read per step while discarding the rest of an oversize request line.",
+          "maximum": 1048576,
+          "minimum": 1024,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "drain_max": {
+          "default": 8388608,
+          "description": "Most bytes discarded from one oversize request line before the connection is closed.",
+          "maximum": 1073741824,
+          "minimum": 1024,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "event_queue": {
           "default": 256,
           "description": "Events queued per subscriber before a slow one is dropped.",
@@ -311,6 +329,15 @@
           "default": 5242880,
           "description": "Largest feed body accepted, in bytes.",
           "maximum": 1073741824,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "max_name_len": {
+          "default": 64,
+          "description": "Longest feed name.",
+          "maximum": 255,
           "minimum": 1,
           "type": "integer",
           "x-reload": "live",
@@ -433,6 +460,15 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": true
+        },
+        "hash_dims": {
+          "default": 256,
+          "description": "Vector length of the local hash embedder. An index records it: changing it makes kb-search refuse the old index until kb-reindex rebuilds it.",
+          "maximum": 8192,
+          "minimum": 8,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
         },
         "max_chunk": {
           "default": 1200,
@@ -628,6 +664,15 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": false
+        },
+        "max_key_len": {
+          "default": 128,
+          "description": "Longest secret key (namespace/name).",
+          "maximum": 512,
+          "minimum": 8,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
         }
       },
       "type": "object"
@@ -652,6 +697,15 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": true
+        },
+        "max_id_len": {
+          "default": 200,
+          "description": "Longest session id (it becomes a directory name).",
+          "maximum": 255,
+          "minimum": 8,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
         },
         "root": {
           "default": "",
@@ -729,6 +783,20 @@
           },
           "type": "object"
         },
+        "feed": {
+          "default": "500ms",
+          "description": "Window used to feed a recorded file to the live pass as if it were arriving.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "50ms",
+          "x-min-ms": 50,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "final": {
           "additionalProperties": false,
           "properties": {
@@ -741,6 +809,20 @@
             }
           },
           "type": "object"
+        },
+        "final_piece": {
+          "default": "10m",
+          "description": "Longest stretch sent in one request in the final pass (cloud uploads are size-limited).",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "10s",
+          "x-min-ms": 10000,
+          "x-reload": "live",
+          "x-ui": false
         },
         "language": {
           "default": "en",
@@ -831,6 +913,20 @@
           },
           "type": "object"
         },
+        "pad": {
+          "default": "250ms",
+          "description": "Silence kept around the speech that is sent to the recogniser.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "0s",
+          "x-min-ms": 0,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "speaker_them": {
           "default": "remote_1",
           "description": "Speaker id written for the system-audio (them) channel.",
@@ -842,6 +938,15 @@
           "default": "you",
           "description": "Speaker id written for the microphone (you) channel.",
           "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "speech_peak": {
+          "default": 10,
+          "description": "Per-mille of full scale: a 10 ms frame whose peak is below this is silence (10 = 0.01).",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
           "x-reload": "live",
           "x-ui": false
         }
