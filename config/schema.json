@@ -109,6 +109,20 @@
           "type": "boolean",
           "x-reload": "live",
           "x-ui": true
+        },
+        "poll_interval": {
+          "default": "250ms",
+          "description": "How often the user config file is checked for changes while config.hot_reload is on.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10m",
+          "x-max-ms": 600000,
+          "x-min": "10ms",
+          "x-min-ms": 10,
+          "x-reload": "live",
+          "x-ui": false
         }
       },
       "type": "object"
@@ -116,6 +130,66 @@
     "control": {
       "additionalProperties": false,
       "properties": {
+        "accept_backoff": {
+          "default": "50ms",
+          "description": "Wait after an accept error before trying again.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "1ms",
+          "x-min-ms": 1,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "accept_poll": {
+          "default": "10ms",
+          "description": "Idle wait of the control-socket accept loop between checks.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1s",
+          "x-max-ms": 1000,
+          "x-min": "1ms",
+          "x-min-ms": 1,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "client_timeout": {
+          "default": "10s",
+          "description": "Default wait of oats-ctl for events or for an engine that is still starting (its --timeout-ms flag overrides).",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "event_queue": {
+          "default": 256,
+          "description": "Events queued per subscriber before a slow one is dropped.",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "max_line": {
+          "default": 1048576,
+          "description": "Largest control-socket request line, in bytes; longer lines are refused.",
+          "maximum": 67108864,
+          "minimum": 1024,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "socket": {
           "default": "",
           "description": "Control socket path; empty means the per-user runtime dir.",
@@ -165,10 +239,17 @@
           "x-reload": "live",
           "x-ui": true
         },
-        "default_refresh_secs": {
-          "default": "900",
-          "description": "Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.",
+        "default_refresh": {
+          "default": "15m",
+          "description": "Time between automatic refreshes of a feed with no refresh_secs of its own; 0s means manual only.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
           "type": "string",
+          "x-kind": "duration",
+          "x-max": "30d",
+          "x-max-ms": 2592000000,
+          "x-min": "0s",
+          "x-min-ms": 0,
           "x-reload": "live",
           "x-ui": true
         },
@@ -194,16 +275,20 @@
           "x-ui": true
         },
         "max_bytes": {
-          "default": "5242880",
+          "default": 5242880,
           "description": "Largest feed body accepted, in bytes.",
-          "type": "string",
+          "maximum": 1073741824,
+          "minimum": 1,
+          "type": "integer",
           "x-reload": "live",
           "x-ui": false
         },
         "max_occurrences": {
-          "default": "500",
+          "default": 500,
           "description": "Most occurrences expanded per recurring event per query.",
-          "type": "string",
+          "maximum": 65535,
+          "minimum": 1,
+          "type": "integer",
           "x-reload": "live",
           "x-ui": false
         },
@@ -218,6 +303,20 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "poll_interval": {
+          "default": "1s",
+          "description": "How often the feed scheduler checks which feeds are due.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "stale_on_error": {
           "default": true,
           "description": "When a refresh fails, keep serving the last good cached copy.",
@@ -225,10 +324,17 @@
           "x-reload": "live",
           "x-ui": true
         },
-        "timeout_secs": {
-          "default": "15",
-          "description": "Whole-request timeout for a feed fetch, in seconds.",
+        "timeout": {
+          "default": "15s",
+          "description": "Whole-request timeout for a feed fetch.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
           "type": "string",
+          "x-kind": "duration",
+          "x-max": "10m",
+          "x-max-ms": 600000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
           "x-reload": "live",
           "x-ui": false
         },
@@ -255,9 +361,11 @@
           "x-ui": true
         },
         "window_days": {
-          "default": "7",
+          "default": 7,
           "description": "Default length of the ics-events window in days when no end is given.",
-          "type": "string",
+          "maximum": 36500,
+          "minimum": 1,
+          "type": "integer",
           "x-reload": "live",
           "x-ui": true
         }
@@ -293,10 +401,42 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "max_chunk": {
+          "default": 1200,
+          "description": "Largest KB chunk, in characters; longer paragraphs are cut.",
+          "maximum": 100000,
+          "minimum": 100,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "min_chunk": {
+          "default": 20,
+          "description": "Smallest KB chunk kept, in characters; shorter fragments are dropped. Must not exceed kb.max_chunk.",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "model": {
           "default": "nomic-embed-text",
           "description": "Embedding model name for the ollama / openai-compatible embedders.",
           "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "timeout": {
+          "default": "2m",
+          "description": "Whole-request timeout for a KB embedding call.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
           "x-reload": "live",
           "x-ui": true
         }
@@ -356,6 +496,20 @@
           "default": "llama3.1",
           "description": "Model name sent to the LLM backend.",
           "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "timeout": {
+          "default": "2m",
+          "description": "Whole-request timeout for a notes-generation LLM call.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
           "x-reload": "live",
           "x-ui": true
         }

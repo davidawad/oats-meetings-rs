@@ -17,9 +17,15 @@
     }
   },
   "config": {
-    "hot_reload": true
+    "hot_reload": true,
+    "poll_interval": "250ms"
   },
   "control": {
+    "accept_backoff": "50ms",
+    "accept_poll": "10ms",
+    "client_timeout": "10s",
+    "event_queue": 256,
+    "max_line": 1048576,
     "socket": ""
   },
   "ics": {
@@ -27,24 +33,28 @@
     "allow_file": true,
     "cache_dir": "",
     "cancelled": "hide",
-    "default_refresh_secs": "900",
+    "default_refresh": "15m",
     "default_tz": "UTC",
     "enabled": true,
     "feeds": "[]",
-    "max_bytes": "5242880",
-    "max_occurrences": "500",
+    "max_bytes": 5242880,
+    "max_occurrences": 500,
     "on_bad_event": "error",
+    "poll_interval": "1s",
     "stale_on_error": true,
-    "timeout_secs": "15",
+    "timeout": "15s",
     "unknown_tz": "error",
     "webcal_scheme": "https",
-    "window_days": "7"
+    "window_days": 7
   },
   "kb": {
     "base_url": "",
     "dir": "",
     "embedder": "hash",
-    "model": "nomic-embed-text"
+    "max_chunk": 1200,
+    "min_chunk": 20,
+    "model": "nomic-embed-text",
+    "timeout": "2m"
   },
   "license": {
     "holder": "",
@@ -54,7 +64,8 @@
     "api_key_ref": "secret:llm/api-key",
     "backend": "ollama",
     "base_url": "",
-    "model": "llama3.1"
+    "model": "llama3.1",
+    "timeout": "2m"
   },
   "network": {
     "allow": false
