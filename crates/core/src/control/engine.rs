@@ -481,6 +481,9 @@ impl Engine {
                 }
                 Ok(v)
             }
+            Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
+                crate::secrets::dispatch(self, a)
+            }
             Action::IcsAdd { .. }
             | Action::IcsRemove { .. }
             | Action::IcsList {}

@@ -216,7 +216,7 @@ fn starts(v: &Value) -> Vec<String> {
 fn add_list_remove_and_persist_in_the_user_config() {
     let r = Rig::new();
     assert_eq!(r.list()["feeds"].as_array().unwrap().len(), 0);
-    let added = r.add_full("work", &file_url("weekly-ny.ics"), None, Some(60), Some("Authorization: Bearer s3cret")).unwrap();
+    let added = r.add_full("work", &file_url("weekly-ny.ics"), None, Some(60), Some("Authorization: secret:ics/work")).unwrap();
     assert_eq!(added["feed"]["name"], "work");
     assert_eq!(added["feed"]["has_header"], true);
     assert!(!added.to_string().contains("s3cret"), "the header value is never echoed");
@@ -432,7 +432,8 @@ fn http_fetch_sends_the_header_and_parses_the_body() {
     let body = fixture("weekly-ny.ics");
     let h = Http::start(Arc::new(move |_, _| Resp::ok(&body)));
     let r = Rig::net();
-    r.add_full("n", &h.url("/cal.ics"), None, None, Some("Authorization: Bearer s3cret")).unwrap();
+    std::env::set_var("OATS_SECRET_ICS_NHDR", "Bearer s3cret");
+    r.add_full("n", &h.url("/cal.ics"), None, None, Some("Authorization: secret:ics/nhdr")).unwrap();
     let res = r.refresh(Some("n")).unwrap();
     assert_eq!(res["feeds"][0]["events"], 2);
     let req = h.seen.lock().unwrap()[0].to_ascii_lowercase();
@@ -440,6 +441,72 @@ fn http_fetch_sends_the_header_and_parses_the_body() {
     assert!(req.contains("authorization: bearer s3cret"), "{req}");
     assert!(req.contains("accept: text/calendar"), "{req}");
     assert_eq!(r.events("2026-03-01", "2026-05-01")["events"].as_array().unwrap().len(), 7);
+}
+
+#[test]
+fn plaintext_header_values_are_rejected_everywhere() {
+    let r = Rig::new();
+    assert_eq!(
+        code(r.add_full("p", "https://example.invalid/a.ics", None, None, Some("Authorization: Bearer hunter2"))),
+        "secret_plaintext"
+    );
+    // Via config-set of the whole list, and via a hand edit picked up by reload.
+    let plain = r#"[{"name":"p","url":"https://example.invalid/a.ics","header":"Authorization: hunter2"}]"#;
+    let e = r.engine.set("ics.feeds", &json!(plain), "test").unwrap_err();
+    assert_eq!(e.code, "secret_plaintext", "{e}");
+    assert!(!e.message.contains("hunter2"));
+    let toml = format!("[ics]\nfeeds = '{plain}'\n");
+    std::fs::write(r.dir.path().join("cfg/config.toml"), toml).unwrap();
+    assert_eq!(code(r.engine.reload("test")), "secret_plaintext");
+    assert_eq!(r.list()["feeds"].as_array().unwrap().len(), 0);
+    // A reference is accepted.
+    r.add_full("ok", "https://example.invalid/a.ics", None, None, Some("Authorization: secret:ics/ok")).unwrap();
+    assert!(!std::fs::read_to_string(r.dir.path().join("cfg/config.toml")).unwrap().contains("hunter2"));
+}
+
+#[test]
+fn secret_backend_choice_resolves_header_references() {
+    let body = fixture("lf-only.ics");
+    let h = Http::start(Arc::new(move |_, req| {
+        if req.contains("x-token: tok-from-env") { Resp::ok(&body) } else { Resp::status(401) }
+    }));
+    std::env::set_var("OATS_SECRET_ICS_BACKENDS", "tok-from-env");
+    for backend in ["env", "keyring", "env-then-keyring"] {
+        let r = Rig::with_config(&format!("[network]\nallow = true\n[secrets]\nbackend = \"{backend}\"\n[ics]\ntimeout_secs = \"2\"\n"));
+        r.add_full("s", &h.url("/s.ics"), None, None, Some("X-Token: secret:ics/backends")).unwrap();
+        let res = r.refresh(Some("s"));
+        if backend == "keyring" {
+            // The env var is ignored; a laptop keychain says not found, a pod has none.
+            let c = code(res);
+            assert!(c == "secret_not_found" || c == "secret_backend_unavailable", "{c}");
+        } else {
+            assert_eq!(res.unwrap()["feeds"][0]["events"], 1, "{backend}");
+        }
+    }
+}
+
+#[test]
+fn a_missing_secret_fails_before_any_request() {
+    let h = Http::start(Arc::new(|_, _| Resp::ok(&fixture("lf-only.ics"))));
+    let r = Rig::with_config("[network]\nallow = true\n[secrets]\nbackend = \"env\"\n");
+    r.add_full("m", &h.url("/m.ics"), None, None, Some("Authorization: secret:ics/definitely-unset")).unwrap();
+    assert_eq!(code(r.refresh(Some("m"))), "secret_not_found");
+    assert_eq!(h.hits(), 0);
+}
+
+#[test]
+fn secret_actions_never_return_values_and_validate_keys() {
+    std::env::set_var("OATS_SECRET_ICS_PRESENT", "very-secret-value");
+    let r = Rig::with_config("[secrets]\nbackend = \"env\"\n");
+    let has = |k: &str| r.engine.dispatch(&Action::SecretHas { key: k.into() });
+    let v = has("ics/present").unwrap();
+    assert_eq!(v["present"], true);
+    assert!(!v.to_string().contains("very-secret-value"));
+    assert_eq!(has("ics/absent-9").unwrap()["present"], false);
+    assert_eq!(code(has("x")), "invalid_argument");
+    assert_eq!(code(r.engine.dispatch(&Action::SecretSet { key: "ics/present".into(), value: "v".into() })), "secret_read_only");
+    assert_eq!(code(r.engine.dispatch(&Action::SecretSet { key: "x".into(), value: "v".into() })), "invalid_argument");
+    assert_eq!(code(r.engine.dispatch(&Action::SecretDelete { key: "ics/present".into() })), "secret_read_only");
 }
 
 #[test]
