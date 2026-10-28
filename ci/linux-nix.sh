@@ -8,7 +8,7 @@ set -x
 if [ -n "${CROSS_TARGET:-}" ]; then
   rustup target add "$CROSS_TARGET"
   # build.rs embeds the derived .ico on Windows targets (dot-4uzgol.10).
-  case "$CROSS_TARGET" in *windows*) bash ci/icons.sh ;; esac
+  case "$CROSS_TARGET" in *windows*) env -u LD_LIBRARY_PATH bash ci/icons.sh ;; esac
   # Metal shaders cannot be compiled off macOS: compile them at runtime for the check (feature forwarded by oats-ui).
   exec cargo check --locked --workspace --target "$CROSS_TARGET" --features "oats-ui/runtime_shaders"
 fi
