@@ -50,6 +50,7 @@ pub struct Config {
     pub sessions: Sessions,
     pub stt: Stt,
     pub templates: Templates,
+    pub ui: Ui,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -169,6 +170,12 @@ pub struct Kb {
 #[serde(deny_unknown_fields)]
 pub struct Notes {
     pub enforce_headings: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ui {
+    pub tick: Dur,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

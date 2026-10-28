@@ -230,6 +230,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "ui.tick",
+        kind: Kind::Duration { min_ms: 10 * MS, max_ms: 10 * SEC },
+        default: Def::D(100 * MS),
+        doc: "How often the window re-reads the engine state (window visibility, capture hiding, tray).",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "app.menubar",
         kind: Kind::Bool,
         default: Def::B(false),

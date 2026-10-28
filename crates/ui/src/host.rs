@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
-use std::time::Duration;
 
 use gpui::{
     App, AppContext as _, AsyncApp, Bounds, KeyBinding, Menu, MenuItem, QuitMode,
@@ -214,7 +213,9 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
         let _ = model::dispatch(&h2.borrow().engine, "window-show", json!({}));
         let h3 = Rc::clone(&h2);
         cx.spawn(async move |cx: &mut AsyncApp| loop {
-            cx.background_executor().timer(Duration::from_millis(100)).await;
+            // ui.tick is read each round, so a reload changes the cadence at once.
+            let every = h3.borrow().engine.snapshot().config.ui.tick.as_duration();
+            cx.background_executor().timer(every).await;
             cx.update(|cx| tick(&h3, cx));
         })
         .detach();
