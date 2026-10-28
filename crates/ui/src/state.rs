@@ -51,6 +51,8 @@ pub struct State {
     /// Lines from `segment` events of a recording in progress.
     pub live: Vec<Line>,
     pub settings: Vec<Group>,
+    /// Number of capture devices the audio backend reports (0 when none or unavailable).
+    pub devices: usize,
     pub status: String,
 }
 
@@ -86,6 +88,10 @@ impl State {
             }
             Err(e) => self.status = e.to_string(),
         }
+        self.devices = model::dispatch(engine, "devices-list", json!({}))
+            .ok()
+            .and_then(|v| v["devices"].as_array().map(Vec::len))
+            .unwrap_or(0);
         self.settings = settings::build(&engine.resolved().flat);
         if let Some(id) = self.selected.clone() {
             self.select(engine, &id);

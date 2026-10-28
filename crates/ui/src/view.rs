@@ -73,7 +73,12 @@ impl MainWindow {
     }
 
     fn live(&self) -> impl IntoElement {
-        Self::lines(&self.state.live, "No recording. Start one from the Recording menu.")
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().text_sm().text_color(rgb(DIM)).child(format!("{} audio devices", self.state.devices)))
+            .child(Self::lines(&self.state.live, "No recording. Start one from the Recording menu."))
     }
 
     fn sessions(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -107,6 +107,7 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "config-resolved",
     "stt-status",
     "ics-list",
+    "devices-list",
 ];
 
 /// Actions with deliberately no UI surface: protocol plumbing, or batch/automation verbs that need
@@ -228,15 +229,14 @@ mod tests {
     #[test]
     fn menu_dispatch_reaches_engine() {
         let (engine, _dir) = crate::testutil::engine(&[]);
-        // implemented, parameterless menu actions succeed; planned ones answer not_implemented,
-        // never "unknown action" or a panic.
-        for id in menu_ids() {
-            if id == "quit" || id == "ics-refresh" {
-                continue; // quit stops the engine; ics-refresh needs network.allow
+                for id in menu_ids() {
+            if matches!(id.as_str(), "quit" | "ics-refresh" | "record-start") {
+                continue; // quit stops the engine; ics-refresh needs network.allow; record-start opens audio
             }
-            match dispatch(&engine, &id, json!({})) {
-                Ok(_) => {}
-                Err(e) => assert_eq!(e.code, "not_implemented", "{id}: {e}"),
+            // Domain errors (not_recording, not_implemented) are fine; a menu id must never be
+            // rejected as a malformed request.
+            if let Err(e) = dispatch(&engine, &id, json!({})) {
+                assert!(!matches!(e.code, "bad_request" | "unknown_action"), "{id}: {e}");
             }
         }
     }
