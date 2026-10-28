@@ -678,7 +678,7 @@
           "default": 128,
           "description": "Longest secret key (namespace/name).",
           "maximum": 512,
-          "minimum": 8,
+          "minimum": 16,
           "type": "integer",
           "x-reload": "live",
           "x-ui": false
@@ -711,7 +711,7 @@
           "default": 200,
           "description": "Longest session id (it becomes a directory name).",
           "maximum": 255,
-          "minimum": 8,
+          "minimum": 32,
           "type": "integer",
           "x-reload": "live",
           "x-ui": false
