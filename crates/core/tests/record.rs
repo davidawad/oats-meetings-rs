@@ -29,7 +29,8 @@ fn rig() -> Rig {
         secrets: None,
     })
     .unwrap();
-    engine.set("audio.dir", &json!(dir.path().join("rec").to_str().unwrap()), "test").unwrap();
+    // Recordings are sessions: they land under the session store root.
+    engine.set("sessions.root", &json!(dir.path().join("rec").to_str().unwrap()), "test").unwrap();
     engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
     Rig { dir, engine }
 }
@@ -189,4 +190,15 @@ fn recording_events_are_published() {
     for want in ["recording-started", "recording-stopped", "session-saved"] {
         assert!(topics.iter().any(|t| t == want), "{want} in {topics:?}");
     }
+}
+
+#[test]
+fn audio_dir_overrides_where_the_wav_goes() {
+    let r = rig();
+    let elsewhere = r.dir.path().join("elsewhere");
+    r.engine.set("audio.dir", &json!(elsewhere.to_str().unwrap()), "test").unwrap();
+    let s = start(&r, "w");
+    assert!(s["path"].as_str().unwrap().starts_with(elsewhere.to_str().unwrap()), "{s}");
+    stop(&r);
+    assert!(elsewhere.join("w/audio.wav").exists());
 }
