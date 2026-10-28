@@ -11,6 +11,22 @@ serde_json.workspace = true
 toml.workspace = true
 interprocess.workspace = true
 oats-audio.workspace = true
+keyring.workspace = true
+trash.workspace = true
+toml_edit.workspace = true
+chrono.workspace = true
+icalendar.workspace = true
+rrule.workspace = true
+chrono-tz.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tiny_http.workspace = true
+
+# TLS: rustls (ring) everywhere except Windows, which uses the OS stack (schannel) so no C
+# toolchain is needed to build or cross-check there.
+[target.'cfg(not(windows))'.dependencies]
+ureq = { workspace = true, features = ["rustls"] }
+
+[target.'cfg(windows)'.dependencies]
+ureq = { workspace = true, features = ["native-tls"] }

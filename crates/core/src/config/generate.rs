@@ -88,6 +88,7 @@ pub fn schema_json() -> String {
         leaf.insert("default".into(), k.default.to_json());
         leaf.insert("description".into(), json!(k.doc));
         leaf.insert("x-ui".into(), json!(k.ui));
+        leaf.insert("x-reload".into(), json!(k.reload.as_str()));
         let mut cur = root
             .get_mut("properties")
             .and_then(Value::as_object_mut)
@@ -112,6 +113,14 @@ pub fn schema_json() -> String {
     s
 }
 
+/// Re-emit JSON text with every object's keys sorted (independent of serde_json's map type).
+fn resort(text: &str) -> String {
+    let v: Value = serde_json::from_str(text).expect("generated JSON parses");
+    let mut s = serde_json::to_string_pretty(&sorted(&v)).expect("serializable");
+    s.push('\n');
+    s
+}
+
 pub fn actions_json() -> String {
     let mut s = serde_json::to_string_pretty(&sorted(&crate::action::manifest_json())).expect("serializable");
     s.push('\n');
@@ -124,6 +133,7 @@ pub fn projections() -> Vec<(&'static str, String)> {
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
         ("actions.json", actions_json()),
+        ("template.schema.json", resort(&crate::templates::schema_json())),
     ]
 }
 

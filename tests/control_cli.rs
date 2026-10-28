@@ -16,7 +16,9 @@ struct Engine {
 
 fn cmd(rt: &str, cfg: &str) -> Command {
     let mut c = Command::new(EXE);
-    c.env("OATS_RUNTIME_DIR", rt)
+    // The default session store lives beside the runtime dir, inside the test's tempdir.
+    c.env("OATS_DATA_DIR", format!("{rt}/../data"))
+        .env("OATS_RUNTIME_DIR", rt)
         .env("OATS_CONFIG", cfg)
         .env("OATS_OS", "linux")
         .env("OATS_RELOAD_POLL_MS", "50")
@@ -133,7 +135,7 @@ fn errors_use_exit_codes() {
     let e = Engine::start();
     assert_eq!(e.ctl(&["config", "get", "nope"]).0, 1);
     assert_eq!(e.ctl(&["frobnicate"]).0, 2);
-    let (code, out, _) = e.ctl(&["--json", "session", "list"]);
+    let (code, out, _) = e.ctl(&["--json", "record", "start"]);
     assert_eq!(code, 1);
     assert!(out.contains("not_implemented"), "{out}");
 }
@@ -159,4 +161,69 @@ fn ctl_without_engine_exits_three() {
         .output()
         .unwrap();
     assert_eq!(o.status.code(), Some(3));
+}
+
+fn ids_of(out: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    v["data"]["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect()
+}
+
+fn fixture_ids() -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().join("session.json").is_file())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn ctl_session_import_then_list_equals_fixture_ids() {
+    let e = Engine::start();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats");
+    let (code, out, err) = e.ctl(&["--json", "session", "import", "--from", fixture]);
+    assert_eq!(code, 0, "{out} {err}");
+    let (code, out, _) = e.ctl(&["--json", "session", "list"]);
+    assert_eq!(code, 0);
+    assert_eq!(ids_of(&out), fixture_ids());
+    assert_eq!(fixture_ids().len(), 2);
+}
+
+#[test]
+fn ctl_session_delete_needs_confirm() {
+    let e = Engine::start();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats");
+    assert_eq!(e.ctl(&["session", "import", "--from", fixture]).0, 0);
+    let id = &fixture_ids()[0];
+    let (code, out, _) = e.ctl(&["--json", "session", "delete", id]);
+    assert_eq!(code, 1);
+    assert!(out.contains("confirmation_required"), "{out}");
+    assert_eq!(ids_of(&e.ctl(&["--json", "session", "list"]).1).len(), 2);
+    assert_eq!(e.ctl(&["session", "delete", id, "--confirm"]).0, 0);
+    assert_eq!(ids_of(&e.ctl(&["--json", "session", "list"]).1), vec![fixture_ids()[1].clone()]);
+    assert_eq!(e.ctl(&["session", "rename", &fixture_ids()[1], "Budget call"]).0, 0);
+    assert_eq!(e.ctl(&["session", "tag", &fixture_ids()[1], "finance"]).0, 0);
+    let (_, out, _) = e.ctl(&["--json", "session", "get", &fixture_ids()[1]]);
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["data"]["title"], "Budget call");
+    assert_eq!(v["data"]["tags"], serde_json::json!(["finance"]));
+}
+
+/// Writes the store the app produced to $OATS_STORE_DUMP (when set) so `bin/meeting sessions list`
+/// can be run against it from the dotfiles side (see ci/meeting-compat.sh).
+#[test]
+fn engine_store_for_meeting_compat() {
+    let Some(dump) = std::env::var_os("OATS_STORE_DUMP") else { return };
+    let e = Engine::start();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats");
+    assert_eq!(e.ctl(&["session", "import", "--from", fixture]).0, 0);
+    assert_eq!(e.ctl(&["session", "rename", &fixture_ids()[0], "Acme sync (renamed)"]).0, 0);
+    assert_eq!(e.ctl(&["session", "tag", &fixture_ids()[0], "sales"]).0, 0);
+    let (_, out, _) = e.ctl(&["--json", "session", "list"]);
+    let _ = out;
+    let store = std::path::Path::new(&e.rt).join("../data/sessions");
+    let status = Command::new("cp").arg("-R").arg(&store).arg(&dump).status().unwrap();
+    assert!(status.success());
 }

@@ -25,6 +25,8 @@ fn rig() -> Rig {
         os: "linux".into(),
         arch: "x86_64".into(),
         machine: "default".into(),
+        sessions_dir: dir.path().join("sessions"),
+        secrets: None,
     })
     .unwrap();
     engine.set("audio.dir", &json!(dir.path().join("rec").to_str().unwrap()), "test").unwrap();
@@ -155,6 +157,8 @@ fn every_backend_value_resolves_or_fails_with_a_structured_error() {
         os: "linux".into(),
         arch: "x86_64".into(),
         machine: "default".into(),
+        sessions_dir: dir.path().join("sessions"),
+        secrets: None,
     })
     .unwrap();
     let (_, values) = keys::choices().into_iter().find(|(p, _)| *p == "audio.backend").unwrap();

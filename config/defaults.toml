@@ -34,6 +34,50 @@ hot_reload = true
 # Control socket path; empty means the per-user runtime dir.
 socket = ""
 
+[ics]
+# Whether all-day events appear in ics-events.
+all_day = "include"
+# Allow file:// feeds (local, not gated by network.allow).
+allow_file = true
+# Directory for cached feeds; empty means ics/ beside the sessions dir.
+cache_dir = ""
+# Whether STATUS:CANCELLED events appear in ics-events.
+cancelled = "hide"
+# Seconds between automatic refreshes of a feed with no refresh_secs of its own; 0 means manual only.
+default_refresh_secs = "900"
+# IANA zone for floating times and for the midnight bounds of all-day events.
+default_tz = "UTC"
+# Master switch for refreshing feeds (manual and scheduled). Cached events stay readable.
+enabled = true
+# JSON array of feeds: {name, url, enabled, refresh_secs, header}. Edit with ics-add / ics-remove.
+feeds = "[]"
+# Largest feed body accepted, in bytes.
+max_bytes = "5242880"
+# Most occurrences expanded per recurring event per query.
+max_occurrences = "500"
+# A malformed event fails the whole feed (error) or is dropped and counted (skip).
+on_bad_event = "error"
+# When a refresh fails, keep serving the last good cached copy.
+stale_on_error = true
+# Whole-request timeout for a feed fetch, in seconds.
+timeout_secs = "15"
+# An unknown TZID fails the event (error) or falls back to ics.default_tz.
+unknown_tz = "error"
+# Scheme webcal:// URLs are fetched with.
+webcal_scheme = "https"
+# Default length of the ics-events window in days when no end is given.
+window_days = "7"
+
+[kb]
+# Embedding endpoint base URL for kb.embedder ollama / openai-compatible.
+base_url = ""
+# Knowledge-base folder of .md/.txt files; empty means <data dir>/kb.
+dir = ""
+# KB embedder: local deterministic hashing, or a model endpoint (gated by network.allow unless loopback).
+embedder = "hash"
+# Embedding model name for the ollama / openai-compatible embedders.
+model = "nomic-embed-text"
+
 [license]
 # Licence holder metadata (placeholder; no licence chosen).
 holder = ""
@@ -41,18 +85,44 @@ holder = ""
 spdx = "LicenseRef-Undecided"
 
 [llm]
+# Reference (secret:<namespace>/<name>) to the LLM API key in the secrets backend. The key itself is never in config; store it with secret-set.
+api_key_ref = "secret:llm/api-key"
 # Notes-generation LLM backend.
 backend = "ollama"
+# LLM endpoint base URL; empty means the backend default (required for openai-compatible).
+base_url = ""
+# Model name sent to the LLM backend.
+model = "llama3.1"
 
 [network]
 # Allow outward network calls (cloud STT / LLM). Off means such backends are denied.
 allow = false
+
+[notes]
+# Reject generated notes that lack a '## ' heading the template's prompt demands.
+enforce_headings = true
 
 [privacy]
 # Hide the app window from screen capture.
 hide_from_capture = true
 # How hiding is done; set per OS by the os axis.
 hide_method = "none"
+
+[secrets]
+# Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.
+backend = "env-then-keyring"
+# Prefix of the environment variable holding a secret: secret:ics/work reads OATS_SECRET_ICS_WORK.
+env_prefix = "OATS_SECRET_"
+# Service name secrets are filed under in the OS keychain.
+keyring_service = "oats-meetings-rs"
+
+[sessions]
+# Require confirm=true to delete a session.
+confirm_delete = true
+# Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.
+delete_mode = "trash"
+# Session store directory (OpenOats layout); empty means the per-user data dir.
+root = ""
 
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
@@ -65,3 +135,7 @@ adapter = "none"
 [stt.local]
 # Local ASR model name.
 model = "base.en"
+
+[templates]
+# Folder of note-template TOML files; empty means <config dir>/templates.
+dir = ""

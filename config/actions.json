@@ -123,24 +123,50 @@
       "status": "implemented"
     },
     {
-      "doc": "List audio capture devices (loopback and mic) for the selected backend.",
-      "effect": "read",
-      "name": "devices-list",
-      "params": [],
+      "doc": "Import sessions from an OpenOats sessions root or one session dir.",
+      "effect": "write",
+      "name": "session-import",
+      "params": [
+        {
+          "name": "from",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
       "status": "implemented"
     },
     {
-      "doc": "Start recording a session (system loopback + mic to one WAV).",
-      "effect": "control",
-      "name": "record-start",
+      "doc": "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.",
+      "effect": "write",
+      "name": "ics-add",
       "params": [
         {
-          "name": "session",
-          "required": false,
-          "type": "Option<String>"
+          "name": "name",
+          "required": true,
+          "type": "String"
         },
         {
-          "name": "title",
+          "name": "url",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "refresh_secs",
+          "required": false,
+          "type": "Option<u64>"
+        },
+        {
+          "name": "header",
           "required": false,
           "type": "Option<String>"
         }
@@ -148,28 +174,146 @@
       "status": "implemented"
     },
     {
-      "doc": "Stop recording and save the session.",
+      "doc": "Unsubscribe from a feed and drop its cache.",
+      "effect": "write",
+      "name": "ics-remove",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Subscribed feeds with cache and refresh state.",
+      "effect": "read",
+      "name": "ics-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Fetch one feed (or every enabled feed) now; gated by network.allow.",
+      "effect": "write",
+      "name": "ics-refresh",
+      "params": [
+        {
+          "name": "name",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Events from the cached feeds in a time window (RFC 3339 or YYYY-MM-DD), recurrences expanded.",
+      "effect": "read",
+      "name": "ics-events",
+      "params": [
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "feed",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Store a secret under key 'namespace/name' in the writable secrets backend (OS keychain). The value is never shown again.",
+      "effect": "write",
+      "name": "secret-set",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Delete a stored secret.",
+      "effect": "write",
+      "name": "secret-delete",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Whether a secret resolves in the configured backend (never returns the value).",
+      "effect": "read",
+      "name": "secret-has",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Start recording a session.",
+      "effect": "control",
+      "name": "record-start",
+      "params": [],
+      "status": "planned"
+    },
+    {
+      "doc": "Stop recording.",
       "effect": "control",
       "name": "record-stop",
       "params": [],
-      "status": "implemented"
+      "status": "planned"
     },
     {
       "doc": "Pause or resume recording.",
       "effect": "control",
       "name": "record-pause",
       "params": [],
-      "status": "implemented"
-    },
-    {
-      "doc": "List sessions.",
-      "effect": "read",
-      "name": "session-list",
-      "params": [],
       "status": "planned"
     },
     {
-      "doc": "One session with its metadata and duration.",
+      "doc": "List sessions, optionally in a time window (RFC 3339).",
+      "effect": "read",
+      "name": "session-list",
+      "params": [
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "One session with its metadata.",
       "effect": "read",
       "name": "session-get",
       "params": [
@@ -182,7 +326,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Rename a session.",
+      "doc": "Rename (retitle) a session.",
       "effect": "write",
       "name": "session-rename",
       "params": [
@@ -197,10 +341,10 @@
           "type": "String"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Tag a session.",
+      "doc": "Add a tag to a session, or remove it with remove=true.",
       "effect": "write",
       "name": "session-tag",
       "params": [
@@ -213,12 +357,17 @@
           "name": "tag",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "remove",
+          "required": false,
+          "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Delete a session; needs confirm.",
+      "doc": "Delete a session; needs confirm=true while sessions.confirm_delete is on.",
       "effect": "write",
       "name": "session-delete",
       "params": [
@@ -233,10 +382,10 @@
           "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "A session transcript.",
+      "doc": "A session transcript (final, else live).",
       "effect": "read",
       "name": "transcript-get",
       "params": [
@@ -246,7 +395,7 @@
           "type": "String"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Search transcripts.",
@@ -262,7 +411,7 @@
       "status": "planned"
     },
     {
-      "doc": "Generate notes from a template.",
+      "doc": "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.",
       "effect": "write",
       "name": "notes-generate",
       "params": [
@@ -275,19 +424,55 @@
           "name": "template",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "dry_run",
+          "required": false,
+          "type": "Option<bool>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "List note templates.",
       "effect": "read",
       "name": "template-list",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     },
     {
-      "doc": "Search the knowledge base.",
+      "doc": "One note template.",
+      "effect": "read",
+      "name": "template-get",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Import an OpenOats templates.json into the templates folder.",
+      "effect": "write",
+      "name": "template-import",
+      "params": [
+        {
+          "name": "from",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Search the knowledge base (deterministic ranking).",
       "effect": "read",
       "name": "kb-search",
       "params": [
@@ -295,27 +480,33 @@
           "name": "query",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "Option<u64>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Rebuild the knowledge base index.",
       "effect": "write",
       "name": "kb-reindex",
       "params": [],
-      "status": "planned"
+      "status": "implemented"
     }
   ],
   "events": [
     "setting-changed",
     "window-changed",
     "config-reloaded",
+    "config-reload-failed",
     "recording-started",
-    "recording-paused",
-    "recording-stopped",
     "segment",
     "session-saved",
+    "session-deleted",
+    "ics-updated",
     "quit"
   ],
   "schema_version": 1

@@ -119,6 +119,15 @@ fn resolved_for(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Result<(resol
     Ok((r, h))
 }
 
+/// Error codes are `&'static str`; map the engine's codes back, anything else is `reload_failed`.
+fn remote_code(code: &str) -> &'static str {
+    const KNOWN: &[&str] = &[
+        "unknown_key", "invalid_value", "type_mismatch", "invalid_combination", "parse_error",
+        "io_error", "already_running", "unsupported_version",
+    ];
+    KNOWN.iter().copied().find(|k| *k == code).unwrap_or("reload_failed")
+}
+
 fn scalar(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -168,6 +177,22 @@ fn dispatch(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<(Va
                 .ok_or_else(|| ConfigError::new("unknown_key", format!("unknown key '{key}'")))?;
             Ok((json!({"key": key, "value": v}), format!("{}\n", scalar(v))))
         }
+        "reload" => {
+            // Unlike the other verbs this talks to the running engine: it re-reads the user
+            // file and swaps the whole config there.
+            let dir = crate::control::paths::runtime_dir(env);
+            let mut c = crate::control::client::Client::connect(&dir)?;
+            let r = c.call("config-reload", serde_json::Map::new())?;
+            if r["ok"] == json!(true) {
+                let changed = r["data"]["changed"].as_array().map_or(0, Vec::len);
+                Ok((r["data"].clone(), format!("reloaded ({changed} key(s) changed)\n")))
+            } else {
+                Err(ConfigError::new(
+                    remote_code(r["error"]["code"].as_str().unwrap_or("")),
+                    r["error"]["message"].as_str().unwrap_or("reload failed").to_string(),
+                ))
+            }
+        }
         "generate" => {
             let dir = PathBuf::from(o.dir.clone().unwrap_or_else(|| "config".into()));
             if o.check {
@@ -180,7 +205,7 @@ fn dispatch(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<(Va
         }
         other => Err(ConfigError::new(
             "usage",
-            format!("config: unknown subcommand '{other}' (check|resolved|get|generate)"),
+            format!("config: unknown subcommand '{other}' (check|resolved|get|reload|generate)"),
         )),
     }
 }

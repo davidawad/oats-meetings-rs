@@ -63,25 +63,14 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
     })
 }
 
-/// Where recordings go: `audio.dir`, else the per-user sessions dir (same default as the
-/// session store, so recordings show up as sessions).
-pub fn record_root(flat: &Flat, env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
+/// Where recordings go: `audio.dir`, else `default` (the session store root, so recordings are sessions).
+pub fn record_root(flat: &Flat, default: PathBuf) -> PathBuf {
     let cfg = s(flat, "audio.dir");
-    if !cfg.is_empty() {
-        return PathBuf::from(cfg);
-    }
-    if let Some(d) = env("OATS_DATA_DIR") {
-        return PathBuf::from(d).join("sessions");
-    }
-    let home = env("HOME").or_else(|| env("USERPROFILE")).unwrap_or_default();
-    let base = if cfg!(target_os = "macos") {
-        PathBuf::from(&home).join("Library/Application Support")
-    } else if cfg!(windows) {
-        env("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&home))
+    if cfg.is_empty() {
+        default
     } else {
-        env("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&home).join(".local/share"))
-    };
-    base.join("oats-meetings-rs").join("sessions")
+        PathBuf::from(cfg)
+    }
 }
 
 fn valid_id(id: &str) -> bool {
@@ -187,7 +176,15 @@ impl Recorder {
         let ended = oats_audio::timefmt::now_secs();
         let Active { id, title, started, dir, rec } = a;
         let summary = rec.stop().map_err(audio_err)?;
-        write_meta(&dir, &meta_for(&id, &title, started, Some(ended), summary.duration_ms, summary.channels))?;
+        // Merge into what is on disk: tags or a rename made during the recording survive the stop.
+        let mut m = read_meta(&dir).unwrap_or_default();
+        for (k, v) in meta_for(&id, &title, started, Some(ended), summary.duration_ms, summary.channels) {
+            if k == "title" && m.get("title").and_then(Value::as_str).is_some_and(|t| !t.is_empty()) {
+                continue;
+            }
+            m.insert(k, v);
+        }
+        write_meta(&dir, &m)?;
         Ok(json!({"session": id, "path": summary.path, "duration_ms": summary.duration_ms,
             "frames": summary.frames, "rate": summary.rate, "channels": summary.channels,
             "system_samples": summary.system_samples, "mic_samples": summary.mic_samples}))
@@ -206,26 +203,23 @@ impl Recorder {
         self.active.lock().expect("active").as_ref().map(|a| a.rec.paused())
     }
 
-    /// `session-get`: the live recording, else `<root>/<id>/session.json`.
-    pub fn get(&self, root: &Path, id: &str) -> Result<Value> {
-        if !valid_id(id) {
-            return Err(ConfigError::new("invalid_argument", format!("invalid session id {id:?}")));
+    /// Add recording facts to a `session-get` result: `state`, `duration_ms` and `audio_path`.
+    /// Live recordings report the audio written so far; saved ones the duration stored at stop.
+    pub fn annotate(&self, v: &mut Value, id: &str) {
+        let live = self.active.lock().expect("active");
+        if let Some(a) = live.as_ref().filter(|a| a.id == id) {
+            v["state"] = json!(if a.rec.paused() { "paused" } else { "recording" });
+            v["duration_ms"] = json!(a.rec.duration_ms());
+            v["audio_path"] = json!(a.rec.path());
+            return;
         }
-        if let Some(a) = self.active.lock().expect("active").as_ref().filter(|a| a.id == id) {
-            return Ok(json!({
-                "id": a.id, "title": a.title, "state": if a.rec.paused() { "paused" } else { "recording" },
-                "started_at": oats_audio::timefmt::iso(a.started), "ended_at": Value::Null,
-                "duration_ms": a.rec.duration_ms(), "audio_path": a.rec.path(), "path": a.dir,
-            }));
-        }
-        let dir = root.join(id);
-        let m = read_meta(&dir).ok_or_else(|| ConfigError::new("not_found", format!("no session '{id}'")))?;
-        let audio = dir.join(m.get("audioFile").and_then(Value::as_str).unwrap_or(AUDIO_FILE));
-        let g = |k: &str| m.get(k).cloned().unwrap_or(Value::Null);
-        Ok(json!({
-            "id": id, "title": g("title"), "state": "saved", "started_at": g("startedAt"), "ended_at": g("endedAt"),
-            "duration_ms": g("durationMs"), "audio_path": if audio.exists() { json!(audio) } else { Value::Null },
-            "path": dir,
-        }))
+        v["state"] = json!("saved");
+        let meta = v["metadata"].as_object().cloned().unwrap_or_default();
+        v["duration_ms"] = meta.get("durationMs").cloned().unwrap_or(Value::Null);
+        let audio = v["path"].as_str().map(|d| Path::new(d).join(meta.get("audioFile").and_then(Value::as_str).unwrap_or(AUDIO_FILE)));
+        v["audio_path"] = match audio {
+            Some(p) if p.exists() => json!(p),
+            _ => Value::Null,
+        };
     }
 }
