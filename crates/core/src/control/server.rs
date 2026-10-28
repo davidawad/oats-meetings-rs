@@ -350,6 +350,11 @@ fn hello() -> Value {
 }
 
 fn handle(engine: Arc<Engine>, stream: Stream) {
+    // BSD/macOS accept() returns sockets that inherit the listener's O_NONBLOCK (Linux's do not);
+    // the per-connection loop blocks, so make that explicit.
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
     let (rx, tx) = Half::pair(stream);
     let conn = Arc::new(Conn { tx: Mutex::new(tx) });
     if conn.send(&hello()).is_err() {
