@@ -14,7 +14,7 @@ fn main() {
         std::process::exit(oats_core::control::run_headless_env());
     }
     #[cfg(feature = "gui")]
-    oats_ui::run_hello();
+    std::process::exit(oats_ui::run_env());
     #[cfg(not(feature = "gui"))]
     eprintln!("built without the `gui` feature; use --headless");
 }
