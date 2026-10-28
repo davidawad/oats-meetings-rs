@@ -12,11 +12,14 @@ oats-core.workspace = true
 serde_json.workspace = true
 raw-window-handle = "0.6"
 
-# Native menubar / tray item. Linux has no backend here (GPUI has no tray API and tray-icon needs
-# gtk + libappindicator); `app.menubar = true` there reports "unsupported" and the app menu +
-# control API stay the surface.
+# Native menubar / tray item. macOS / Windows use tray-icon; Linux / BSD speak StatusNotifierItem
+# over D-Bus with ksni (no gtk / libappindicator; zbus on async-io, already in the tree via GPUI),
+# dot-4uzgol.41. With no SNI host on the bus, `app.menubar = true` reports "unsupported" once.
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tray-icon = { version = "0.21", default-features = false }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

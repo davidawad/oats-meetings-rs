@@ -94,7 +94,7 @@ impl Gate {
     }
 }
 
-/// No tray on this platform (Linux: GPUI has no tray API and tray-icon needs gtk + appindicator).
+/// No tray on this platform.
 pub struct Unsupported;
 
 impl TrayBackend for Unsupported {
@@ -165,13 +165,195 @@ pub mod native {
     }
 }
 
+/// Linux / BSD: a StatusNotifierItem (KDE, waybar, GNOME with the AppIndicator extension, ...).
+/// The SNI service runs on its own thread; menu activations queue action ids that `take_clicks`
+/// drains on the UI thread, so clicks reach the engine through the same `model::dispatch` path.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub mod sni {
+    use super::*;
+    use ksni::blocking::{Handle, TrayMethods};
+    use std::sync::{Arc, Mutex};
+
+    type Clicks = Arc<Mutex<Vec<String>>>;
+
+    /// The SNI object: the tray entries and where clicks go.
+    pub struct Item {
+        entries: Vec<Entry>,
+        clicks: Clicks,
+    }
+
+    impl Item {
+        pub fn new(entries: &[Entry]) -> Self {
+            Self { entries: entries.to_vec(), clicks: Clicks::default() }
+        }
+
+        fn push(&self, id: &str) {
+            self.clicks.lock().unwrap().push(id.to_string());
+        }
+    }
+
+    /// SNI labels treat `_` as a mnemonic marker; double it so labels show verbatim.
+    fn label(s: &str) -> String {
+        s.replace('_', "__")
+    }
+
+    impl ksni::Tray for Item {
+        fn id(&self) -> String {
+            "oats-meetings".into()
+        }
+
+        fn title(&self) -> String {
+            "Oats".into()
+        }
+
+        fn category(&self) -> ksni::Category {
+            ksni::Category::ApplicationStatus
+        }
+
+        /// Same 16x16 placeholder glyph as tray-icon, in SNI's ARGB byte order (dot-4uzgol.10).
+        fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+            let data = (0..16 * 16).flat_map(|_| [0xffu8, 0x89, 0xb4, 0xfa]).collect();
+            vec![ksni::Icon { width: 16, height: 16, data }]
+        }
+
+        fn tool_tip(&self) -> ksni::ToolTip {
+            ksni::ToolTip { title: "Oats".into(), ..Default::default() }
+        }
+
+        /// Primary click on the icon (waybar left click) toggles the window; the menu is on the
+        /// secondary click, as on every SNI host.
+        fn activate(&mut self, _x: i32, _y: i32) {
+            self.push("window-toggle");
+        }
+
+        fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+            self.entries
+                .iter()
+                .map(|e| match e.action {
+                    None => ksni::MenuItem::Separator,
+                    Some(id) => ksni::menu::StandardItem {
+                        label: label(e.label),
+                        activate: Box::new(move |t: &mut Self| t.push(id)),
+                        ..Default::default()
+                    }
+                    .into(),
+                })
+                .collect()
+        }
+    }
+
+    #[derive(Default)]
+    pub struct Sni {
+        handle: Option<Handle<Item>>,
+        clicks: Clicks,
+    }
+
+    impl TrayBackend for Sni {
+        fn show(&mut self, entries: &[Entry]) -> Result<(), String> {
+            let item = Item::new(entries);
+            let clicks = item.clicks.clone();
+            // Errors when there is no session bus or no StatusNotifierWatcher (no tray host).
+            let handle = item.spawn().map_err(|e| format!("no StatusNotifierItem host: {e}"))?;
+            self.clicks = clicks;
+            self.handle = Some(handle);
+            Ok(())
+        }
+
+        fn hide(&mut self) {
+            if let Some(h) = self.handle.take() {
+                h.shutdown().wait();
+            }
+        }
+
+        fn visible(&self) -> bool {
+            self.handle.as_ref().is_some_and(|h| !h.is_closed())
+        }
+
+        fn take_clicks(&mut self) -> Vec<String> {
+            std::mem::take(&mut *self.clicks.lock().unwrap())
+        }
+    }
+
+    impl Drop for Sni {
+        fn drop(&mut self) {
+            self.hide();
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::model;
+        use ksni::Tray;
+
+        #[test]
+        fn menu_mirrors_the_tray_entries() {
+            let item = Item::new(model::TRAY);
+            let menu = item.menu();
+            assert_eq!(menu.len(), model::TRAY.len());
+            for (m, e) in menu.iter().zip(model::TRAY) {
+                match (m, e.action) {
+                    (ksni::MenuItem::Separator, None) => {}
+                    (ksni::MenuItem::Standard(s), Some(_)) => assert_eq!(s.label, e.label),
+                    (m, _) => panic!("{m:?} does not match {e:?}"),
+                }
+            }
+        }
+
+        #[test]
+        fn menu_clicks_queue_their_action_ids() {
+            let mut item = Item::new(model::TRAY);
+            let mut want = vec![];
+            for (i, e) in model::TRAY.iter().enumerate() {
+                let Some(id) = e.action else { continue };
+                let ksni::MenuItem::Standard(s) = &item.menu()[i] else { unreachable!() };
+                (s.activate)(&mut item);
+                want.push(id.to_string());
+            }
+            item.activate(0, 0);
+            want.push("window-toggle".into());
+            let mut b = Sni { handle: None, clicks: item.clicks.clone() };
+            assert_eq!(b.take_clicks(), want);
+            assert!(b.take_clicks().is_empty());
+        }
+
+        #[test]
+        fn icon_is_a_16px_argb_pixmap() {
+            let icons = Item::new(model::TRAY).icon_pixmap();
+            assert_eq!((icons[0].width, icons[0].height, icons[0].data.len()), (16, 16, 16 * 16 * 4));
+        }
+
+        #[test]
+        fn underscores_survive_the_mnemonic_rule() {
+            assert_eq!(label("a_b"), "a__b");
+        }
+
+        /// The pod has no session bus; neither does a bare tty. The gate must get an error, not a panic.
+        #[test]
+        fn no_bus_or_no_host_is_unsupported_not_a_panic() {
+            if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+                return; // a desktop may really show it; that is the neon acceptance, not a unit test
+            }
+            let mut b = Sni::default();
+            let mut g = Gate::default();
+            assert!(g.step(true, &mut b, model::TRAY).is_some());
+            assert!(!b.visible());
+            assert_eq!(g.step(true, &mut b, model::TRAY), None);
+        }
+    }
+}
+
 /// The backend for this platform.
 pub fn native_backend() -> Box<dyn TrayBackend> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         Box::new(native::Native::default())
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Box::new(sni::Sni::default())
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         Box::new(Unsupported)
     }
