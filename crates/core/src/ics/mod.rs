@@ -317,8 +317,7 @@ fn remove(engine: &Engine, name: &str) -> Result<Value> {
     find(&feeds, name)?;
     feeds.retain(|f| f.name != name);
     save_feeds(engine, &feeds, "ics-remove")?;
-    c.cache.remove(name);
-    engine.bus.publish("ics-updated", json!({"feed": name, "removed": true}));
+    // The cache is dropped and ics-updated published by IcsSubsystem::apply.
     Ok(json!({"removed": name, "feeds": feeds.len()}))
 }
 
