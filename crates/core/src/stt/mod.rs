@@ -64,6 +64,32 @@ pub struct Utt {
     pub end: f64,
 }
 
+/// The audio-shaping tunables (`stt.speech_peak`, `stt.pad`, `stt.final_piece`, `stt.feed`),
+/// converted to samples at the recogniser's rate.
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    /// A 10 ms frame whose peak is below this is silence.
+    pub speech_peak: f32,
+    pub pad_samples: usize,
+    pub final_piece_samples: usize,
+    pub feed_samples: usize,
+}
+
+fn samples_of(d: crate::config::typed::Dur) -> usize {
+    (d.0 as u128 * u128::from(SAMPLE_RATE) / 1000) as usize
+}
+
+impl Tuning {
+    pub fn from_config(c: &Stt) -> Tuning {
+        Tuning {
+            speech_peak: c.speech_peak as f32 / 1000.0,
+            pad_samples: samples_of(c.pad),
+            final_piece_samples: samples_of(c.final_piece).max(1),
+            feed_samples: samples_of(c.feed).max(1),
+        }
+    }
+}
+
 // ---- settings ------------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
@@ -84,6 +110,8 @@ pub struct Settings {
     pub cloud_model: String,
     pub cloud_key: String,
     pub cloud_timeout: std::time::Duration,
+    pub max_key_len: usize,
+    pub tuning: Tuning,
 }
 
 fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
@@ -92,7 +120,7 @@ fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
 
 impl Settings {
     /// Parse and check every `stt.*` value. `sessions_dir` anchors the default models directory.
-    pub fn from_config(c: &Stt, sessions_dir: &Path) -> Result<Settings> {
+    pub fn from_config(c: &Stt, sessions_dir: &Path, max_key_len: usize) -> Result<Settings> {
         if c.language.trim().is_empty() {
             return Err(invalid("language", "must not be empty"));
         }
@@ -134,6 +162,8 @@ impl Settings {
             cloud_model: c.cloud.model.trim().to_string(),
             cloud_key: c.cloud.key.trim().to_string(),
             cloud_timeout: c.cloud.timeout.as_duration(),
+            max_key_len,
+            tuning: Tuning::from_config(c),
         })
     }
 
@@ -180,7 +210,7 @@ pub fn make_asr(s: &Settings, network_allow: bool, secrets: &dyn crate::secrets:
             let key = if s.cloud_key.is_empty() {
                 None
             } else {
-                Some(crate::secrets::resolve(secrets, &s.cloud_key)?)
+                Some(crate::secrets::resolve(secrets, &s.cloud_key, s.max_key_len)?)
             };
             Ok(Arc::new(cloud::OpenAiAsr {
                 url: s.cloud_url.clone(),
@@ -253,20 +283,15 @@ fn peak(x: &[f32]) -> f32 {
     x.iter().fold(0.0f32, |m, v| m.max(v.abs()))
 }
 
-/// A 10 ms frame with a peak below this is silence.
-const SPEECH_PEAK: f32 = 0.01;
-/// Silence kept around the speech that is sent on.
-const PAD_SAMPLES: usize = SAMPLE_RATE as usize / 4;
-
 /// First and last sample worth sending: the span from the first to the last non-silent 10 ms
 /// frame, padded. `None` if the audio is all silence. Whisper's segment times drift inside long
 /// silences, so leading silence is cut and its length added back as the offset.
-fn speech_bounds(x: &[f32]) -> Option<(usize, usize)> {
+fn speech_bounds(x: &[f32], t: &Tuning) -> Option<(usize, usize)> {
     let frame = SAMPLE_RATE as usize / 100;
-    let loud = |c: &[f32]| peak(c) >= SPEECH_PEAK;
+    let loud = |c: &[f32]| peak(c) >= t.speech_peak;
     let first = x.chunks(frame).position(loud)?;
     let last = x.chunks(frame).rposition(loud)?;
-    Some(((first * frame).saturating_sub(PAD_SAMPLES), ((last + 1) * frame + PAD_SAMPLES).min(x.len())))
+    Some(((first * frame).saturating_sub(t.pad_samples), ((last + 1) * frame + t.pad_samples).min(x.len())))
 }
 
 fn utts(segs: Vec<Segment>, offset: f64, speaker: &str) -> Vec<Utt> {
@@ -277,8 +302,8 @@ fn utts(segs: Vec<Segment>, offset: f64, speaker: &str) -> Vec<Utt> {
         .collect()
 }
 
-fn run_asr(asr: &dyn Asr, pcm: &[f32], offset: f64, speaker: &str, language: &str) -> Result<Vec<Utt>> {
-    let Some((from, to)) = speech_bounds(pcm) else {
+fn run_asr(asr: &dyn Asr, pcm: &[f32], offset: f64, speaker: &str, language: &str, t: &Tuning) -> Result<Vec<Utt>> {
+    let Some((from, to)) = speech_bounds(pcm, t) else {
         return Ok(vec![]);
     };
     let at = offset + from as f64 / f64::from(SAMPLE_RATE);
@@ -301,6 +326,7 @@ pub struct Live {
     asr: Arc<dyn Asr>,
     language: String,
     window: usize,
+    tuning: Tuning,
     names: [String; 2],
     bufs: [ChanBuf; 2],
 }
@@ -321,11 +347,12 @@ fn quiet_cut(x: &[f32], window: usize) -> usize {
 }
 
 impl Live {
-    pub fn new(asr: Arc<dyn Asr>, language: &str, chunk_secs: f64, you: &str, them: &str) -> Live {
+    pub fn new(asr: Arc<dyn Asr>, language: &str, chunk_secs: f64, tuning: Tuning, you: &str, them: &str) -> Live {
         Live {
             asr,
             language: language.to_string(),
-            window: ((chunk_secs.max(0.5)) * f64::from(SAMPLE_RATE)) as usize,
+            window: (chunk_secs * f64::from(SAMPLE_RATE)) as usize,
+            tuning,
             names: [you.to_string(), them.to_string()],
             bufs: [ChanBuf::default(), ChanBuf::default()],
         }
@@ -341,7 +368,7 @@ impl Live {
             let chunk: Vec<f32> = self.bufs[ch].pcm.drain(..cut).collect();
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += cut;
-            out.extend(run_asr(&*self.asr, &chunk, offset, &self.names[ch], &self.language)?);
+            out.extend(run_asr(&*self.asr, &chunk, offset, &self.names[ch], &self.language, &self.tuning)?);
         }
         Ok(out)
     }
@@ -353,7 +380,7 @@ impl Live {
             let chunk = std::mem::take(&mut self.bufs[ch].pcm);
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += chunk.len();
-            out.extend(run_asr(&*self.asr, &chunk, offset, &self.names[ch], &self.language)?);
+            out.extend(run_asr(&*self.asr, &chunk, offset, &self.names[ch], &self.language, &self.tuning)?);
         }
         Ok(out)
     }
@@ -361,14 +388,12 @@ impl Live {
 
 // ---- final ---------------------------------------------------------------------------------
 
-/// Longest stretch sent in one request in the final pass (cloud uploads are size-limited).
-const FINAL_PIECE_SECS: usize = 600;
-
-fn final_channel(asr: &dyn Asr, pcm: &[f32], speaker: &str, language: &str) -> Result<Vec<Utt>> {
-    let piece = FINAL_PIECE_SECS * SAMPLE_RATE as usize;
+/// The final pass sends `stt.final_piece` at a time (cloud uploads are size-limited).
+fn final_channel(asr: &dyn Asr, pcm: &[f32], speaker: &str, language: &str, t: &Tuning) -> Result<Vec<Utt>> {
+    let piece = t.final_piece_samples;
     let mut out = Vec::new();
     for (i, chunk) in pcm.chunks(piece).enumerate() {
-        out.extend(run_asr(asr, chunk, (i * piece) as f64 / f64::from(SAMPLE_RATE), speaker, language)?);
+        out.extend(run_asr(asr, chunk, (i * piece) as f64 / f64::from(SAMPLE_RATE), speaker, language, t)?);
     }
     Ok(out)
 }
@@ -392,9 +417,6 @@ pub fn utterance_json(u: &Utt, started: DateTime<Utc>) -> Value {
 }
 
 // ---- the pipeline --------------------------------------------------------------------------
-
-/// Window size, in seconds, used to feed a file to `Live` as if it were arriving.
-const FEED_SECS: f64 = 0.5;
 
 /// Transcribe `chans` into a new session `id`: live pass (if enabled) then final pass (if
 /// enabled). `bus` gets a `segment` event per utterance and `session-saved` at the end.
@@ -424,8 +446,8 @@ pub fn run(
     let (mut live_n, mut final_n) = (0usize, 0usize);
     let result = (|| -> Result<()> {
         if s.live_enabled {
-            let mut live = Live::new(Arc::clone(&asr), &s.language, s.chunk_secs, &s.speaker_you, &s.speaker_them);
-            let step = (FEED_SECS * f64::from(SAMPLE_RATE)) as usize;
+            let mut live = Live::new(Arc::clone(&asr), &s.language, s.chunk_secs, s.tuning, &s.speaker_you, &s.speaker_them);
+            let step = s.tuning.feed_samples;
             let total = chans.you.len().max(chans.them.len());
             let mut pos = 0;
             let mut write = |us: Vec<Utt>| -> Result<()> {
@@ -448,8 +470,8 @@ pub fn run(
             write(live.flush()?)?;
         }
         if s.final_enabled {
-            let mut all = final_channel(&*asr, &chans.you, &s.speaker_you, &s.language)?;
-            all.extend(final_channel(&*asr, &chans.them, &s.speaker_them, &s.language)?);
+            let mut all = final_channel(&*asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
+            all.extend(final_channel(&*asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?);
             let all = by_time(all);
             let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
             store.write_transcript(id, "final", &lines)?;
@@ -476,7 +498,7 @@ pub fn run(
 // ---- engine glue ---------------------------------------------------------------------------
 
 fn settings_of(engine: &Engine, cfg: &Config) -> Result<Settings> {
-    Settings::from_config(&cfg.stt, engine.default_sessions_dir())
+    Settings::from_config(&cfg.stt, engine.default_sessions_dir(), cfg.secrets.max_key_len as usize)
 }
 
 pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
@@ -501,7 +523,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             let key = if s.cloud_key.is_empty() {
                 "none"
             } else {
-                match crate::secrets::resolve(&*engine.secret_store(&cfg), &s.cloud_key) {
+                match crate::secrets::resolve(&*engine.secret_store(&cfg), &s.cloud_key, cfg.secrets.max_key_len as usize) {
                     Ok(_) => "set",
                     Err(e) if e.code == "secret_not_found" => "missing",
                     Err(e) => e.code,
@@ -547,7 +569,7 @@ impl Subsystem for SttSubsystem {
             .upgrade()
             .map(|e| e.default_sessions_dir().to_path_buf())
             .unwrap_or_default();
-        let s = Settings::from_config(&new.stt, &dir)?;
+        let s = Settings::from_config(&new.stt, &dir, new.secrets.max_key_len as usize)?;
         if s.backend == SttBackend::Cloud {
             s.check_cloud()?;
         }
@@ -600,7 +622,7 @@ mod tests {
         c.insert("stt.final.enabled".into(), json!(fin));
         let nested = crate::config::resolve::nest(&c);
         let cfg: Config = serde_json::from_value(nested).unwrap();
-        Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions")).unwrap()
+        Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions"), cfg.secrets.max_key_len as usize).unwrap()
     }
 
     #[test]
@@ -614,7 +636,7 @@ mod tests {
     #[test]
     fn live_windows_offsets_and_flush() {
         let asr = Arc::new(Fake { calls: Mutex::new(vec![]) });
-        let mut live = Live::new(asr.clone(), "en", 4.0, "you", "remote_1");
+        let mut live = Live::new(asr.clone(), "en", 4.0, settings(true, true).tuning, "you", "remote_1");
         assert!(live.push(0, &tone(3.0)).unwrap().is_empty());
         let a = live.push(0, &tone(3.0)).unwrap(); // 6 s buffered: one 4 s window
         assert_eq!(a.len(), 1);
@@ -634,7 +656,7 @@ mod tests {
         let mut pcm = vec![0.0f32; 16_000 * 2];
         pcm.extend(tone(1.0));
         pcm.extend(vec![0.0f32; 16_000 * 3]);
-        let us = run_asr(&*asr, &pcm, 10.0, "you", "en").unwrap();
+        let us = run_asr(&*asr, &pcm, 10.0, "you", "en", &settings(true, true).tuning).unwrap();
         assert_eq!(us.len(), 1);
         assert!((us[0].start - 11.75).abs() < 0.02, "{}", us[0].start); // 10 + 2 s - 0.25 s pad
         let sent = asr.calls.lock().unwrap()[0] as f64 / 16_000.0;
@@ -644,7 +666,7 @@ mod tests {
     #[test]
     fn silence_is_not_sent_to_the_recogniser() {
         let asr = Arc::new(Fake { calls: Mutex::new(vec![]) });
-        let mut live = Live::new(asr.clone(), "en", 2.0, "you", "remote_1");
+        let mut live = Live::new(asr.clone(), "en", 2.0, settings(true, true).tuning, "you", "remote_1");
         assert!(live.push(0, &vec![0.0; 16_000 * 5]).unwrap().is_empty());
         assert!(live.flush().unwrap().is_empty());
         assert!(asr.calls.lock().unwrap().is_empty());
@@ -698,7 +720,7 @@ mod tests {
             let mut c = base.clone();
             c.insert(k.into(), v);
             let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
-            Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions")).map(|_| ())
+            Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions"), cfg.secrets.max_key_len as usize).map(|_| ())
         };
         for (k, v) in [
             ("stt.local.model", "../evil"),
@@ -707,5 +729,46 @@ mod tests {
             assert_eq!(check(k, json!(v)).unwrap_err().code, "invalid_value", "{k}={v}");
         }
         check("stt.live.chunk", json!("10s")).unwrap();
+    }
+
+    fn tuning_with(over: &[(&str, Value)]) -> Tuning {
+        let mut c = crate::config::resolve::defaults_flat();
+        for (k, v) in over {
+            c.insert((*k).into(), v.clone());
+        }
+        let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
+        Tuning::from_config(&cfg.stt)
+    }
+
+    /// stt.speech_peak at its bounds and either side of the threshold; stt.pad in samples.
+    #[test]
+    fn speech_peak_and_pad_boundaries() {
+        let frame = SAMPLE_RATE as usize / 100;
+        let mut x = vec![0.0f32; 20 * frame];
+        x[10 * frame] = 0.05;
+        // 50 permille is exactly the peak: loud. 51 is above it: silence.
+        let t = tuning_with(&[("stt.speech_peak", json!(50)), ("stt.pad", json!("0ms"))]);
+        assert_eq!(speech_bounds(&x, &t), Some((10 * frame, 11 * frame)));
+        let t = tuning_with(&[("stt.speech_peak", json!(51)), ("stt.pad", json!("0ms"))]);
+        assert_eq!(speech_bounds(&x, &t), None);
+        let t = tuning_with(&[("stt.speech_peak", json!(1)), ("stt.pad", json!("0ms"))]);
+        assert!(speech_bounds(&x, &t).is_some());
+        let t = tuning_with(&[("stt.speech_peak", json!(1000))]);
+        assert_eq!(speech_bounds(&x, &t), None);
+        // Pad: 20 ms of it on each side, clamped to the audio.
+        let t = tuning_with(&[("stt.speech_peak", json!(50)), ("stt.pad", json!("20ms"))]);
+        assert_eq!(speech_bounds(&x, &t), Some((8 * frame, 13 * frame)));
+        let t = tuning_with(&[("stt.speech_peak", json!(50)), ("stt.pad", json!("10s"))]);
+        assert_eq!(speech_bounds(&x, &t), Some((0, 20 * frame)));
+    }
+
+    #[test]
+    fn final_piece_and_feed_convert_to_samples() {
+        let t = tuning_with(&[("stt.final_piece", json!("10s")), ("stt.feed", json!("50ms"))]);
+        assert_eq!(t.final_piece_samples, 10 * SAMPLE_RATE as usize);
+        assert_eq!(t.feed_samples, SAMPLE_RATE as usize / 20);
+        let t = tuning_with(&[("stt.final_piece", json!("1h")), ("stt.feed", json!("10s"))]);
+        assert_eq!(t.final_piece_samples, 3600 * SAMPLE_RATE as usize);
+        assert_eq!(t.feed_samples, 10 * SAMPLE_RATE as usize);
     }
 }

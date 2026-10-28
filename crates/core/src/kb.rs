@@ -16,7 +16,6 @@ use crate::secrets::{self, SecretStore};
 
 pub const INDEX_FILE: &str = ".oats-kb-index.json";
 const INDEX_VERSION: u64 = 1;
-const DIMS: usize = 256;
 
 fn io(p: &Path, e: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("io_error", format!("{}: {e}", p.display()))
@@ -48,14 +47,14 @@ fn normalize(mut v: Vec<f32>) -> Vec<f32> {
 }
 
 /// Local deterministic embedding: sublinear term frequency into hashed, signed buckets.
-pub fn hash_embed(text: &str) -> Vec<f32> {
+pub fn hash_embed(text: &str, dims: usize) -> Vec<f32> {
     let mut counts: std::collections::BTreeMap<String, f32> = Default::default();
     for t in tokens(text) {
         *counts.entry(t).or_insert(0.0) += 1.0;
     }
-    let mut v = vec![0.0f32; DIMS];
+    let mut v = vec![0.0f32; dims];
     for (tok, c) in counts {
-        let idx = (fnv(&tok, 0) % DIMS as u64) as usize;
+        let idx = (fnv(&tok, 0) % dims as u64) as usize;
         let sign = if fnv(&tok, 1) & 1 == 0 { 1.0 } else { -1.0 };
         v[idx] += sign * (1.0 + c.ln());
     }
@@ -98,7 +97,7 @@ pub struct Ctx<'a> {
 
 fn embedder_id(cfg: &Config) -> String {
     match cfg.kb.embedder {
-        KbEmbedder::Hash => "hash".to_string(),
+        KbEmbedder::Hash => format!("hash:{}", cfg.kb.hash_dims),
         KbEmbedder::Ollama => format!("ollama:{}", cfg.kb.model),
         KbEmbedder::OpenaiCompatible => format!("openai-compatible:{}", cfg.kb.model),
     }
@@ -108,7 +107,7 @@ fn embedder_id(cfg: &Config) -> String {
 fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
     let cfg = ctx.cfg;
     match cfg.kb.embedder {
-        KbEmbedder::Hash => Ok(texts.iter().map(|t| hash_embed(t)).collect()),
+        KbEmbedder::Hash => Ok(texts.iter().map(|t| hash_embed(t, cfg.kb.hash_dims as usize)).collect()),
         KbEmbedder::Ollama => {
             let base = if cfg.kb.base_url.is_empty() { notes::OLLAMA_DEFAULT } else { &cfg.kb.base_url };
             let url = http::join(base, "api/embeddings");
@@ -127,7 +126,7 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             }
             let url = http::join(&cfg.kb.base_url, "embeddings");
             notes::gate(cfg, LlmBackend::OpenaiCompatible, &url)?;
-            let key = match secrets::resolve(ctx.secrets, &cfg.llm.api_key_ref) {
+            let key = match secrets::resolve(ctx.secrets, &cfg.llm.api_key_ref, cfg.secrets.max_key_len as usize) {
                 Ok(k) => Some(k),
                 Err(e) if e.code == "secret_not_found" => None,
                 Err(e) => return Err(e),
@@ -288,11 +287,12 @@ mod tests {
 
     #[test]
     fn hash_embedding_is_deterministic_unit_length() {
-        let a = hash_embed("Annual renewal pricing, annual!");
-        assert_eq!(a, hash_embed("Annual renewal pricing, annual!"));
+        let d = crate::config::keys::default_int("kb.hash_dims") as usize;
+        let a = hash_embed("Annual renewal pricing, annual!", d);
+        assert_eq!(a, hash_embed("Annual renewal pricing, annual!", d));
         let n: f32 = a.iter().map(|x| x * x).sum();
         assert!((n - 1.0).abs() < 1e-4, "{n}");
-        assert_eq!(hash_embed("   "), vec![0.0; DIMS]);
+        assert_eq!(hash_embed("   ", d), vec![0.0; d]);
     }
 
     #[test]
@@ -311,6 +311,17 @@ mod tests {
     }
 
     /// kb.max_chunk / kb.min_chunk at and around their boundaries.
+    /// kb.hash_dims at its bounds: vector length follows it, and the index id records it.
+    #[test]
+    fn hash_dims_bounds_and_index_id() {
+        for dims in [8usize, 256, 8_192] {
+            let v = hash_embed("annual renewal pricing", dims);
+            assert_eq!(v.len(), dims);
+            let n: f32 = v.iter().map(|x| x * x).sum();
+            assert!((n - 1.0).abs() < 1e-4, "{dims}: {n}");
+        }
+    }
+
     #[test]
     fn chunk_limits_are_honoured() {
         let para = "x".repeat(50);
@@ -380,5 +391,12 @@ mod tests {
         other.kb.embedder = KbEmbedder::Ollama;
         let ctx2 = Ctx { cfg: &other, dir: d.path().to_path_buf(), secrets: &secrets };
         assert_eq!(search(&ctx2, "pricing", 3).unwrap_err().code, "index_stale");
+        // kb.hash_dims changed: the old index is refused until kb-reindex rebuilds it.
+        let mut dims = cfg.clone();
+        dims.kb.hash_dims = 16;
+        let ctx3 = Ctx { cfg: &dims, dir: d.path().to_path_buf(), secrets: &secrets };
+        assert_eq!(search(&ctx3, "pricing", 3).unwrap_err().code, "index_stale");
+        reindex(&ctx3).unwrap();
+        search(&ctx3, "pricing", 3).unwrap();
     }
 }

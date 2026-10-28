@@ -102,13 +102,6 @@ pub fn settings_of(c: &Config) -> AudioSettings {
     }
 }
 
-fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 200
-        && !id.starts_with('.')
-        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-}
-
 fn read_meta(dir: &Path) -> Option<Map<String, Value>> {
     match serde_json::from_slice::<Value>(&std::fs::read(dir.join("session.json")).ok()?).ok()? {
         Value::Object(m) => Some(m),
@@ -218,7 +211,7 @@ impl Recorder {
         }
         let started = oats_audio::timefmt::now_secs();
         let id = session.map_or_else(|| oats_audio::timefmt::session_id(started), str::to_string);
-        if !valid_id(&id) {
+        if !store.valid_id(&id) {
             return Err(ConfigError::new(
                 "invalid_argument",
                 format!("invalid session id {id:?} (letters, digits, '_', '-', '.' only)"),
@@ -230,7 +223,7 @@ impl Recorder {
         let started_dt = Utc.timestamp_opt(started, 0).single().unwrap_or_else(Utc::now);
         let dir = store.create(&id, &oats_audio::timefmt::iso(started), title.unwrap_or_default(), &label)?;
         let wav = dir.join(AUDIO_FILE);
-        let trans = plan.map(|p| Transcriber::start(p, Store::new(store.root.clone()), &id, started_dt));
+        let trans = plan.map(|p| Transcriber::start(p, store.sibling(), &id, started_dt));
         let rec = {
             let tapf = |src: oats_audio::Source| -> Box<dyn FnMut(&[f32]) + Send> {
                 match trans.as_ref() {
@@ -260,7 +253,7 @@ impl Recorder {
         *slot = Some(Active {
             id,
             dir,
-            store: Store::new(store.root.clone()),
+            store: store.sibling(),
             layout: st.layout,
             rec,
             trans,

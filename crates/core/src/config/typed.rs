@@ -115,6 +115,8 @@ pub struct ConfigSection {
 pub struct Control {
     pub accept_backoff: Dur,
     pub accept_poll: Dur,
+    pub drain_chunk: u32,
+    pub drain_max: u64,
     pub client_timeout: Dur,
     pub event_queue: u32,
     pub max_line: u64,
@@ -160,6 +162,7 @@ pub struct Kb {
     pub base_url: String,
     pub dir: String,
     pub embedder: KbEmbedder,
+    pub hash_dims: u32,
     pub max_chunk: u32,
     pub min_chunk: u32,
     pub model: String,
@@ -217,6 +220,7 @@ pub enum DeleteMode {
 pub struct Sessions {
     pub confirm_delete: bool,
     pub delete_mode: DeleteMode,
+    pub max_id_len: u32,
     pub root: String,
 }
 
@@ -284,8 +288,12 @@ pub struct Stt {
     pub language: String,
     pub live: SttLive,
     pub local: SttLocal,
+    pub feed: Dur,
+    pub final_piece: Dur,
+    pub pad: Dur,
     pub speaker_them: String,
     pub speaker_you: String,
+    pub speech_peak: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -335,6 +343,7 @@ pub struct Ics {
     pub enabled: bool,
     pub feeds: String,
     pub max_bytes: u64,
+    pub max_name_len: u32,
     pub max_occurrences: u32,
     pub on_bad_event: IcsOnBadEvent,
     pub poll_interval: Dur,
@@ -359,4 +368,5 @@ pub struct Secrets {
     pub backend: SecretsBackend,
     pub env_prefix: String,
     pub keyring_service: String,
+    pub max_key_len: u32,
 }

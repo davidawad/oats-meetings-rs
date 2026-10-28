@@ -27,22 +27,22 @@ fn io(what: &Path, e: impl std::fmt::Display) -> ConfigError {
 }
 
 /// Ids become directory names: no separators, no dot-prefix, no surprises.
-pub fn valid_id(id: &str) -> bool {
+pub fn valid_id(id: &str, max_len: usize) -> bool {
     !id.is_empty()
-        && id.len() <= 200
+        && id.len() <= max_len
         && !id.starts_with('.')
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
-fn check_id(id: &str) -> Result<()> {
-    if valid_id(id) {
+fn check_id(id: &str, max_len: usize) -> Result<()> {
+    if valid_id(id, max_len) {
         Ok(())
     } else {
         Err(ConfigError::new(
             "invalid_argument",
-            format!("invalid session id {id:?} (letters, digits, '_', '-', '.' only)"),
+            format!("invalid session id {id:?} (letters, digits, '_', '-', '.' only; at most {max_len} bytes, sessions.max_id_len)"),
         ))
     }
 }
@@ -67,6 +67,8 @@ pub fn default_sessions_dir(env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
 
 pub struct Store {
     pub root: PathBuf,
+    /// Longest session id, bytes (`sessions.max_id_len`).
+    pub max_id: usize,
 }
 
 struct Loaded {
@@ -160,8 +162,24 @@ fn parse_bound(v: Option<&str>, flag: &str) -> Result<()> {
 }
 
 impl Store {
+    /// A store with the default id limit; the engine uses `with_max_id` to apply the config.
     pub fn new(root: impl Into<PathBuf>) -> Store {
-        Store { root: root.into() }
+        let max_id = crate::config::keys::default_int("sessions.max_id_len") as usize;
+        Store { root: root.into(), max_id }
+    }
+
+    pub fn with_max_id(mut self, max_id: usize) -> Store {
+        self.max_id = max_id;
+        self
+    }
+
+    /// Another handle on the same directory with the same limits.
+    pub fn sibling(&self) -> Store {
+        Store { root: self.root.clone(), max_id: self.max_id }
+    }
+
+    pub fn valid_id(&self, id: &str) -> bool {
+        valid_id(id, self.max_id)
     }
 
     /// Canonical sessions (a dir with a readable session.json) in directory-name order.
@@ -179,7 +197,7 @@ impl Store {
     }
 
     fn find(&self, id: &str) -> Result<Loaded> {
-        check_id(id)?;
+        check_id(id, self.max_id)?;
         load(&self.root.join(id))
             .ok_or_else(|| ConfigError::new("not_found", format!("no session '{id}'")))
     }
@@ -293,7 +311,7 @@ impl Store {
         let mut conflicts = vec![];
         for src in sources {
             let id = id_of(&src);
-            check_id(&id)?;
+            check_id(&id, self.max_id)?;
             let mut meta = src.meta.clone();
             meta.insert("id".into(), json!(id));
             meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
@@ -355,7 +373,7 @@ fn read_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
 impl Store {
     /// Make an empty session directory with its `session.json`; `exists` if the id is taken.
     pub fn create(&self, id: &str, started_at: &str, title: &str, engine: &str) -> Result<PathBuf> {
-        check_id(id)?;
+        check_id(id, self.max_id)?;
         let dir = self.root.join(id);
         if dir.exists() {
             return Err(ConfigError::new("exists", format!("session '{id}' already exists")));
@@ -539,5 +557,20 @@ mod tests {
         let s = Store::new(d.path().join("store"));
         assert_eq!(s.import(&d.path().join("src"), false).unwrap_err().code, "invalid_argument");
         assert!(!d.path().join("escape").exists());
+    }
+
+    /// sessions.max_id_len at its boundary: exactly max is a valid id, one more is not.
+    #[test]
+    fn id_length_cap_boundary() {
+        for max in [8usize, 200, 255] {
+            assert!(valid_id(&"a".repeat(max), max), "{max}");
+            assert!(!valid_id(&"a".repeat(max + 1), max), "{max}+1");
+            assert!(!valid_id("", max));
+        }
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::new(d.path()).with_max_id(8);
+        assert!(s.create("abcdefgh", "2026-01-01T00:00:00Z", "", "t").is_ok());
+        assert_eq!(s.create("abcdefghi", "2026-01-01T00:00:00Z", "", "t").unwrap_err().code, "invalid_argument");
+        assert!(s.sibling().valid_id("12345678") && !s.sibling().valid_id("123456789"));
     }
 }

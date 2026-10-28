@@ -55,7 +55,7 @@ fn emit(bus: &Bus, id: &str, kind: &str, u: &Utt) {
 
 fn live_worker(rx: Receiver<Msg>, plan: Plan, store: Store, id: String, started: DateTime<Utc>) -> LiveOutcome {
     let s = &plan.settings;
-    let mut live = Live::new(Arc::clone(&plan.asr), &s.language, s.chunk_secs, &s.speaker_you, &s.speaker_them);
+    let mut live = Live::new(Arc::clone(&plan.asr), &s.language, s.chunk_secs, s.tuning, &s.speaker_you, &s.speaker_them);
     let mut out = LiveOutcome { utterances: 0, error: None };
     let write = |out: &mut LiveOutcome, us: Vec<Utt>| {
         for u in by_time(us) {
@@ -92,7 +92,7 @@ impl Transcriber {
     pub fn start(plan: Plan, store: Store, id: &str, started: DateTime<Utc>) -> Transcriber {
         let (tx, worker) = if plan.settings.live_enabled {
             let (tx, rx) = channel();
-            let (p, st, i) = (plan.clone(), Store::new(store.root.clone()), id.to_string());
+            let (p, st, i) = (plan.clone(), store.sibling(), id.to_string());
             (Some(tx), Some(std::thread::spawn(move || live_worker(rx, p, st, i, started))))
         } else {
             (None, None)
@@ -157,8 +157,8 @@ impl Transcriber {
         let s = &self.plan.settings;
         let chans = wav::read(wav_path)?;
         let asr = &*self.plan.asr;
-        let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language)?;
-        all.extend(final_channel(asr, &chans.them, &s.speaker_them, &s.language)?);
+        let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
+        all.extend(final_channel(asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?);
         let all = by_time(all);
         let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, self.started)).collect();
         self.store.write_transcript(&self.id, "final", &lines)?;

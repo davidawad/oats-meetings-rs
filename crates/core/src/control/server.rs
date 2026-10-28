@@ -368,7 +368,8 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
         if n as u64 > max_line && buf.last() != Some(&b'\n') {
             // Discard the rest of the line (bounded) so the error line is not lost to a reset
             // from unread data, then resync on the next line; give up on an endless line.
-            let resynced = drain_line(&mut reader);
+            let ctl = &engine.snapshot().config.control;
+            let resynced = drain_line(&mut reader, ctl.drain_chunk as u64, ctl.drain_max);
             let _ = conn.send(&err_envelope(
                 &Value::Null,
                 "request_too_large",
@@ -392,15 +393,18 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
     }
 }
 
-/// Skip input up to the next newline, reading at most 8 MiB. True if a newline was found.
-fn drain_line<R: BufRead>(reader: &mut R) -> bool {
+/// Skip input up to the next newline, `chunk` bytes at a time and at most `max` bytes in all
+/// (`control.drain_chunk`, `control.drain_max`). True if a newline was found.
+fn drain_line<R: BufRead>(reader: &mut R, chunk: u64, max: u64) -> bool {
     let mut junk = Vec::new();
-    for _ in 0..128 {
+    let mut drained = 0u64;
+    while drained < max {
         junk.clear();
-        match reader.by_ref().take(64 * 1024).read_until(b'\n', &mut junk) {
+        let step = chunk.min(max - drained);
+        match reader.by_ref().take(step).read_until(b'\n', &mut junk) {
             Ok(0) | Err(_) => return false,
             Ok(_) if junk.last() == Some(&b'\n') => return true,
-            Ok(_) => {}
+            Ok(n) => drained += n as u64,
         }
     }
     false
@@ -471,4 +475,27 @@ fn subscribe(engine: &Arc<Engine>, conn: &Arc<Conn>, id: &Value, topics: Vec<Str
         }
     });
     None
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+
+    /// control.drain_chunk / control.drain_max: the newline is found when it lies within max bytes
+    /// of the start, not when it lies beyond; the chunk size changes nothing but the read pattern.
+    #[test]
+    fn drain_stops_at_the_newline_or_the_cap() {
+        for chunk in [1024u64, 4096, 65_536] {
+            for (len, max, want) in [(1_000usize, 2_000u64, true), (1_999, 2_000, true), (2_000, 2_000, false), (5_000, 2_000, false)] {
+                let mut data = vec![b'x'; len];
+                data.push(b'\n');
+                data.extend_from_slice(b"rest");
+                let mut r = std::io::BufReader::new(&data[..]);
+                assert_eq!(drain_line(&mut r, chunk, max), want, "chunk {chunk} len {len} max {max}");
+            }
+        }
+        // EOF before a newline is not a resync.
+        let mut r = std::io::BufReader::new(&b"no newline"[..]);
+        assert!(!drain_line(&mut r, 1024, 4096));
+    }
 }

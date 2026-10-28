@@ -157,6 +157,88 @@ fn no_timing_literals_outside_the_key_table() {
     assert!(hits.is_empty(), "timing literals outside the key table:\n{}", hits.join("\n"));
 }
 
+/// Numeric constants in production code are tunables unless they are listed here as true
+/// constants: a wire/protocol number, a file-format version, an audio format, a colour. A new
+/// `const X: u32 = 7;` that is a choice belongs in the key table; one that is a fact of a format
+/// goes on this list with its reason.
+const TRUE_CONSTANTS: &[(&str, &str, &str)] = &[
+    ("crates/audio/src/lib.rs", "SAMPLE_RATE", "recorder output format: 48 kHz mono f32"),
+    ("crates/core/src/stt/wav.rs", "SAMPLE_RATE", "recogniser input format: 16 kHz"),
+    ("crates/core/src/kb.rs", "INDEX_VERSION", "on-disk index format version"),
+    ("crates/core/src/sessions.rs", "SCHEMA_VERSION", "session.json schema version"),
+    ("crates/core/src/templates.rs", "SCHEMA_VERSION", "template file schema version"),
+    ("crates/core/src/config/mod.rs", "SCHEMA_VERSION", "config schema version"),
+    ("crates/core/src/control/mod.rs", "PROTOCOL", "control wire protocol version"),
+    ("crates/ui/src/view.rs", "BG", "colour palette"),
+    ("crates/ui/src/view.rs", "PANEL", "colour palette"),
+    ("crates/ui/src/view.rs", "FG", "colour palette"),
+    ("crates/ui/src/view.rs", "DIM", "colour palette"),
+    ("crates/ui/src/view.rs", "ACCENT", "colour palette"),
+];
+
+fn numeric_consts(prod: &str) -> Vec<(usize, String)> {
+    let mut out = vec![];
+    for (i, line) in prod.lines().enumerate() {
+        let t = line.trim_start();
+        let t = t.strip_prefix("pub(crate) ").or_else(|| t.strip_prefix("pub ")).unwrap_or(t);
+        let Some(rest) = t.strip_prefix("const ").or_else(|| t.strip_prefix("static ")) else { continue };
+        let Some((name, ty)) = rest.split_once(':') else { continue };
+        let ty = ty.trim_start();
+        let numeric = ["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64"]
+            .iter()
+            .any(|n| ty.starts_with(n) && ty[n.len()..].trim_start().starts_with('='));
+        if numeric {
+            out.push((i + 1, name.trim().to_string()));
+        }
+    }
+    out
+}
+
+#[test]
+fn no_unlisted_numeric_constants_in_production_code() {
+    let mut files = vec![];
+    for d in ["crates/core/src", "crates/ctl/src", "crates/ui/src", "crates/audio/src", "src"] {
+        rust_files(&repo(d), &mut files);
+    }
+    let mut hits = vec![];
+    let mut used = std::collections::BTreeSet::new();
+    for f in &files {
+        let rel = f.strip_prefix(repo(".").canonicalize().unwrap_or_else(|_| repo("."))).unwrap_or(f);
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        let rel = rel.split("/../../").last().unwrap_or(&rel).to_string();
+        let text = std::fs::read_to_string(f).unwrap();
+        let prod = text.split("#[cfg(test)]").next().unwrap();
+        for (line, name) in numeric_consts(prod) {
+            match TRUE_CONSTANTS.iter().find(|(p, n, _)| rel.ends_with(p) && *n == name) {
+                Some((p, n, _)) => {
+                    used.insert((*p, *n));
+                }
+                None => hits.push(format!("{rel}:{line}: const {name}")),
+            }
+        }
+        // A bare number handed to a size/length limiter is a tunable too.
+        for (i, l) in prod.lines().enumerate() {
+            let code = l.split("//").next().unwrap();
+            if let Some(arg) = code.split(".take(").nth(1) {
+                if arg.trim_start().starts_with(|c: char| c.is_ascii_digit()) {
+                    hits.push(format!("{rel}:{}: take({})", i + 1, arg.split(')').next().unwrap_or("")));
+                }
+            }
+        }
+    }
+    assert!(hits.is_empty(), "numeric tunables outside the key table (add a key, or list a true constant):\n{}", hits.join("\n"));
+    for (p, n, _) in TRUE_CONSTANTS {
+        assert!(used.contains(&(*p, *n)), "stale allowlist entry {p} {n}");
+    }
+}
+
+#[test]
+fn the_const_scanner_sees_what_it_should() {
+    let src = "pub const A: u32 = 1;\nconst B: f64 = 0.5;\nconst C: &str = \"x\";\nstatic D: usize = 3;\nconst E: Duration = X;\n";
+    let found: Vec<String> = numeric_consts(src).into_iter().map(|(_, n)| n).collect();
+    assert_eq!(found, ["A", "B", "D"]);
+}
+
 #[test]
 fn the_grep_test_would_catch_a_literal() {
     // Guard the guard: the pattern the scanner relies on is what a literal looks like.
