@@ -48,7 +48,8 @@ pactl list short sources
   n=$(timeout 5 parec --device=oats_sink.monitor --format=float32le --rate=48000 --channels=1 | wc -c); kill $tp; echo "parec 5s bytes=$n (expect ~960000)") || true
 # Local ASR for the speech test: the checksummed model (ci/fetch-models.sh) and a whisper.cpp build (libclang
 # comes from the host via ci/nix-env.sh).
-OATS_FETCH_PARAKEET=0 OATS_FETCH_MODELS=tiny.en OATS_ONLY_MODEL=tiny.en source "$(dirname "$0")/fetch-models.sh"
+export OATS_ONLY_MODEL=tiny.en
+OATS_FETCH_PARAKEET=0 OATS_FETCH_MODELS=tiny.en source "$(dirname "$0")/fetch-models.sh"
 set -x
 cargo build --locked --workspace --features oats-core/whisper
 rc=0
