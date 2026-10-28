@@ -12,7 +12,7 @@ _dir=${OATS_MODELS_DIR:-${TMPDIR:-/tmp}/oats-models}/bench
 mkdir -p "$_dir"
 if ! command -v flac > /dev/null; then
   # Same pin as ci/nix-env.sh.
-  _flac=$(nix --extra-experimental-features "nix-command flakes" build --no-link --print-out-paths "github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504#flac.bin" | head -1)
+  _flac=$(env -u LD_LIBRARY_PATH nix --extra-experimental-features "nix-command flakes" build --no-link --print-out-paths "github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504#flac.bin" | head -1)
   export PATH="$_flac/bin:$PATH"
 fi
 for _s in dev-clean dev-other; do
