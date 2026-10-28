@@ -154,7 +154,7 @@ pub fn generate(ctx: &Ctx, session: &str, template: &str, dry_run: bool) -> Resu
     }
     gate(ctx.cfg, backend, &url)?;
     let key = api_key(ctx.cfg, ctx.secrets)?;
-    let resp = http::post_json(&url, key.as_deref(), &body, ctx.cfg.llm.timeout.as_duration())?;
+    let resp = http::post_json(&url, key.as_deref(), &body, ctx.cfg.llm.timeout.as_duration(), ctx.cfg.network.error_snippet as usize)?;
     let notes = extract(backend, &resp)?;
     if ctx.cfg.notes.enforce_headings {
         let missing = missing_headings(&tpl.system_prompt, &notes);

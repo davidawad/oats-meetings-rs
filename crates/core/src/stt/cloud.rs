@@ -14,6 +14,10 @@ pub struct OpenAiAsr {
     /// Bearer token; `None` sends no Authorization header.
     pub key: Option<String>,
     pub timeout: std::time::Duration,
+    /// Characters of an error reply kept (`network.error_snippet`).
+    pub snippet: usize,
+    /// Largest reply accepted, bytes (`stt.cloud.max_response`).
+    pub max_response: u64,
 }
 
 fn multipart(boundary: &str, fields: &[(&str, &str)], file: &[u8]) -> Vec<u8> {
@@ -91,11 +95,11 @@ impl Asr for OpenAiAsr {
         let text = resp
             .body_mut()
             .with_config()
-            .limit(8 * 1024 * 1024)
+            .limit(self.max_response)
             .read_to_string()
             .map_err(map_err)?;
         if !(200..300).contains(&status) {
-            let hint: String = text.chars().take(200).collect();
+            let hint: String = text.chars().take(self.snippet).collect();
             return Err(ConfigError::new("stt_http_status", format!("{url}: HTTP {status} {hint}")));
         }
         parse_response(&text, pcm.len() as f64 / f64::from(wav::SAMPLE_RATE))

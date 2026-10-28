@@ -40,8 +40,9 @@ pub fn join(base: &str, path: &str) -> String {
 }
 
 /// POST `body` as JSON and parse the JSON response.
-/// `timeout` is the whole-request limit (`llm.timeout` / `kb.timeout`).
-pub fn post_json(url: &str, bearer: Option<&str>, body: &Value, timeout: Duration) -> Result<Value> {
+/// `timeout` is the whole-request limit (`llm.timeout` / `kb.timeout`); `snippet` the characters
+/// of an error reply kept (`network.error_snippet`).
+pub fn post_json(url: &str, bearer: Option<&str>, body: &Value, timeout: Duration, snippet: usize) -> Result<Value> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
@@ -60,7 +61,7 @@ pub fn post_json(url: &str, bearer: Option<&str>, body: &Value, timeout: Duratio
         .read_to_string()
         .map_err(|e| ConfigError::new("backend_bad_response", format!("{url}: reading reply: {e}")))?;
     if !(200..300).contains(&status) {
-        let snippet: String = text.chars().take(300).collect();
+        let snippet: String = text.chars().take(snippet).collect();
         return Err(ConfigError::new("backend_error", format!("{url}: HTTP {status}: {snippet}")));
     }
     serde_json::from_str(&text)
@@ -98,7 +99,7 @@ mod tests {
             drop(s);
         });
         let t = std::time::Instant::now();
-        let e = post_json(&url, None, &serde_json::json!({}), Duration::from_secs(1)).unwrap_err();
+        let e = post_json(&url, None, &serde_json::json!({}), Duration::from_secs(1), 300).unwrap_err();
         assert_eq!(e.code, "backend_unreachable");
         assert!(t.elapsed() < Duration::from_millis(2500), "{:?}", t.elapsed());
         hold.join().unwrap();
