@@ -4,7 +4,7 @@ Measurements for David's final review. No default was changed by this work.
 
 ## Corpus and licence
 
-- 16 clips (about 189 s, 501 reference words): 8 from LibriSpeech `dev-clean`, 8 from `dev-other` (the harder, noisier-read half), 16 different speakers, 10 male and 6 female.
+- 16 clips (about 189 s, 501 reference words): 8 from LibriSpeech `dev-clean`, 8 from `dev-other` (the harder, noisier-read half), 16 different speakers, 11 male and 5 female.
 - Licence: LibriSpeech is CC BY 4.0 (Panayotov, Chen, Povey, Khudanpur 2015). Checked 2026-10-28 at https://www.openslr.org/12/ and in the archive's `LibriSpeech/LICENSE.TXT` ("licensed under a Creative Commons Attribution 4.0 International License", https://creativecommons.org/licenses/by/4.0/). CC BY 4.0 allows private use and redistribution with attribution, so the per-clip text, hashes and licence are in `tests/fixtures/stt-bench/manifest.tsv` (column `licence`; the test refuses a row that is not `CC-BY-4.0`).
 - Audio is not committed. `ci/fetch-bench-corpus.sh` downloads `dev-clean.tar.gz` and `dev-other.tar.gz` (sha256 pinned, the pins agree with OpenSLR's `md5sum.txt`), verifies every extracted flac against its pinned sha256, and decodes to 16 kHz mono wav.
 - AMI Meeting Corpus (CC BY 4.0) was considered and not used: its audio is hours-long multi-channel meetings that need per-segment alignment from separate annotation zips, too heavy for a small pinned corpus. It would be the right next step for real crosstalk.
