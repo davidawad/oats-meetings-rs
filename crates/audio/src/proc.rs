@@ -36,8 +36,10 @@ pub fn spawn(mut cmd: Command, mut on_samples: OnSamples) -> Result<Box<dyn Capt
         }
     })?;
     let mut stdout = child.stdout.take().expect("piped");
+    let (first_tx, first_rx) = std::sync::mpsc::channel::<()>();
     let reader = std::thread::spawn(move || {
         let (mut buf, mut carry, mut out) = (vec![0u8; 16384], Vec::new(), Vec::new());
+        let mut announced = false;
         while let Ok(n) = stdout.read(&mut buf) {
             if n == 0 {
                 break;
@@ -45,22 +47,38 @@ pub fn spawn(mut cmd: Command, mut on_samples: OnSamples) -> Result<Box<dyn Capt
             out.clear();
             decode_f32le(&mut carry, &buf[..n], &mut out);
             if !out.is_empty() {
+                if !announced {
+                    announced = true;
+                    let _ = first_tx.send(());
+                }
                 on_samples(&out);
             }
         }
     });
-    // A tool that exits at once (bad device name, no server) is an error now, not a silent WAV.
-    std::thread::sleep(std::time::Duration::from_millis(250));
-    if let Ok(Some(status)) = child.try_wait() {
-        let mut err = String::new();
-        if let Some(mut e) = child.stderr.take() {
-            let _ = e.read_to_string(&mut err);
+    // Return only once audio flows: a cold `parec` takes ~2 s to connect on a loaded host, and a
+    // `record start` that returned earlier would silently drop that long from the recording. A tool
+    // that exits first (bad device name, no server) is an error, not a silent WAV.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if first_rx.recv_timeout(std::time::Duration::from_millis(25)).is_ok() {
+            break;
         }
-        let _ = reader.join();
-        return Err(AudioError::new(
-            "capture_failed",
-            format!("{name} exited at once ({status}): {}", err.trim()),
-        ));
+        let exited = child.try_wait().ok().flatten();
+        let timed_out = std::time::Instant::now() >= deadline;
+        if exited.is_some() || timed_out {
+            let _ = child.kill();
+            let status = child.wait().ok();
+            let mut err = String::new();
+            if let Some(mut e) = child.stderr.take() {
+                let _ = e.read_to_string(&mut err);
+            }
+            let _ = reader.join();
+            let why = match status {
+                Some(st) if !timed_out || exited.is_some() => format!("exited at once ({st})"),
+                _ => "delivered no audio within 15 s".to_string(),
+            };
+            return Err(AudioError::new("capture_failed", format!("{name} {why}: {}", err.trim())));
+        }
     }
     Ok(Box::new(ProcCapture { child, reader: Some(reader) }))
 }
