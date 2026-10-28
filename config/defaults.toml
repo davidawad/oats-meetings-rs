@@ -68,6 +68,14 @@ hide_from_capture = true
 # How hiding is done; set per OS by the os axis.
 hide_method = "none"
 
+[secrets]
+# Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.
+backend = "env-then-keyring"
+# Prefix of the environment variable holding a secret: secret:ics/work reads OATS_SECRET_ICS_WORK.
+env_prefix = "OATS_SECRET_"
+# Service name secrets are filed under in the OS keychain.
+keyring_service = "oats-meetings-rs"
+
 [sessions]
 # Require confirm=true to delete a session.
 confirm_delete = true

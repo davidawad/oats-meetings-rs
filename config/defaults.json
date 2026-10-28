@@ -41,6 +41,11 @@
     "hide_from_capture": true,
     "hide_method": "none"
   },
+  "secrets": {
+    "backend": "env-then-keyring",
+    "env_prefix": "OATS_SECRET_",
+    "keyring_service": "oats-meetings-rs"
+  },
   "sessions": {
     "confirm_delete": true,
     "delete_mode": "trash",

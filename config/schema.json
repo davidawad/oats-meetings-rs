@@ -263,6 +263,38 @@
       },
       "type": "object"
     },
+    "secrets": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "default": "env-then-keyring",
+          "description": "Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.",
+          "enum": [
+            "env",
+            "keyring",
+            "env-then-keyring"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "env_prefix": {
+          "default": "OATS_SECRET_",
+          "description": "Prefix of the environment variable holding a secret: secret:ics/work reads OATS_SECRET_ICS_WORK.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "keyring_service": {
+          "default": "oats-meetings-rs",
+          "description": "Service name secrets are filed under in the OS keychain.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        }
+      },
+      "type": "object"
+    },
     "sessions": {
       "additionalProperties": false,
       "properties": {

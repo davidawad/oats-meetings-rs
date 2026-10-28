@@ -230,6 +230,50 @@
       "status": "implemented"
     },
     {
+      "doc": "Store a secret under key 'namespace/name' in the writable secrets backend (OS keychain). The value is never shown again.",
+      "effect": "write",
+      "name": "secret-set",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "value",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Delete a stored secret.",
+      "effect": "write",
+      "name": "secret-delete",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Whether a secret resolves in the configured backend (never returns the value).",
+      "effect": "read",
+      "name": "secret-has",
+      "params": [
+        {
+          "name": "key",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Start recording a session.",
       "effect": "control",
       "name": "record-start",
