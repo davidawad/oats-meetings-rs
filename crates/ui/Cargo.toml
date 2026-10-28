@@ -9,6 +9,29 @@ publish.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 oats-core.workspace = true
+serde_json.workspace = true
+raw-window-handle = "0.6"
+
+# Native menubar / tray item. Linux has no backend here (GPUI has no tray API and tray-icon needs
+# gtk + libappindicator); `app.menubar = true` there reports "unsupported" and the app menu +
+# control API stay the surface.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tray-icon = { version = "0.21", default-features = false }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+toml.workspace = true
 
 [features]
 runtime_shaders = ["gpui_platform/runtime_shaders"]
+
+[[test]]
+name = "macos_sharing_type"
+harness = false
