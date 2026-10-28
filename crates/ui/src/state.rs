@@ -251,15 +251,16 @@ mod tests {
         let (engine, dir) = testutil::engine(&[]);
         let mut st = State::default();
         st.refresh(&engine);
+        let compiled = model::dispatch(&engine, "stt-status", json!({})).unwrap()["local"]["compiled"] == true;
         let p = st.stt_problem.clone().expect("a fresh data dir has no model");
         assert!(p.message.contains("audio only"), "{}", p.message);
         // Whisper is compiled into default builds; without it the banner has no fix.
-        assert_eq!(p.fix.as_deref(), cfg!(feature = "whisper").then_some("stt-model-fetch"));
+        assert_eq!(p.fix.as_deref(), compiled.then_some("stt-model-fetch"));
         let m = dir.path().join("models");
         std::fs::create_dir_all(&m).unwrap();
         std::fs::write(m.join("ggml-base.en.bin"), b"x").unwrap();
         st.refresh(&engine);
-        assert_eq!(st.stt_problem.is_some(), !cfg!(feature = "whisper"));
+        assert_eq!(st.stt_problem.is_some(), !compiled);
     }
 
     #[test]
