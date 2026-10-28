@@ -9,6 +9,8 @@ single_instance = true
 [audio]
 # Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).
 backend = "auto"
+# Directory recordings are written under (one folder per session); empty means the per-user sessions dir.
+dir = ""
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"
 
@@ -17,10 +19,6 @@ layout = "split"
 device = ""
 # Record the microphone.
 enabled = true
-
-[audio]
-# Directory recordings are written under (one folder per session); empty means the per-user sessions dir.
-record_dir = ""
 
 [audio.system]
 # System-audio loopback device id (see `ctl devices list`); empty means the default loopback.

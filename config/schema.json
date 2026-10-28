@@ -36,6 +36,12 @@
           "type": "string",
           "x-ui": true
         },
+        "dir": {
+          "default": "",
+          "description": "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
+          "type": "string",
+          "x-ui": true
+        },
         "layout": {
           "default": "split",
           "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",
@@ -63,12 +69,6 @@
             }
           },
           "type": "object"
-        },
-        "record_dir": {
-          "default": "",
-          "description": "Directory recordings are written under (one folder per session); empty means the per-user sessions dir.",
-          "type": "string",
-          "x-ui": true
         },
         "system": {
           "additionalProperties": false,

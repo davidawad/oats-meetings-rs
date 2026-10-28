@@ -5,12 +5,12 @@
   },
   "audio": {
     "backend": "auto",
+    "dir": "",
     "layout": "split",
     "mic": {
       "device": "",
       "enabled": true
     },
-    "record_dir": "",
     "system": {
       "device": "",
       "enabled": true
