@@ -47,7 +47,10 @@ fi
 sha256sum "$iso"
 # 3. config CD: autounattend.xml + the exe + the run script
 mkdir cfg
-cp "$repo/ci/windows-vm/autounattend.xml" cfg/autounattend.xml
+# IMAGE_INDEX: 1 = Server Core (default; no dcomp.dll, so the GUI exe cannot load), 2 = Desktop Experience.
+idx=${IMAGE_INDEX:-$([ "${VARIANT:-}" = gui ] && echo 2 || echo 1)}
+sed "s|<Key>/IMAGE/INDEX</Key><Value>1</Value>|<Key>/IMAGE/INDEX</Key><Value>$idx</Value>|" "$repo/ci/windows-vm/autounattend.xml" > cfg/autounattend.xml
+echo "OATS_VM image_index=$idx"
 if [ "$TASK" = shaders ]; then
   cp "$exe" cfg/oats-shadergen.exe
   cp "$hlsl_dir"/*.hlsl cfg/
@@ -60,9 +63,9 @@ else
   cp "$repo/ci/windows-vm/oats-run.cmd" cfg/oats-run.cmd
 fi
 xorriso -as mkisofs -o cfg.iso -J -R -V OATSCFG cfg
-if [ -n "$cache" ] && [ -s "$cache/base.qcow2" ]; then
+if [ -n "$cache" ] && [ -s "$cache/base-$idx.qcow2" ]; then
   echo "OATS_VM mode=overlay-of-cached-base"
-  qemu-img create -f qcow2 -b "$cache/base.qcow2" -F qcow2 disk.qcow2
+  qemu-img create -f qcow2 -b "$cache/base-$idx.qcow2" -F qcow2 disk.qcow2
   installing=0
 else
   echo "OATS_VM mode=fresh-install"
@@ -98,8 +101,9 @@ else
 fi
 grep -a 'OATS_RC=' serial.log
 grep -a -q 'OATS_RC=0' serial.log
+[ "$TASK" != version ] || grep -a -q '^oats-meetings-rs [0-9]' serial.log
 # keep the installed disk as the cached base (it has run once; later runs overlay it and re-run via the OatsRun task)
 if [ "$installing" = 1 ] && [ -n "$cache" ]; then
-  qemu-img convert -O qcow2 disk.qcow2 "$cache/base.qcow2.tmp" && mv "$cache/base.qcow2.tmp" "$cache/base.qcow2"
+  qemu-img convert -O qcow2 disk.qcow2 "$cache/base-$idx.qcow2.tmp" && mv "$cache/base-$idx.qcow2.tmp" "$cache/base-$idx.qcow2"
   echo "OATS_VM base cached"
 fi
