@@ -58,6 +58,8 @@ pub struct Key {
     pub reload: Reload,
 }
 
+/// Whisper model names `stt.local.model` accepts; ci/fetch-models.sh pins and fetches each one.
+pub const STT_LOCAL_MODELS: &[&str] = &["tiny.en", "tiny", "base.en", "base", "small.en", "small"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
@@ -582,7 +584,7 @@ pub const KEYS: &[Key] = &[
     },
     Key {
         path: "stt.local.model",
-        kind: Kind::Str,
+        kind: Kind::Enum(STT_LOCAL_MODELS),
         default: Def::S("base.en"),
         doc: "Local ASR model name.",
         ui: true,

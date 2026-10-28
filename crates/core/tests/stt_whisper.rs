@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use oats_core::action::Action;
+use oats_core::config::keys::STT_LOCAL_MODELS;
 use oats_core::control::engine::{Engine, EngineOpts};
 use oats_core::stt::wer::wer;
 use oats_core::stt::{local::WhisperAsr, wav, Asr};
@@ -15,10 +16,33 @@ use serde_json::Value;
 /// Agreed acceptance threshold: word error rate per channel with ggml-tiny.en on clean TTS.
 const MAX_WER: f64 = 0.20;
 
-fn model() -> PathBuf {
-    let p = std::env::var("OATS_WHISPER_MODEL").expect("OATS_WHISPER_MODEL is not set: run ci/fetch-models.sh first");
-    assert!(Path::new(&p).is_file(), "{p} is not a file");
+/// Directory ci/fetch-models.sh filled (ggml-<name>.bin for every allowed stt.local.model).
+fn models_dir() -> PathBuf {
+    let p = std::env::var("OATS_WHISPER_MODELS_DIR").expect("OATS_WHISPER_MODELS_DIR is not set: run ci/fetch-models.sh first");
     PathBuf::from(p)
+}
+
+fn model(name: &str) -> PathBuf {
+    let p = models_dir().join(format!("ggml-{name}.bin"));
+    assert!(p.is_file(), "{} is not a file", p.display());
+    p
+}
+
+fn only() -> Option<String> {
+    std::env::var("OATS_ONLY_MODEL").ok().filter(|m| !m.is_empty())
+}
+
+fn models() -> Vec<&'static str> {
+    STT_LOCAL_MODELS.iter().copied().filter(|m| only().as_deref().is_none_or(|o| o == *m)).collect()
+}
+
+#[test]
+fn fetch_script_pins_exactly_the_allowed_models() {
+    let sh = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ci/fetch-models.sh")).unwrap();
+    for m in STT_LOCAL_MODELS {
+        assert!(sh.contains(&format!("[{m}]=")), "ci/fetch-models.sh has no sha pin for {m}");
+    }
+    assert_eq!(sh.matches("]=").count(), STT_LOCAL_MODELS.len(), "ci/fetch-models.sh pins a model stt.local.model does not allow");
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -32,15 +56,17 @@ fn expected(name: &str) -> String {
 
 #[test]
 fn whisper_meets_the_wer_threshold_on_each_fixture() {
-    let asr = WhisperAsr::load(&model(), 4).unwrap();
-    for name in ["you.wav", "them.wav"] {
-        let pcm = wav::read(&fixture(name)).unwrap().you;
-        let segs = asr.transcribe(&pcm, "en").unwrap();
-        let text = segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(" ");
-        let w = wer(&expected(name), &text);
-        eprintln!("{name}: WER {w:.3} :: {text}");
-        assert!(w <= MAX_WER, "{name}: WER {w:.3} > {MAX_WER} :: {text}");
-        assert!(segs.iter().all(|s| s.end >= s.start && s.start >= 0.0));
+    for m in models() {
+        let asr = WhisperAsr::load(&model(m), 4).unwrap();
+        for name in ["you.wav", "them.wav"] {
+            let pcm = wav::read(&fixture(name)).unwrap().you;
+            let segs = asr.transcribe(&pcm, "en").unwrap();
+            let text = segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(" ");
+            let w = wer(&expected(name), &text);
+            eprintln!("WER_ROW model={m} stage=asr file={name} wer={w:.3} :: {text}");
+            assert!(w <= MAX_WER, "{m} {name}: WER {w:.3} > {MAX_WER} :: {text}");
+            assert!(segs.iter().all(|s| s.end >= s.start && s.start >= 0.0));
+        }
     }
 }
 
@@ -59,6 +85,12 @@ fn copy_dir(from: &Path, to: &Path) {
 
 #[test]
 fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
+    for m in models() {
+        engine_case(m);
+    }
+}
+
+fn engine_case(m: &str) {
     let dir = tempfile::tempdir().unwrap();
     let you = wav::read(&fixture("you.wav")).unwrap().you;
     let them = wav::read(&fixture("them.wav")).unwrap().you;
@@ -75,7 +107,7 @@ fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
 
     let cfg = dir.path().join("cfg").join("config.toml");
     std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
-    std::fs::write(&cfg, format!("[stt.local]\nmodel_path = '{}'\nthreads = \"4\"\n", model().display())).unwrap();
+    std::fs::write(&cfg, format!("[stt.local]\nmodel = \"{m}\"\nmodels_dir = '{}'\nthreads = \"4\"\n", models_dir().display())).unwrap();
     let engine: Arc<Engine> = Engine::new(EngineOpts {
         user_config: cfg,
         pack: None,
@@ -99,10 +131,10 @@ fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
         for (speaker, name) in [("you", "you.wav"), ("remote_1", "them.wav")] {
             let text = lines.iter().filter(|u| u["speaker"] == speaker).map(|u| u["text"].as_str().unwrap()).collect::<Vec<_>>().join(" ");
             let w = wer(&expected(name), &text);
-            eprintln!("{source}/{speaker}: WER {w:.3} :: {text}");
+            eprintln!("WER_ROW model={m} stage={source} file={name} wer={w:.3} :: {text}");
             // Live windows can split a phrase mid-word; the live pass gets a looser bound.
             let limit = if source == "final" { MAX_WER } else { 0.35 };
-            assert!(w <= limit, "{source}/{speaker}: WER {w:.3} > {limit} :: {text}");
+            assert!(w <= limit, "{m} {source}/{speaker}: WER {w:.3} > {limit} :: {text}");
         }
         assert!(lines.iter().all(|u| u["timestamp"].as_str().unwrap().ends_with('Z') && u["speaker"].is_string()));
     }
@@ -115,7 +147,7 @@ fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
     assert_eq!(speakers, ["remote_1", "you"].into_iter().collect::<std::collections::BTreeSet<&str>>());
 
     // `bin/meeting sessions` compatibility: ci/stt-compat.sh dumps the store this wrote.
-    if let Ok(out) = std::env::var("OATS_STORE_DUMP") {
+    if let (Ok(out), "tiny.en") = (std::env::var("OATS_STORE_DUMP"), m) {
         copy_dir(&dir.path().join("data/sessions"), Path::new(&out));
     }
 }
