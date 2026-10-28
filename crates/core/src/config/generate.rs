@@ -44,15 +44,18 @@ fn toml_lit(v: &Value) -> String {
 }
 
 pub fn defaults_toml() -> String {
-    let mut out = format!("# {MARKER}\n");
-    let mut last_table = String::new();
+    // One header per table, parents before children, whatever order the key paths sort in.
+    let mut tables: std::collections::BTreeMap<&str, Vec<(&str, &super::keys::Key)>> = std::collections::BTreeMap::new();
     for k in sorted_keys() {
         let (table, leaf) = k.path.rsplit_once('.').expect("keys are dotted");
-        if table != last_table {
-            out.push_str(&format!("\n[{table}]\n"));
-            last_table = table.to_string();
+        tables.entry(table).or_default().push((leaf, k));
+    }
+    let mut out = format!("# {MARKER}\n");
+    for (table, leaves) in tables {
+        out.push_str(&format!("\n[{table}]\n"));
+        for (leaf, k) in leaves {
+            out.push_str(&format!("# {}\n{leaf} = {}\n", k.doc, toml_lit(&k.default.to_json())));
         }
-        out.push_str(&format!("# {}\n{leaf} = {}\n", k.doc, toml_lit(&k.default.to_json())));
     }
     out
 }
