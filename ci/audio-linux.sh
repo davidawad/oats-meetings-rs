@@ -33,6 +33,7 @@ else
     --log-target="file:$XDG_RUNTIME_DIR/pulse.log" -L "module-native-protocol-unix auth-anonymous=1 socket=$PULSE_RUNTIME_PATH/native" || { cat "$XDG_RUNTIME_DIR/pulse.log" || true; exit 1; }
 fi
 for i in $(seq 1 30); do pactl info > /dev/null 2>&1 && break; sleep 0.5; done
+pactl info > /dev/null 2>&1 || { tail -30 "$XDG_RUNTIME_DIR"/*.log 2> /dev/null; ls -la "$XDG_RUNTIME_DIR" "$PULSE_RUNTIME_PATH"; exit 1; }
 pactl info | sed -n '1,8p'
 pactl load-module module-null-sink sink_name=oats_sink sink_properties=device.description=OatsSystem
 pactl load-module module-null-sink sink_name=oats_mic_sink sink_properties=device.description=OatsMic
