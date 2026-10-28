@@ -28,12 +28,13 @@
       "properties": {
         "backend": {
           "default": "auto",
-          "description": "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).",
+          "description": "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).",
           "enum": [
             "auto",
             "pulse",
             "pipewire",
-            "cpal"
+            "cpal",
+            "screencapturekit"
           ],
           "type": "string",
           "x-reload": "live",

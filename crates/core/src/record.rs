@@ -86,6 +86,7 @@ pub fn settings_of(c: &Config) -> AudioSettings {
             AudioBackend::Pulse => BackendChoice::Pulse,
             AudioBackend::Pipewire => BackendChoice::Pipewire,
             AudioBackend::Cpal => BackendChoice::Cpal,
+            AudioBackend::Screencapturekit => BackendChoice::ScreenCaptureKit,
         },
         layout: match c.audio.layout {
             AudioLayout::Split => Layout::Split,

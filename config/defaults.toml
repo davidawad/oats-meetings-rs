@@ -7,7 +7,7 @@ menubar = false
 single_instance = true
 
 [audio]
-# Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI).
+# Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).
 backend = "auto"
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"

@@ -67,6 +67,7 @@ pub enum AudioBackend {
     Pulse,
     Pipewire,
     Cpal,
+    Screencapturekit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
