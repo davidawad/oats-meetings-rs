@@ -1,0 +1,5 @@
+{"version":1,"templates":[
+  {"name":"Sales Prospect Call","icon":"person.crop.circle.badge.checkmark","systemPrompt":"You are a sales call notes assistant. Produce structured markdown.\n\nInclude these sections EXACTLY (the headings are parsed programmatically):\n\n## CRM\nContact Name: [full name]\nCompany: [company]\n\n## Summary\nTwo sentences.\n\n## Next Step\nThe single agreed action.","isBuiltIn":false,"id":"00000000-0000-0000-0000-000000000001"},
+  {"name":"Generic","icon":"doc.text","systemPrompt":"Summarize the meeting.\n\n## Summary\nShort.\n\n## Action Items\nOwners.","isBuiltIn":false,"id":"00000000-0000-0000-0000-000000000002"},
+  {"name":"Stand-Up","systemPrompt":"## Yesterday\n## Today\n## Blockers","isBuiltIn":false,"id":"00000000-0000-0000-0000-000000000003"}
+]}
