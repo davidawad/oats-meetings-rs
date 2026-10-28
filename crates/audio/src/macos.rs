@@ -268,7 +268,7 @@ mod native {
             let th = std::thread::spawn(move || {
                 let started = start_stream(on_samples);
                 match started {
-                    Ok(mut stream) => {
+                    Ok(stream) => {
                         let _ = tx.send(Ok(()));
                         while !flag.load(Ordering::SeqCst) {
                             std::thread::sleep(timing.poll);
