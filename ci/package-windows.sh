@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Windows cross-build in a Linux pod: linked MSVC .exe via cargo-xwin (icon embedded by build.rs),
 # an .msi via wixl (msitools) and static checks of both.
-# bin/pod-run <repo> <ref> bash ci/package-windows.sh [headless|gui-debug]   (LOCKED=1 adds --locked)
+# bin/pod-run <repo> <ref> bash ci/package-windows.sh [headless|gui|gui-debug]   (LOCKED=1 adds --locked)
 # headless (default): release exe without the gpui feature; the msi ships this.
 # gui-debug: link-only proof of the GUI build. gpui_windows compiles its HLSL with fxc.exe in a build script gated on
 #   the HOST os, so a Linux-hosted RELEASE gui build has no embedded shaders and fails to compile (include! of
@@ -22,6 +22,26 @@ export XWIN_ACCEPT_LICENSE=1 XWIN_CACHE_DIR="${XWIN_CACHE_DIR:-$HOME/.xwin-cache
 case "$variant" in
   headless)
     cargo xwin build --release --target x86_64-pc-windows-msvc -p oats-meetings-rs --no-default-features ${LOCKED:+--locked}
+    exe=target/x86_64-pc-windows-msvc/release/oats-meetings-rs.exe
+    ;;
+  gui)
+    # Release GUI. gpui_windows' build script only compiles shaders when the HOST is Windows, so swap it (inside this
+    # throwaway pod's cargo checkout, no lockfile change) for one that installs the hash-pinned shaders generated in a
+    # real Windows VM (assets/windows-shaders, see its README).
+    cargo fetch ${LOCKED:+--locked}
+    gw=$(dirname "$(find "${CARGO_HOME:-/usr/local/cargo}" "$HOME/.cargo" -path '*gpui_windows/src/shaders.hlsl' 2> /dev/null | head -1)")/..
+    (cd "$gw/src" && sha256sum -c "$OLDPWD/assets/windows-shaders/sources.sha256")
+    sha256sum -c assets/windows-shaders/shaders_bytes.sha256 --ignore-missing 2> /dev/null || (cd assets/windows-shaders && sha256sum -c shaders_bytes.sha256)
+    cat > "$gw/build.rs" << 'RS'
+fn main() {
+    println!("cargo:rerun-if-env-changed=OATS_SHADERS_BYTES");
+    let out = std::env::var("OUT_DIR").unwrap();
+    let src = std::env::var("OATS_SHADERS_BYTES").expect("OATS_SHADERS_BYTES");
+    std::fs::copy(src, format!("{out}/shaders_bytes.rs")).unwrap();
+}
+RS
+    export OATS_SHADERS_BYTES="$PWD/assets/windows-shaders/shaders_bytes.rs"
+    cargo xwin build --release --target x86_64-pc-windows-msvc -p oats-meetings-rs ${LOCKED:+--locked}
     exe=target/x86_64-pc-windows-msvc/release/oats-meetings-rs.exe
     ;;
   gui-debug)
