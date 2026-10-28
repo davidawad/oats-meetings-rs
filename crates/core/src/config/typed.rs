@@ -191,6 +191,7 @@ pub struct Templates {
 #[serde(deny_unknown_fields)]
 pub struct Network {
     pub allow: bool,
+    pub error_snippet: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -250,6 +251,7 @@ pub enum SttAdapter {
 pub struct SttCloud {
     pub adapter: SttAdapter,
     pub key: String,
+    pub max_response: u64,
     pub model: String,
     pub timeout: Dur,
     pub url: String,

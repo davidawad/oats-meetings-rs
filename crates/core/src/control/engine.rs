@@ -300,7 +300,7 @@ impl Engine {
             return Ok((None, json!({"state": "off", "reason": "audio.transcribe = off"})));
         }
         let built = (|| -> Result<crate::stt::capture::Plan> {
-            let settings = crate::stt::Settings::from_config(&cfg.stt, self.default_sessions_dir(), cfg.secrets.max_key_len as usize)?;
+            let settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
             if !settings.live_enabled && !settings.final_enabled {
                 return Err(ConfigError::new("nothing_enabled", "stt.live.enabled and stt.final.enabled are both off"));
             }

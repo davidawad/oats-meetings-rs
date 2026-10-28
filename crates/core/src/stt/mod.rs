@@ -111,6 +111,8 @@ pub struct Settings {
     pub cloud_key: String,
     pub cloud_timeout: std::time::Duration,
     pub max_key_len: usize,
+    pub error_snippet: usize,
+    pub max_response: u64,
     pub tuning: Tuning,
 }
 
@@ -120,7 +122,8 @@ fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
 
 impl Settings {
     /// Parse and check every `stt.*` value. `sessions_dir` anchors the default models directory.
-    pub fn from_config(c: &Stt, sessions_dir: &Path, max_key_len: usize) -> Result<Settings> {
+    pub fn from_config(cfg: &Config, sessions_dir: &Path) -> Result<Settings> {
+        let c = &cfg.stt;
         if c.language.trim().is_empty() {
             return Err(invalid("language", "must not be empty"));
         }
@@ -162,7 +165,9 @@ impl Settings {
             cloud_model: c.cloud.model.trim().to_string(),
             cloud_key: c.cloud.key.trim().to_string(),
             cloud_timeout: c.cloud.timeout.as_duration(),
-            max_key_len,
+            max_key_len: cfg.secrets.max_key_len as usize,
+            error_snippet: cfg.network.error_snippet as usize,
+            max_response: c.cloud.max_response,
             tuning: Tuning::from_config(c),
         })
     }
@@ -217,6 +222,8 @@ pub fn make_asr(s: &Settings, network_allow: bool, secrets: &dyn crate::secrets:
                 model: s.cloud_model.clone(),
                 key,
                 timeout: s.cloud_timeout,
+                snippet: s.error_snippet,
+                max_response: s.max_response,
             }))
         }
     }
@@ -498,7 +505,7 @@ pub fn run(
 // ---- engine glue ---------------------------------------------------------------------------
 
 fn settings_of(engine: &Engine, cfg: &Config) -> Result<Settings> {
-    Settings::from_config(&cfg.stt, engine.default_sessions_dir(), cfg.secrets.max_key_len as usize)
+    Settings::from_config(cfg, engine.default_sessions_dir())
 }
 
 pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
@@ -569,7 +576,7 @@ impl Subsystem for SttSubsystem {
             .upgrade()
             .map(|e| e.default_sessions_dir().to_path_buf())
             .unwrap_or_default();
-        let s = Settings::from_config(&new.stt, &dir, new.secrets.max_key_len as usize)?;
+        let s = Settings::from_config(new, &dir)?;
         if s.backend == SttBackend::Cloud {
             s.check_cloud()?;
         }
@@ -622,7 +629,7 @@ mod tests {
         c.insert("stt.final.enabled".into(), json!(fin));
         let nested = crate::config::resolve::nest(&c);
         let cfg: Config = serde_json::from_value(nested).unwrap();
-        Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions"), cfg.secrets.max_key_len as usize).unwrap()
+        Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).unwrap()
     }
 
     #[test]
@@ -720,7 +727,7 @@ mod tests {
             let mut c = base.clone();
             c.insert(k.into(), v);
             let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
-            Settings::from_config(&cfg.stt, Path::new("/tmp/x/sessions"), cfg.secrets.max_key_len as usize).map(|_| ())
+            Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).map(|_| ())
         };
         for (k, v) in [
             ("stt.local.model", "../evil"),

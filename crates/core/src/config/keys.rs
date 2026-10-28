@@ -322,6 +322,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "network.error_snippet",
+        kind: Kind::Int { min: 20, max: 10_000 },
+        default: Def::I(300),
+        doc: "Characters of a failing HTTP reply kept in the error message (LLM, embedding and cloud STT calls).",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.cloud.max_response",
+        kind: Kind::Int { min: 1_024, max: 1_073_741_824 },
+        default: Def::I(8_388_608),
+        doc: "Largest cloud transcription reply accepted, in bytes.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "app.menubar",
         kind: Kind::Bool,
         default: Def::B(false),

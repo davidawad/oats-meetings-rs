@@ -115,7 +115,7 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             texts
                 .iter()
                 .map(|t| {
-                    let r = http::post_json(&url, None, &json!({"model": cfg.kb.model, "prompt": t}), cfg.kb.timeout.as_duration())?;
+                    let r = http::post_json(&url, None, &json!({"model": cfg.kb.model, "prompt": t}), cfg.kb.timeout.as_duration(), cfg.network.error_snippet as usize)?;
                     vector_of(&r["embedding"])
                 })
                 .collect()
@@ -131,7 +131,7 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
                 Err(e) if e.code == "secret_not_found" => None,
                 Err(e) => return Err(e),
             };
-            let r = http::post_json(&url, key.as_deref(), &json!({"model": cfg.kb.model, "input": texts}), cfg.kb.timeout.as_duration())?;
+            let r = http::post_json(&url, key.as_deref(), &json!({"model": cfg.kb.model, "input": texts}), cfg.kb.timeout.as_duration(), cfg.network.error_snippet as usize)?;
             let data = r["data"].as_array().ok_or_else(|| ConfigError::new("backend_bad_response", "no data array"))?;
             if data.len() != texts.len() {
                 return Err(ConfigError::new("backend_bad_response", "embedding count mismatch"));
