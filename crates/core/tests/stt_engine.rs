@@ -381,7 +381,6 @@ fn the_subsystem_vetoes_bad_stt_values_and_keeps_the_running_config() {
         ("stt.live.chunk_secs", "soon"),
         ("stt.local.threads", "0"),
         ("stt.cloud.timeout_secs", "0"),
-        ("stt.local.model", "../escape"),
         ("stt.language", ""),
         ("stt.speaker_you", "remote_1"),
     ] {
@@ -389,6 +388,11 @@ fn the_subsystem_vetoes_bad_stt_values_and_keeps_the_running_config() {
         assert!(e.message.starts_with("stt:"), "{key}={bad}: {e}");
         assert_eq!(e.code, "invalid_value", "{key}={bad}");
         rig.engine.dispatch(&Action::ConfigCheck {}).unwrap();
+    }
+    // stt.local.model is an enum: anything outside the pinned set is refused by the key table.
+    for bad in ["../escape", "large-v3", "base.EN", ""] {
+        let e = rig.engine.set("stt.local.model", &json!(bad), "test").unwrap_err();
+        assert_eq!(e.code, "invalid_value", "model={bad}: {e}");
     }
     // Cloud-only checks apply once the cloud backend is selected.
     rig.engine.set("stt.cloud.adapter", &json!("openai-compatible"), "test").unwrap();
