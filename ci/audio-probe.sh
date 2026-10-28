@@ -25,13 +25,16 @@ probe() { # name, sink module args, feeder (zero|none|paced), parec extra args
   echo "PROBE $name feed=$feed args='$args' extra='$extra' bytes=$n (expect 960000)"
   pactl unload-module "$id"
 }
-probe a1 "" none
-probe a2 "" zero
-probe a3 "" paced
-probe b1 "rate=48000 channels=1" none
-probe b2 "rate=48000 channels=1" zero
-probe b3 "rate=48000 channels=1" paced
-probe c1 "rate=48000 channels=1" none "--latency-msec=100"
-probe c2 "rate=48000 channels=1" zero "--latency-msec=100"
-probe d1 "rate=48000 channels=1 format=float32le" zero
+ttfb() { local t0 t1; t0=$(date +%s%N); parec --device="$1.monitor" --format=float32le --rate=48000 --channels=1 --latency-msec=100 | head -c 4 > /dev/null; t1=$(date +%s%N); echo "PROBE ttfb $1 = $(( (t1 - t0) / 1000000 )) ms"; }
+id=$(pactl load-module module-null-sink sink_name=t1 rate=48000 channels=1)
+ttfb t1; ttfb t1
+for lat in 20 50 100 200 500; do
+  t0=$(date +%s%N)
+  n=$(timeout 10 parec --device=t1.monitor --format=float32le --rate=48000 --channels=1 --latency-msec=$lat | wc -c)
+  t1=$(date +%s%N)
+  echo "PROBE lat=$lat bytes=$n wall_ms=$(( (t1 - t0) / 1000000 )) audio_ms=$(( n / 192 )) (10s run)"
+done
+# What does the pa clock do: sample the monitor latency
+for k in 1 2 3; do pactl list sources short | head -3; sleep 1; done
+top -b -n1 | head -15
 tail -5 "$XDG_RUNTIME_DIR/p.log"
