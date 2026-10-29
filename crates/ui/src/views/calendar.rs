@@ -100,20 +100,18 @@ pub(crate) fn feed_of(v: &Value) -> FeedRow {
 
 pub(crate) fn meeting_of(v: &Value) -> Meeting {
     let all_day = v.get("all_day").and_then(Value::as_bool).unwrap_or(false);
+    // `local_start` is the engine's wall clock, `%Y-%m-%dT%H:%M:%S`: split on its separators.
     let local = s(v, "local_start");
+    let (d, t) = local.split_once('T').unwrap_or((local.as_str(), ""));
     let (day, time) = if all_day {
-        let d = s(v, "start_date");
+        let sd = s(v, "start_date");
         (
-            if d.is_empty() {
-                local.chars().take(10).collect()
-            } else {
-                d
-            },
+            if sd.is_empty() { d.to_string() } else { sd },
             String::new(),
         )
     } else {
-        let (d, t) = local.split_once('T').unwrap_or((local.as_str(), ""));
-        (d.to_string(), t.chars().take(5).collect())
+        let hm = t.rsplit_once(':').map_or(t, |(hm, _)| hm);
+        (d.to_string(), hm.to_string())
     };
     Meeting {
         feed: s(v, "feed"),
