@@ -202,6 +202,8 @@ pub struct Edit {
     pub path: &'static str,
     pub buf: String,
     pub error: Option<String>,
+    /// ctrl/cmd+a selected the whole buffer (see `type_key`).
+    pub all: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +212,36 @@ pub enum EditKey {
     Commit,
     Cancel,
     Ignored,
+}
+
+/// One key on a plain text buffer: the typing every text input shares. ctrl/cmd+a selects the
+/// whole buffer (`all`); the next typed text then replaces it and backspace clears it. False (and
+/// the selection untouched) for keys it does not handle. `command` is true when ctrl/alt/cmd is
+/// held (never typed).
+pub fn type_key(
+    buf: &mut String,
+    all: &mut bool,
+    key: &str,
+    key_char: Option<&str>,
+    command: bool,
+) -> bool {
+    if key == "a" && command {
+        *all = !buf.is_empty();
+        return true;
+    }
+    let typed = key_char.filter(|c| !command && !c.is_empty() && !c.chars().any(char::is_control));
+    if key != "backspace" && typed.is_none() {
+        return false;
+    }
+    if std::mem::take(all) {
+        buf.clear();
+    } else if key == "backspace" {
+        buf.pop();
+    }
+    if key != "backspace" {
+        buf.push_str(typed.unwrap_or_default());
+    }
+    true
 }
 
 /// Why transcription cannot run right now (from `stt-status`), shown as a banner.
@@ -472,15 +504,23 @@ impl State {
 
     /// Open the text editor on a row, seeded with its current value.
     pub fn begin_edit(&mut self, path: &'static str, initial: &str) {
+        self.cancel_edit();
         self.edit = Some(Edit {
             path,
             buf: initial.to_string(),
             error: None,
+            all: false,
         });
     }
 
+    /// Close the editor without saving. The Sessions search is a live filter, so closing it keeps
+    /// what was typed (its clear chip empties it).
     pub fn cancel_edit(&mut self) {
-        self.edit = None;
+        if let Some(e) = self.edit.take() {
+            if e.path == crate::views::sessions::SEARCH {
+                self.sessions_ui.query = e.buf.trim().to_string();
+            }
+        }
     }
 
     /// Feed one key press to the open editor. `key` is the gpui key name, `key_char` the text it
@@ -492,19 +532,11 @@ impl State {
         match key {
             "enter" => EditKey::Commit,
             "escape" => EditKey::Cancel,
-            "backspace" => {
-                e.buf.pop();
+            _ if type_key(&mut e.buf, &mut e.all, key, key_char, command) => {
                 e.error = None;
                 EditKey::Handled
             }
-            _ => match key_char {
-                Some(c) if !command && !c.is_empty() && !c.chars().any(char::is_control) => {
-                    e.buf.push_str(c);
-                    e.error = None;
-                    EditKey::Handled
-                }
-                _ => EditKey::Ignored,
-            },
+            _ => EditKey::Ignored,
         }
     }
 
@@ -637,6 +669,33 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_a_selects_all_then_typing_replaces_and_backspace_clears() {
+        let (mut buf, mut all) = ("old text".to_string(), false);
+        let mut k =
+            |key: &str, ch: Option<&str>, cmd: bool| type_key(&mut buf, &mut all, key, ch, cmd);
+        assert!(k("a", Some("a"), true));
+        assert!(k("n", Some("n"), false));
+        assert!(k("e", Some("e"), false));
+        assert!(k("a", Some("a"), true));
+        assert!(k("backspace", None, false));
+        assert!(k("z", Some("z"), false));
+        assert!(k("a", Some("a"), true));
+        assert!(!k("left", None, false), "not ours; the selection stays");
+        assert!(k("q", Some("q"), false));
+        assert!(k("r", Some("r"), false));
+        assert_eq!(buf, "qr");
+
+        // The settings / Sessions editor: same keys through `edit_key`.
+        let mut st = State::default();
+        st.begin_edit("stt.local.model", "base.en");
+        assert_eq!(st.edit_key("a", Some("a"), true), EditKey::Handled);
+        assert!(st.edit.as_ref().unwrap().all);
+        assert_eq!(st.edit_key("t", Some("t"), false), EditKey::Handled);
+        assert_eq!(st.edit.as_ref().unwrap().buf, "t");
+        assert!(!st.edit.as_ref().unwrap().all);
+    }
+
+    #[test]
     fn text_edit_types_validates_inline_and_persists_through_config_set() {
         let (engine, _d) = testutil::engine(&[]);
         let mut st = State::default();
@@ -645,7 +704,7 @@ mod tests {
         for c in ["b", "o", "g", "u", "s"] {
             assert_eq!(st.edit_key(c, Some(c), false), EditKey::Handled);
         }
-        assert_eq!(st.edit_key("a", Some("a"), true), EditKey::Ignored);
+        assert_eq!(st.edit_key("c", Some("c"), true), EditKey::Ignored);
         assert_eq!(st.edit_key("enter", None, false), EditKey::Commit);
         st.commit_edit(&engine);
         let e = st.edit.clone().expect("rejected edit stays open");

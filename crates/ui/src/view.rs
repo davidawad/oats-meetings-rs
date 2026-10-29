@@ -1,6 +1,8 @@
 //! The main window: tab bar, banner, the active tab's view (see `views`), status line. Pure presentation over `State`;
 //! every control dispatches an action id through `model::dispatch`.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use std::time::Instant;
@@ -13,7 +15,7 @@ use oats_core::control::engine::Engine;
 use serde_json::json;
 
 use crate::settings::{next_value, Row, Widget};
-use crate::state::{badge_text, Control, Controls, EditKey, Line, Rec, State, Tab};
+use crate::state::{badge_text, Control, Controls, Edit, EditKey, Line, Rec, State, Tab};
 use crate::views;
 
 pub(crate) const ERR: u32 = 0xf38ba8;
@@ -28,6 +30,18 @@ const REC_RED: u32 = 0xf38ba8;
 const PAUSE_AMBER: u32 = 0xf9e2af;
 const OK_GREEN: u32 = 0xa6e3a1;
 
+/// An open text input's buffer: highlighted while ctrl/cmd+a has it all selected, else with a caret.
+pub(crate) fn edit_text(e: &Edit) -> gpui::Div {
+    if e.all {
+        div()
+            .bg(rgb(ACCENT))
+            .text_color(rgb(BG))
+            .child(e.buf.clone())
+    } else {
+        div().child(format!("{}|", e.buf))
+    }
+}
+
 pub struct MainWindow {
     pub(crate) engine: Arc<Engine>,
     pub state: State,
@@ -36,11 +50,28 @@ pub struct MainWindow {
     /// Keyboard focus for the settings text editor; created on first render.
     pub(crate) focus: Option<FocusHandle>,
     live_scroll: ScrollHandle,
+    /// Where the view state goes when the window closes, for the next window to resume.
+    keep: Option<Rc<RefCell<Option<State>>>>,
 }
 
 impl MainWindow {
     pub fn new(engine: Arc<Engine>) -> Self {
-        let mut state = State::default();
+        Self::with_state(engine, State::default())
+    }
+
+    /// A window that picks up the state the last one left in `keep` (hide then show keeps the tab,
+    /// the Live view and the selection) and leaves its own there when it closes.
+    pub fn resume(engine: Arc<Engine>, keep: Rc<RefCell<Option<State>>>) -> Self {
+        let state = keep.borrow_mut().take().unwrap_or_default();
+        let mut w = Self::with_state(engine, state);
+        w.keep = Some(keep);
+        w
+    }
+
+    fn with_state(engine: Arc<Engine>, mut state: State) -> Self {
+        // An open input or a pending press belonged to the old window (its focus, its task).
+        state.cancel_edit();
+        state.pending = None;
         state.refresh(&engine);
         state.sync_rec(&engine);
         let mut trash = views::trash::Trash::default();
@@ -51,6 +82,7 @@ impl MainWindow {
             trash,
             focus: None,
             live_scroll: ScrollHandle::new(),
+            keep: None,
         }
     }
 
@@ -324,13 +356,13 @@ impl MainWindow {
         };
         let editing = self.state.edit.as_ref().filter(|e| e.path == path);
         let value = match (&row.widget, editing) {
-            (_, Some(e)) => format!("{}|", e.buf),
-            (Widget::Toggle(b), _) => (if *b { "on" } else { "off" }).to_string(),
-            (Widget::Choice { current, .. }, _) => current.clone(),
-            (Widget::Text(t), _) if t.is_empty() => "(default)".to_string(),
-            (Widget::Text(t), _) => t.clone(),
-            (Widget::Number { value, .. }, _) => value.to_string(),
-            (Widget::Duration { text, .. }, _) => text.clone(),
+            (_, Some(e)) => edit_text(e).into_any_element(),
+            (Widget::Toggle(b), _) => (if *b { "on" } else { "off" }).into_any_element(),
+            (Widget::Choice { current, .. }, _) => current.clone().into_any_element(),
+            (Widget::Text(t), _) if t.is_empty() => "(default)".into_any_element(),
+            (Widget::Text(t), _) => t.clone().into_any_element(),
+            (Widget::Number { value, .. }, _) => value.to_string().into_any_element(),
+            (Widget::Duration { text, .. }, _) => text.clone().into_any_element(),
         };
         let mut ctl = div()
             .id(SharedString::from(format!("set-{path}")))
@@ -462,6 +494,14 @@ impl MainWindow {
             }
         }
         col
+    }
+}
+
+impl Drop for MainWindow {
+    fn drop(&mut self) {
+        if let Some(k) = &self.keep {
+            *k.borrow_mut() = Some(std::mem::take(&mut self.state));
+        }
     }
 }
 

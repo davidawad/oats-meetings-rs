@@ -574,6 +574,7 @@ impl Store {
             .map(|t| {
                 json!({
                     "id": t.name.to_string_lossy(),
+                    "title": trashed_title(t).unwrap_or_default(),
                     "deleted_at": deleted_at(t.time_deleted),
                     "original_path": t.original_path().display().to_string(),
                 })
@@ -628,6 +629,24 @@ impl Store {
         }
         Ok(json!({"purged": ids, "count": ids.len()}))
     }
+}
+
+/// The `title` in a trashed session's `session.json`. Freedesktop ids are the `.trashinfo` path
+/// (`<trash>/info/<name>.trashinfo`, the folder is `<trash>/files/<name>`); on Windows the id is
+/// the item's own path.
+fn trashed_title(t: &trash::TrashItem) -> Option<String> {
+    let id = Path::new(&t.id);
+    let in_files = id
+        .file_name()
+        .and_then(|n| n.to_str()?.strip_suffix(".trashinfo"))
+        .zip(id.parent().and_then(Path::parent))
+        .map(|(n, trash)| trash.join("files").join(n));
+    let meta = [Some(id.to_path_buf()), in_files]
+        .into_iter()
+        .flatten()
+        .find_map(|d| std::fs::read_to_string(d.join("session.json")).ok())?;
+    let v: Value = serde_json::from_str(&meta).ok()?;
+    Some(v["title"].as_str()?.to_string())
 }
 
 fn deleted_at(secs: i64) -> Value {

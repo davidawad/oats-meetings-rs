@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 
 use crate::capture;
 use crate::model::{self, BINDINGS, MENUS};
+use crate::state::State;
 use crate::tray::{self, TrayBackend, TrayState};
 use crate::view::MainWindow;
 
@@ -85,6 +86,8 @@ struct Host {
     tray_state: Arc<TrayState>,
     tray: Box<dyn TrayBackend>,
     window: Option<WindowHandle<MainWindow>>,
+    /// The closed window's view state; the next window resumes it.
+    kept: Rc<RefCell<Option<State>>>,
     applied_capture: Option<capture::Plan>,
     /// What the engine says the window should be (from `window-changed`).
     want_visible: bool,
@@ -111,6 +114,7 @@ fn capture_plan(engine: &Engine) -> capture::Plan {
 fn open_window(host: &mut Host, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
     let engine = Arc::clone(&host.engine);
+    let kept = Rc::clone(&host.kept);
     match cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -118,7 +122,7 @@ fn open_window(host: &mut Host, cx: &mut App) {
             app_id: Some(APP_ID.to_string()),
             ..Default::default()
         },
-        move |_, cx| cx.new(|_| MainWindow::new(engine)),
+        move |_, cx| cx.new(|_| MainWindow::resume(engine, kept)),
     ) {
         Ok(h) => {
             host.window = Some(h);
@@ -248,6 +252,7 @@ pub fn run_with(
         tray_state,
         tray: backend,
         window: None,
+        kept: Rc::default(),
         applied_capture: None,
         want_visible: false,
         tray_gate: tray::Gate::default(),
@@ -303,14 +308,55 @@ pub fn run_env() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::state::Tab;
+    use crate::{testutil, tray::mock::Mock};
+    use gpui::TestAppContext;
+
+    #[test]
+    fn hide_then_show_keeps_the_tab_and_the_last_recording_line() {
+        let (engine, _d) = testutil::engine(&[]);
+        let host: Shared = Rc::new(RefCell::new(Host {
+            engine: Arc::clone(&engine),
+            events: engine.bus.subscribe(vec![]),
+            tray_state: Arc::new(TrayState::new(false)),
+            tray: Box::new(Mock::default()),
+            window: None,
+            kept: Rc::default(),
+            applied_capture: None,
+            want_visible: false,
+            tray_gate: tray::Gate::default(),
+        }));
+        let mut cx = TestAppContext::single();
+        let step = |action: &str, cx: &mut TestAppContext| {
+            model::dispatch(&engine, action, json!({})).unwrap();
+            cx.update(|cx| tick(&host, cx));
+            cx.run_until_parked();
+            host.borrow().window
+        };
+        let w = step("window-show", &mut cx).expect("window opened");
+        w.update(&mut cx, |v, _, cx| {
+            v.state.tab = Tab::Calendar;
+            v.state.live_session = Some("session_a".into());
+            cx.notify();
+        })
+        .unwrap();
+        assert!(step("window-hide", &mut cx).is_none());
+        assert!(cx.update(|cx| cx.windows().is_empty()));
+        let w = step("window-show", &mut cx).expect("window reopened");
+        w.update(&mut cx, |v, _, _| {
+            assert_eq!(v.state.tab, Tab::Calendar);
+            assert_eq!(v.state.live_session.as_deref(), Some("session_a"));
+        })
+        .unwrap();
+    }
+
     #[test]
     fn app_id_matches_the_desktop_file() {
         let desktop = include_str!("../../../packaging/linux/oats-meetings-rs.desktop");
         assert!(desktop
             .lines()
-            .any(|l| l == format!("StartupWMClass={}", super::APP_ID)));
-        assert!(desktop
-            .lines()
-            .any(|l| l == format!("Icon={}", super::APP_ID)));
+            .any(|l| l == format!("StartupWMClass={APP_ID}")));
+        assert!(desktop.lines().any(|l| l == format!("Icon={APP_ID}")));
     }
 }

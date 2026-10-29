@@ -15,7 +15,7 @@ use oats_core::control::engine::Engine;
 use serde_json::{json, Value};
 
 use crate::model;
-use crate::state::EditKey;
+use crate::state::{type_key, EditKey};
 use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL};
 
 /// What the Notes tab shows. Free of GPUI apart from the editor's focus handle.
@@ -32,6 +32,8 @@ pub struct Notes {
     pub template: Option<String>,
     /// The editor buffer while editing.
     pub edit: Option<String>,
+    /// ctrl/cmd+a selected the whole editor buffer.
+    pub all: bool,
     /// A `notes-generate` is running off the UI thread.
     pub busy: bool,
     /// First click of a confirmed regenerate happened; the next one runs it.
@@ -109,6 +111,7 @@ impl Notes {
     pub fn begin_edit(&mut self) {
         if self.session.is_some() {
             self.edit = Some(self.text.clone());
+            self.all = false;
             self.armed = false;
         }
     }
@@ -117,7 +120,8 @@ impl Notes {
         self.edit = None;
     }
 
-    /// One key press in the editor: enter is a newline, escape cancels, ctrl/cmd-s saves.
+    /// One key press in the editor: enter is a newline, escape cancels, ctrl/cmd-s saves,
+    /// ctrl/cmd-a selects all.
     pub fn key(&mut self, key: &str, key_char: Option<&str>, command: bool) -> EditKey {
         let Some(buf) = self.edit.as_mut() else {
             return EditKey::Ignored;
@@ -126,20 +130,14 @@ impl Notes {
             "s" if command => EditKey::Commit,
             "escape" => EditKey::Cancel,
             "enter" => {
+                if std::mem::take(&mut self.all) {
+                    buf.clear();
+                }
                 buf.push('\n');
                 EditKey::Handled
             }
-            "backspace" => {
-                buf.pop();
-                EditKey::Handled
-            }
-            _ => match key_char {
-                Some(c) if !command && !c.is_empty() && !c.chars().any(char::is_control) => {
-                    buf.push_str(c);
-                    EditKey::Handled
-                }
-                _ => EditKey::Ignored,
-            },
+            _ if type_key(buf, &mut self.all, key, key_char, command) => EditKey::Handled,
+            _ => EditKey::Ignored,
         }
     }
 
@@ -280,6 +278,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let n = cx.global::<Notes>();
     let (session, editing, busy, armed) = (n.session.clone(), n.edit.clone(), n.busy, n.armed);
     let (text, info, error) = (n.text.clone(), n.info.clone(), n.error.clone());
+    let all = n.all;
     let (templates, template) = (n.templates.clone(), n.template.clone());
 
     let list = div()
@@ -387,7 +386,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                     cx.stop_propagation();
                     cx.notify();
                 }))
-                .child(text_block(buf, true))
+                .child(text_block(buf, !all).when(all, |b| b.bg(rgb(ACCENT)).text_color(rgb(BG))))
                 .into_any_element()
         }
         (Some(_), None) if text.is_empty() => div()
@@ -600,6 +599,24 @@ mod tests {
             assert_eq!(cx.global::<Notes>().edit, None);
             assert_eq!(cx.global::<Notes>().text, "hi\nx");
             assert_eq!(v.state.status, "Saved notes");
+        });
+        // ctrl-a selects the whole editor: typing replaces it, backspace empties it.
+        view.update(cx, |_, cx| {
+            cx.global_mut::<Notes>().begin_edit();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| focus.focus(window, cx));
+        cx.simulate_keystrokes("ctrl-a");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("n e w");
+        view.update(cx, |_, cx| {
+            assert_eq!(cx.global::<Notes>().edit.as_deref(), Some("new"));
+        });
+        cx.simulate_keystrokes("ctrl-a backspace");
+        view.update(cx, |_, cx| {
+            assert_eq!(cx.global::<Notes>().edit.as_deref(), Some(""));
+            cx.global_mut::<Notes>().cancel_edit();
         });
         // Regenerate against the default local backend with nothing listening fails cleanly.
         view.update(cx, |v, cx| {

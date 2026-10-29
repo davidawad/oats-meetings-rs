@@ -12,7 +12,7 @@ use serde_json::json;
 
 use crate::model;
 use crate::state::{Edit, SessionRow, State};
-use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
+use crate::view::{edit_text, MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
 
 pub(crate) const RENAME: &str = "session:rename";
 pub(crate) const TAG: &str = "session:tag";
@@ -196,9 +196,11 @@ fn chip(
     cx: &mut Context<MainWindow>,
     f: impl Fn(&mut MainWindow, &mut Window, &mut Context<MainWindow>) + 'static,
 ) -> impl IntoElement {
-    let label: SharedString = label.into();
+    let (id, label): (SharedString, SharedString) = (id.into(), label.into());
+    let sel = id.to_string();
     div()
-        .id(id.into())
+        .id(id)
+        .debug_selector(|| sel)
         .px_2()
         .rounded_md()
         .cursor_pointer()
@@ -235,9 +237,9 @@ fn input(
 ) -> AnyElement {
     let editing = w.state.edit.as_ref().filter(|e| e.path == path);
     let (text, colour) = match editing {
-        Some(e) => (format!("{}|", e.buf), FG),
-        None if shown.is_empty() => (hint.to_string(), DIM),
-        None => (shown.to_string(), FG),
+        Some(e) => (edit_text(e).into_any_element(), FG),
+        None if shown.is_empty() => (hint.to_string().into_any_element(), DIM),
+        None => (shown.to_string().into_any_element(), FG),
     };
     let mut row = div().flex().gap_1().items_center().child(
         div()
@@ -254,7 +256,8 @@ fn input(
             .child(text)
             .on_click(cx.listener(move |this, _, window, cx| open(this, path, &seed, window, cx))),
     );
-    if editing.is_some() {
+    // The search filters as it is typed: its only affordance is the clear chip under it.
+    if editing.is_some() && path != SEARCH {
         row = row
             .child(chip(
                 format!("{path}-save"),
@@ -282,6 +285,11 @@ fn input(
         col = col.child(div().text_sm().text_color(rgb(ERR)).child(err));
     }
     col.into_any_element()
+}
+
+/// The delete confirmation names the session by its title; the id follows as secondary text.
+pub(crate) fn confirm_text(del_label: &str, s: &SessionRow) -> String {
+    format!("{del_label} {}?", title_of(s))
 }
 
 fn title_of(s: &SessionRow) -> String {
@@ -313,10 +321,10 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                 .text_color(rgb(DIM))
                 .child(format!("{} of {}", rows.len(), w.state.sessions.len()))
                 .child(chip("search-clear", "clear", FG, cx, |this, _, cx| {
-                    this.state.sessions_ui.query.clear();
                     if this.state.edit.as_ref().is_some_and(|e| e.path == SEARCH) {
                         this.state.cancel_edit();
                     }
+                    this.state.sessions_ui.query.clear();
                     cx.notify();
                 })),
         );
@@ -431,10 +439,18 @@ fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyEl
         actions = actions
             .child(
                 div()
+                    .debug_selector(|| "delete-confirm-text".into())
                     .text_sm()
                     .text_color(rgb(ERR))
-                    .child(format!("{del_label} {id2}?")),
+                    .child(confirm_text(del_label, s)),
             )
+            .children((!s.title.is_empty()).then(|| {
+                div()
+                    .debug_selector(|| "delete-confirm-id".into())
+                    .text_sm()
+                    .text_color(rgb(DIM))
+                    .child(format!("({id2})"))
+            }))
             .child(chip(
                 "session-delete-cancel",
                 "cancel",
@@ -730,6 +746,13 @@ mod tests {
             |st| st.begin_edit(TAG, ""),
             |st| st.sessions_ui.confirm = Some("a".into()),
         ];
+        let chips = |cx: &mut gpui::VisualTestContext| {
+            [
+                cx.debug_bounds("session:search-save").is_some(),
+                cx.debug_bounds("session:search-cancel").is_some(),
+                cx.debug_bounds("search-clear").is_some(),
+            ]
+        };
         for step in steps {
             view.update(cx, |v, cx| {
                 v.state.tab = Tab::Sessions;
@@ -740,5 +763,89 @@ mod tests {
             cx.run_until_parked();
         }
         view.read_with(cx, |v, _| assert_eq!(v.state.sessions.len(), 1));
+
+        // The search box filters live: no save / cancel beside it, only the clear chip.
+        view.update(cx, |v, cx| {
+            v.state.sessions_ui.confirm = None;
+            v.state.begin_edit(SEARCH, "stand");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(chips(cx), [false, false, true]);
+        // Rename keeps its save / cancel; opening it keeps the typed filter.
+        view.update(cx, |v, cx| {
+            v.state.begin_edit(RENAME, "x");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("session:rename-save").is_some());
+        view.read_with(cx, |v, _| assert_eq!(v.state.sessions_ui.query, "stand"));
+        view.update(cx, |v, cx| {
+            v.state.cancel_edit();
+            v.state.sessions_ui.query.clear();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(chips(cx), [false, false, false]);
+    }
+
+    #[test]
+    fn delete_confirm_names_the_title_with_the_id_beside_it() {
+        let titled = row("Weekly Standup", &[]);
+        assert_eq!(
+            confirm_text("Move to trash", &titled),
+            "Move to trash Weekly Standup?"
+        );
+        assert_eq!(
+            confirm_text("Delete", &row("", &[])),
+            "Delete session_1?",
+            "untitled sessions fall back to the id"
+        );
+        let (engine, dir) = testutil::engine(&[]);
+        seed(dir.path(), "session_2026-10-29_04-45-46", "Standup", &[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Sessions;
+            v.state.select(&v.engine, "session_2026-10-29_04-45-46");
+            delete(&mut v.state, &v.engine, "session_2026-10-29_04-45-46");
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("delete-confirm-text").is_some());
+        assert!(cx.debug_bounds("delete-confirm-id").is_some());
+    }
+
+    #[test]
+    fn ctrl_a_then_typing_replaces_the_search_through_the_window_keys() {
+        let (engine, dir) = testutil::engine(&[]);
+        seed(dir.path(), "a", "Standup", &[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        for (tab, path, seed) in [
+            (Tab::Sessions, SEARCH, "stand"),
+            (Tab::Settings, "stt.local.model", "base.en"),
+        ] {
+            view.update(cx, |v, cx| {
+                v.state.tab = tab;
+                v.state.begin_edit(path, seed);
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let focus = view.read_with(cx, |v, _| v.focus.clone().expect("focus"));
+            cx.update(|window, cx| focus.focus(window, cx));
+            cx.simulate_keystrokes("ctrl-a");
+            cx.run_until_parked();
+            view.read_with(cx, |v, _| assert!(v.state.edit.as_ref().unwrap().all));
+            cx.simulate_keystrokes("r e");
+            view.read_with(cx, |v, _| {
+                assert_eq!(v.state.edit.as_ref().unwrap().buf, "re", "{path}")
+            });
+            cx.simulate_keystrokes("ctrl-a backspace");
+            view.read_with(cx, |v, _| {
+                assert_eq!(v.state.edit.as_ref().unwrap().buf, "", "{path}")
+            });
+            view.update(cx, |v, _| v.state.cancel_edit());
+        }
     }
 }

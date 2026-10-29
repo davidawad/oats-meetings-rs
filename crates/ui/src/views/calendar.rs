@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use oats_core::control::engine::Engine;
 
 use crate::model;
+use crate::state::type_key;
 use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +70,8 @@ pub(crate) struct Cal {
     pub name: String,
     pub url: String,
     pub field: Option<Field>,
+    /// ctrl/cmd+a selected the whole active field.
+    pub all: bool,
     focus: Option<FocusHandle>,
 }
 
@@ -361,17 +364,15 @@ pub(crate) fn key(
                 Field::Url
             } else {
                 Field::Name
-            })
+            });
+            cal.all = false;
         }
-        "backspace" => {
-            cal.buf(f).pop();
+        _ => {
+            let mut all = cal.all;
+            let handled = type_key(cal.buf(f), &mut all, key, key_char, command);
+            cal.all = all;
+            return handled;
         }
-        _ => match key_char {
-            Some(c) if !command && !c.is_empty() && !c.chars().any(char::is_control) => {
-                cal.buf(f).push_str(c)
-            }
-            _ => return false,
-        },
     }
     true
 }
@@ -401,28 +402,47 @@ fn input(
         Field::Name => (&cal.name, cal.field == Some(f)),
         Field::Url => (&cal.url, cal.field == Some(f)),
     };
+    let selected = active && cal.all;
     let shown = match (text.is_empty(), active) {
+        (_, true) if selected => text.clone(),
         (_, true) => format!("{text}|"),
         (true, false) => placeholder.to_string(),
         (false, false) => text.clone(),
     };
     let focus = cal.focus.clone();
+    let id = match f {
+        Field::Name => "ics-name",
+        Field::Url => "ics-url",
+    };
+    // One line at a fixed width so a long URL never grows the row and moves the Add chip; while
+    // typing the start is elided so the caret end stays in view.
+    let line = div().overflow_hidden().whitespace_nowrap();
+    let line = if active {
+        line.text_ellipsis_start()
+    } else {
+        line.text_ellipsis()
+    };
     div()
-        .id(match f {
-            Field::Name => "ics-name",
-            Field::Url => "ics-url",
-        })
+        .id(id)
+        .debug_selector(|| id.to_string())
         .px_2()
         .w(px(width))
+        .flex_none()
+        .overflow_hidden()
         .rounded_md()
         .cursor_text()
         .bg(rgb(PANEL))
         .border_1()
         .border_color(rgb(if active { ACCENT } else { PANEL }))
         .text_color(rgb(if text.is_empty() && !active { DIM } else { FG }))
-        .child(shown)
+        .child(
+            line.when(selected, |l| l.bg(rgb(ACCENT)).text_color(rgb(BG)))
+                .child(shown),
+        )
         .on_click(cx.listener(move |_, _, window, cx| {
-            cx.default_global::<Cal>().field = Some(f);
+            let cal = cx.default_global::<Cal>();
+            cal.field = Some(f);
+            cal.all = false;
             if let Some(h) = &focus {
                 h.focus(window, cx);
             }
@@ -501,7 +521,9 @@ fn sources(cal: &Cal, cx: &mut Context<MainWindow>) -> impl IntoElement {
         all = all.on_click(cx.listener(|w, _, _, cx| refresh(w, String::new(), cx)));
     }
     let can_add = !cal.name.trim().is_empty() && !cal.url.trim().is_empty();
-    let mut add_chip = chip("ics-add", "Add", can_add);
+    let mut add_chip = chip("ics-add", "Add", can_add)
+        .debug_selector(|| "ics-add".into())
+        .flex_none();
     if can_add {
         add_chip = add_chip.on_click(cx.listener(|w, _, _, cx| {
             add(w, cx);
@@ -679,6 +701,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         name: cal.name.clone(),
         url: cal.url.clone(),
         field: cal.field,
+        all: cal.all,
         focus: Some(focus.clone()),
     };
     div()
@@ -928,6 +951,51 @@ DTEND:20260101T153000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Sync\r\nEND:VEVENT\r\nEND
             let cal = cx.global::<Cal>();
             assert_eq!(v.state.status, "Removed feed work.");
             assert!(cal.feeds.is_empty() && cal.meetings.is_empty());
+        });
+    }
+
+    #[test]
+    fn add_feed_row_keeps_one_line_and_ctrl_a_replaces_the_url() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Calendar;
+            cx.default_global::<Cal>().field = Some(Field::Name);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let bounds = |cx: &mut gpui::VisualTestContext| {
+            (
+                cx.debug_bounds("ics-url").expect("url input"),
+                cx.debug_bounds("ics-add").expect("add chip"),
+            )
+        };
+        let before = bounds(cx);
+        // A long URL typed through the focused form's key handler.
+        let focus = view.update(cx, |_, cx| cx.global::<Cal>().focus.clone().unwrap());
+        cx.update(|window, cx| focus.focus(window, cx));
+        cx.simulate_keystrokes("n tab");
+        let long = "https://calendar.example.com/very/long/path/to/a/feed/basic.ics";
+        view.update(cx, |_, cx| {
+            cx.global_mut::<Cal>().url = long.into();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            bounds(cx),
+            before,
+            "url input and Add chip do not move or grow"
+        );
+        cx.simulate_keystrokes("ctrl-a");
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| cx.global::<Cal>().all));
+        assert_eq!(bounds(cx), before);
+        cx.simulate_keystrokes("x");
+        view.update(cx, |_, cx| {
+            let cal = cx.global::<Cal>();
+            assert_eq!((cal.name.as_str(), cal.url.as_str()), ("n", "x"));
+            assert!(!cal.all);
         });
     }
 

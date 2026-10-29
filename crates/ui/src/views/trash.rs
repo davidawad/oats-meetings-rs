@@ -12,6 +12,8 @@ use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub id: String,
+    /// The session's title when it had one (`trash-list`).
+    pub title: String,
     pub deleted_at: String,
 }
 
@@ -41,6 +43,7 @@ impl Trash {
                     .flatten()
                     .map(|t| Item {
                         id: str_of(t, "id"),
+                        title: str_of(t, "title"),
                         deleted_at: str_of(t, "deleted_at"),
                     })
                     .collect();
@@ -159,12 +162,27 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             .py_1()
             .rounded_md()
             .bg(rgb(PANEL))
-            .child(div().flex_1().min_w_0().child(it.id.clone()))
             .child(
                 div()
+                    .debug_selector(|| format!("trash-title-{}", it.id))
+                    .flex_1()
+                    .min_w_0()
+                    .child(if it.title.is_empty() {
+                        it.id.clone()
+                    } else {
+                        it.title.clone()
+                    }),
+            )
+            .child(
+                div()
+                    .debug_selector(|| format!("trash-id-{}", it.id))
                     .text_sm()
                     .text_color(rgb(DIM))
-                    .child(format!("deleted {}", it.deleted_at)),
+                    .child(if it.title.is_empty() {
+                        format!("deleted {}", it.deleted_at)
+                    } else {
+                        format!("{}  deleted {}", it.id, it.deleted_at)
+                    }),
             )
             .child(
                 button(
@@ -273,6 +291,16 @@ mod tests {
             assert_eq!(ids, ["s1", "s2", "s3"], "{:?}", v.trash.error);
             assert!(v.state.sessions.is_empty());
         });
+        // Rows lead with the session's title; the id is the secondary text.
+        view.read_with(cx, |v, _| {
+            assert!(
+                v.trash.items.iter().all(|i| i.title == "T"),
+                "{:?}",
+                v.trash.items
+            )
+        });
+        assert!(cx.debug_bounds("trash-title-s1").is_some());
+        assert!(cx.debug_bounds("trash-id-s1").is_some());
 
         // Restore: back in the store and the Sessions list, out of the trash.
         view.update(cx, |v, cx| {

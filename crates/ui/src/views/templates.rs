@@ -13,6 +13,7 @@ use gpui::{
 use serde_json::{json, Value};
 
 use crate::model;
+use crate::state::type_key;
 use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -60,6 +61,8 @@ pub struct Draft {
     pub field: Field,
     /// Create only: replace a template that already has this name (`overwrite`).
     pub overwrite: bool,
+    /// ctrl/cmd+a selected the whole active field.
+    pub all: bool,
 }
 
 impl Draft {
@@ -237,18 +240,26 @@ impl Templates {
         match key {
             "escape" => self.cancel(),
             "enter" | "s" if command => self.save(w),
-            "tab" => d.field = d.field.next(),
-            "enter" if d.field == Field::Prompt => d.prompt.push('\n'),
-            "enter" => d.field = d.field.next(),
-            "backspace" => {
-                d.buf().pop();
+            "tab" => {
+                d.field = d.field.next();
+                d.all = false;
             }
-            _ => match key_char {
-                Some(c) if !command && !c.is_empty() && !c.chars().any(char::is_control) => {
-                    d.buf().push_str(c)
+            "enter" if d.field == Field::Prompt => {
+                if std::mem::take(&mut d.all) {
+                    d.prompt.clear();
                 }
-                _ => return false,
-            },
+                d.prompt.push('\n')
+            }
+            "enter" => {
+                d.field = d.field.next();
+                d.all = false;
+            }
+            _ => {
+                let mut all = d.all;
+                let handled = type_key(d.buf(), &mut all, key, key_char, command);
+                d.all = all;
+                return handled;
+            }
         }
         true
     }
@@ -452,8 +463,9 @@ fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl In
                  text: &str,
                  cx: &mut Context<MainWindow>| {
         let active = d.field == f;
+        let selected = active && d.all;
         let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-        if active {
+        if active && !selected {
             lines.last_mut().expect("split yields one").push('▏');
         }
         let focus = focus.clone();
@@ -472,10 +484,16 @@ fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl In
                     .border_1()
                     .border_color(rgb(if active { ACCENT } else { PANEL }))
                     .whitespace_normal()
-                    .children(lines.into_iter().map(|l| div().min_h(px(16.)).child(l)))
+                    .children(lines.into_iter().map(|l| {
+                        div()
+                            .min_h(px(16.))
+                            .when(selected, |l| l.bg(rgb(ACCENT)).text_color(rgb(BG)))
+                            .child(l)
+                    }))
                     .on_click(cx.listener(move |_, _, window, cx| {
                         if let Some(d) = cx.global_mut::<Templates>().draft.as_mut() {
                             d.field = f;
+                            d.all = false;
                         }
                         focus.focus(window, cx);
                         cx.notify();
@@ -658,6 +676,15 @@ mod tests {
             assert_eq!((d.name.as_str(), d.icon.as_str()), ("Retro", ""));
             assert_eq!(d.prompt, "## Wins\n## Fixes");
             assert_eq!(d.field, Field::Prompt);
+        });
+        // Back on the name, ctrl-a then typing replaces it instead of appending.
+        cx.simulate_keystrokes("tab ctrl-a");
+        cx.run_until_parked();
+        cx.simulate_input("Retro");
+        view.update(cx, |_, cx| {
+            let d = cx.global::<Templates>().draft.clone().unwrap();
+            assert_eq!((d.name.as_str(), d.field), ("Retro", Field::Name));
+            assert_eq!(d.prompt, "## Wins\n## Fixes");
         });
         cx.simulate_keystrokes("ctrl-s");
         view.update(cx, |_, cx| {

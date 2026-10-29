@@ -81,6 +81,15 @@ fn trashed_sessions_are_listed_restored_and_purged() {
     got.sort();
     assert_eq!(got, [a, b], "{r}");
     assert!(r["data"]["trash"][0]["deleted_at"].is_string(), "{r}");
+    // Each row carries the trashed session's title (empty when it has none).
+    let titles: Vec<_> = r["data"]["trash"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| (t["id"].as_str().unwrap(), t["title"].as_str().unwrap()))
+        .collect();
+    assert!(titles.contains(&(a, "Acme sync")), "{r}");
+    assert!(titles.contains(&(b, "")), "{r}");
 
     // Restore puts the session back in the store and out of the trash.
     let r = c
