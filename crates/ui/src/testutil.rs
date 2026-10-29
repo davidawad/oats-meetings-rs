@@ -8,7 +8,10 @@ use serde_json::Value;
 pub fn engine(pairs: &[(&str, Value)]) -> (Arc<Engine>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = dir.path().join("config.toml");
-    let flat = pairs.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect();
+    let flat = pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), v.clone()))
+        .collect();
     let v: toml::Value = serde_json::from_value(nest(&flat)).expect("toml value");
     std::fs::write(&cfg, toml::to_string(&v).expect("toml")).expect("write config");
     let engine = Engine::new(EngineOpts {

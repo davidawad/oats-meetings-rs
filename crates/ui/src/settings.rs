@@ -12,12 +12,23 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Widget {
     Toggle(bool),
-    Choice { options: Vec<&'static str>, current: String },
+    Choice {
+        options: Vec<&'static str>,
+        current: String,
+    },
     Text(String),
     /// Whole number within `min..=max`.
-    Number { value: i64, min: i64, max: i64 },
+    Number {
+        value: i64,
+        min: i64,
+        max: i64,
+    },
     /// Duration text (`"15s"`) within `min_ms..=max_ms`.
-    Duration { text: String, min_ms: u64, max_ms: u64 },
+    Duration {
+        text: String,
+        min_ms: u64,
+        max_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,12 +50,27 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
         Kind::Bool => Widget::Toggle(matches!(value, Some(Value::Bool(true)))),
         Kind::Enum(opts) => Widget::Choice {
             options: opts.to_vec(),
-            current: value.and_then(Value::as_str).unwrap_or_default().to_string(),
+            current: value
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
         },
-        Kind::Str => Widget::Text(value.and_then(Value::as_str).unwrap_or_default().to_string()),
-        Kind::Int { min, max } => Widget::Number { value: value.and_then(Value::as_i64).unwrap_or(min), min, max },
+        Kind::Str => Widget::Text(
+            value
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        Kind::Int { min, max } => Widget::Number {
+            value: value.and_then(Value::as_i64).unwrap_or(min),
+            min,
+            max,
+        },
         Kind::Duration { min_ms, max_ms } => Widget::Duration {
-            text: value.and_then(Value::as_str).unwrap_or_default().to_string(),
+            text: value
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
             min_ms,
             max_ms,
         },
@@ -62,12 +88,19 @@ pub fn build(flat: &Flat) -> Vec<Group> {
             widget: widget(k.kind, flat.get(k.path)),
         });
     }
-    groups.into_iter().map(|(name, rows)| Group { name, rows }).collect()
+    groups
+        .into_iter()
+        .map(|(name, rows)| Group { name, rows })
+        .collect()
 }
 
 /// Keys deliberately absent from the settings view.
 pub fn hidden() -> Vec<&'static str> {
-    keys::KEYS.iter().filter(|k| !k.ui).map(|k| k.path).collect()
+    keys::KEYS
+        .iter()
+        .filter(|k| !k.ui)
+        .map(|k| k.path)
+        .collect()
 }
 
 /// The value a toggle / next-choice click should write.
@@ -75,7 +108,10 @@ pub fn next_value(row: &Row) -> Option<Value> {
     match &row.widget {
         Widget::Toggle(b) => Some(json!(!b)),
         Widget::Choice { options, current } => {
-            let i = options.iter().position(|o| *o == current).map_or(0, |i| i + 1);
+            let i = options
+                .iter()
+                .position(|o| *o == current)
+                .map_or(0, |i| i + 1);
             options.get(i % options.len().max(1)).map(|o| json!(o))
         }
         Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } => None,
@@ -92,7 +128,10 @@ mod tests {
     fn every_key_is_in_the_view_or_marked_ui_false() {
         let (engine, _d) = testutil::engine(&[]);
         let groups = build(&engine.resolved().flat);
-        let shown: BTreeSet<&str> = groups.iter().flat_map(|g| g.rows.iter().map(|r| r.path)).collect();
+        let shown: BTreeSet<&str> = groups
+            .iter()
+            .flat_map(|g| g.rows.iter().map(|r| r.path))
+            .collect();
         let hidden: BTreeSet<&str> = hidden().into_iter().collect();
         let all: BTreeSet<&str> = keys::KEYS.iter().map(|k| k.path).collect();
         assert!(shown.is_disjoint(&hidden));
@@ -103,13 +142,22 @@ mod tests {
     fn rows_reflect_resolved_values_and_edit_via_config_set() {
         let (engine, _d) = testutil::engine(&[("app.menubar", json!(true))]);
         let rows = |e: &oats_core::control::engine::Engine| {
-            build(&e.resolved().flat).into_iter().flat_map(|g| g.rows).collect::<Vec<_>>()
+            build(&e.resolved().flat)
+                .into_iter()
+                .flat_map(|g| g.rows)
+                .collect::<Vec<_>>()
         };
-        let row = rows(&engine).into_iter().find(|r| r.path == "app.menubar").unwrap();
+        let row = rows(&engine)
+            .into_iter()
+            .find(|r| r.path == "app.menubar")
+            .unwrap();
         assert_eq!(row.widget, Widget::Toggle(true));
         let v = next_value(&row).unwrap();
         model::dispatch(&engine, "config-set", json!({"key": row.path, "value": v})).unwrap();
-        let row = rows(&engine).into_iter().find(|r| r.path == "app.menubar").unwrap();
+        let row = rows(&engine)
+            .into_iter()
+            .find(|r| r.path == "app.menubar")
+            .unwrap();
         assert_eq!(row.widget, Widget::Toggle(false));
     }
 
@@ -125,13 +173,18 @@ mod tests {
                 // The bounds are the values a number / duration row must be able to write.
                 Kind::Int { min, max } => vec![json!(min), json!(max)],
                 Kind::Duration { min_ms, max_ms } => {
-                    vec![json!(keys::format_duration_ms(min_ms)), json!(keys::format_duration_ms(max_ms))]
+                    vec![
+                        json!(keys::format_duration_ms(min_ms)),
+                        json!(keys::format_duration_ms(max_ms)),
+                    ]
                 }
             };
             for v in values {
                 // A value can be rejected by a subsystem (e.g. cloud STT without a key); the point
                 // here is that the row never produces a value outside the declared domain.
-                if let Err(e) = model::dispatch(&engine, "config-set", json!({"key": k.path, "value": v})) {
+                if let Err(e) =
+                    model::dispatch(&engine, "config-set", json!({"key": k.path, "value": v}))
+                {
                     assert_ne!(e.code, "unknown_key", "{}", k.path);
                     assert_ne!(e.code, "type_mismatch", "{} = {v}", k.path);
                 }

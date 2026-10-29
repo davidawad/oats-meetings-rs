@@ -56,7 +56,9 @@ fn apply_raw(handle: RawWindowHandle, plan: Plan) -> Applied {
     let (hide, ty) = match plan {
         Plan::SharingNone => (true, 0usize),
         Plan::Visible => (false, 1usize),
-        Plan::ExcludeFromCapture => return Applied::WrongPlatform("display_affinity is Windows-only"),
+        Plan::ExcludeFromCapture => {
+            return Applied::WrongPlatform("display_affinity is Windows-only")
+        }
     };
     let RawWindowHandle::AppKit(h) = handle else {
         return Applied::Failed("not an AppKit window".into());
@@ -71,7 +73,11 @@ fn apply_raw(handle: RawWindowHandle, plan: Plan) -> Applied {
         }
         let _: () = msg_send![win, setSharingType: ty];
     }
-    if hide { Applied::Hidden } else { Applied::Capturable }
+    if hide {
+        Applied::Hidden
+    } else {
+        Applied::Capturable
+    }
 }
 
 /// Read back `NSWindow.sharingType` (0 none, 1 read-only, 2 read-write) for the .15 check.
@@ -146,7 +152,10 @@ mod tests {
     fn the_os_axis_picks_a_method_the_ui_can_apply() {
         // config/axes.json sets privacy.hide_method per OS; each value must be a known method.
         let (engine, _d) = crate::testutil::engine(&[]);
-        let m = engine.resolved().flat["privacy.hide_method"].as_str().unwrap().to_string();
+        let m = engine.resolved().flat["privacy.hide_method"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(HIDE_METHODS.contains(&m.as_str()));
     }
 }

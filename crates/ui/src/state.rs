@@ -80,8 +80,15 @@ impl Control {
 pub enum Rec {
     #[default]
     Idle,
-    Recording { session: String, base_ms: u64, resumed: Instant },
-    Paused { session: String, base_ms: u64 },
+    Recording {
+        session: String,
+        base_ms: u64,
+        resumed: Instant,
+    },
+    Paused {
+        session: String,
+        base_ms: u64,
+    },
 }
 
 impl Rec {
@@ -96,7 +103,9 @@ impl Rec {
         match self {
             Rec::Idle => 0,
             Rec::Paused { base_ms, .. } => *base_ms,
-            Rec::Recording { base_ms, resumed, .. } => base_ms + now.saturating_duration_since(*resumed).as_millis() as u64,
+            Rec::Recording {
+                base_ms, resumed, ..
+            } => base_ms + now.saturating_duration_since(*resumed).as_millis() as u64,
         }
     }
 }
@@ -105,7 +114,11 @@ impl Rec {
 pub fn fmt_elapsed(ms: u64) -> String {
     let t = ms / 1000;
     let (h, m, s) = (t / 3600, t / 60 % 60, t % 60);
-    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") }
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
 }
 
 /// Which recording controls are usable in a state, and the pause button's label.
@@ -119,14 +132,23 @@ pub struct Controls {
 
 impl Controls {
     /// The buttons while an action is pending: none usable.
-    pub const BUSY: Controls = Controls { start: false, pause: false, stop: false, pause_label: "Pause" };
+    pub const BUSY: Controls = Controls {
+        start: false,
+        pause: false,
+        stop: false,
+        pause_label: "Pause",
+    };
 
     pub fn of(rec: &Rec) -> Self {
         Self {
             start: matches!(rec, Rec::Idle),
             pause: !matches!(rec, Rec::Idle),
             stop: !matches!(rec, Rec::Idle),
-            pause_label: if matches!(rec, Rec::Paused { .. }) { "Resume" } else { "Pause" },
+            pause_label: if matches!(rec, Rec::Paused { .. }) {
+                "Resume"
+            } else {
+                "Pause"
+            },
         }
     }
 }
@@ -139,7 +161,11 @@ pub fn badge_text(rec: &Rec, now: Instant, show_elapsed: bool) -> String {
         Rec::Recording { .. } => ("Recording", true),
         Rec::Paused { .. } => ("Paused", true),
     };
-    if timed && show_elapsed { format!("{word} {}", fmt_elapsed(rec.elapsed_ms(now))) } else { word.into() }
+    if timed && show_elapsed {
+        format!("{word} {}", fmt_elapsed(rec.elapsed_ms(now)))
+    } else {
+        word.into()
+    }
 }
 
 /// A capture device offered by the picker under `audio.*.device` rows.
@@ -199,13 +225,24 @@ pub struct State {
 }
 
 fn s(v: &Value, k: &str) -> String {
-    v.get(k).and_then(Value::as_str).unwrap_or_default().to_string()
+    v.get(k)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 pub fn line_of(u: &Value) -> Line {
     Line {
-        speaker: ["speaker", "channel"].iter().map(|k| s(u, k)).find(|x| !x.is_empty()).unwrap_or_default(),
-        text: ["text", "content"].iter().map(|k| s(u, k)).find(|x| !x.is_empty()).unwrap_or_default(),
+        speaker: ["speaker", "channel"]
+            .iter()
+            .map(|k| s(u, k))
+            .find(|x| !x.is_empty())
+            .unwrap_or_default(),
+        text: ["text", "content"]
+            .iter()
+            .map(|k| s(u, k))
+            .find(|x| !x.is_empty())
+            .unwrap_or_default(),
         start: u.get("start").and_then(Value::as_f64),
     }
 }
@@ -223,7 +260,13 @@ impl State {
                         title: s(x, "title"),
                         started_at: s(x, "started_at"),
                         utterances: x["utterance_count"].as_u64().unwrap_or(0),
-                        tags: x["tags"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect(),
+                        tags: x["tags"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect(),
                     })
                     .collect();
                 rows.sort_by(|a, b| b.started_at.cmp(&a.started_at).then(a.id.cmp(&b.id)));
@@ -237,12 +280,21 @@ impl State {
         self.device_opts = arr
             .into_iter()
             .flatten()
-            .map(|d| DeviceOpt { id: s(d, "id"), name: s(d, "name"), kind: s(d, "kind") })
+            .map(|d| DeviceOpt {
+                id: s(d, "id"),
+                name: s(d, "name"),
+                kind: s(d, "kind"),
+            })
             .collect();
-        self.stt_problem = model::dispatch(engine, "stt-status", json!({})).ok().and_then(|v| {
-            let p = &v["problem"];
-            Some(Problem { message: p["message"].as_str()?.to_string(), fix: p["fix"].as_str().map(str::to_string) })
-        });
+        self.stt_problem = model::dispatch(engine, "stt-status", json!({}))
+            .ok()
+            .and_then(|v| {
+                let p = &v["problem"];
+                Some(Problem {
+                    message: p["message"].as_str()?.to_string(),
+                    fix: p["fix"].as_str().map(str::to_string),
+                })
+            });
         self.settings = settings::build(&engine.resolved().flat);
         if let Some(id) = self.selected.clone() {
             self.select(engine, &id);
@@ -252,7 +304,14 @@ impl State {
     pub fn select(&mut self, engine: &Engine, id: &str) {
         self.selected = Some(id.to_string());
         match model::dispatch(engine, "transcript-get", json!({"session": id})) {
-            Ok(v) => self.transcript = v["utterances"].as_array().into_iter().flatten().map(line_of).collect(),
+            Ok(v) => {
+                self.transcript = v["utterances"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(line_of)
+                    .collect()
+            }
             Err(e) => {
                 self.transcript.clear();
                 self.status = e.to_string();
@@ -264,7 +323,9 @@ impl State {
     /// mid-recording, or started by a shortcut or `ctl`), or fall back to idle. Lines are loaded
     /// only when the session changes, so calling this every tick is cheap.
     pub fn sync_rec(&mut self, engine: &Engine) {
-        let Some(now) = engine.recording() else { return };
+        let Some(now) = engine.recording() else {
+            return;
+        };
         match now {
             None => {
                 if !matches!(self.rec, Rec::Idle) {
@@ -277,15 +338,29 @@ impl State {
                     self.live = self.saved_lines(engine, &session).unwrap_or_default();
                     self.trim_live(engine);
                     self.rec = if paused {
-                        Rec::Paused { session, base_ms: dur }
+                        Rec::Paused {
+                            session,
+                            base_ms: dur,
+                        }
                     } else {
-                        Rec::Recording { session, base_ms: dur, resumed: Instant::now() }
+                        Rec::Recording {
+                            session,
+                            base_ms: dur,
+                            resumed: Instant::now(),
+                        }
                     };
                 } else if paused != matches!(self.rec, Rec::Paused { .. }) {
                     self.rec = if paused {
-                        Rec::Paused { session, base_ms: dur }
+                        Rec::Paused {
+                            session,
+                            base_ms: dur,
+                        }
                     } else {
-                        Rec::Recording { session, base_ms: dur, resumed: Instant::now() }
+                        Rec::Recording {
+                            session,
+                            base_ms: dur,
+                            resumed: Instant::now(),
+                        }
                     };
                 }
             }
@@ -294,7 +369,14 @@ impl State {
 
     fn saved_lines(&self, engine: &Engine, session: &str) -> Option<Vec<Line>> {
         let v = model::dispatch(engine, "transcript-get", json!({"session": session})).ok()?;
-        Some(v["utterances"].as_array().into_iter().flatten().map(line_of).collect())
+        Some(
+            v["utterances"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(line_of)
+                .collect(),
+        )
     }
 
     fn trim_live(&mut self, engine: &Engine) {
@@ -307,7 +389,9 @@ impl State {
     /// Apply one bus event line. Recording events drive the badge whoever started the recording
     /// (button, shortcut, tray or `ctl`); segments feed the Live view of the current recording only.
     pub fn on_event(&mut self, engine: &Engine, line: &str) {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { return };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
         let d = &v["data"];
         let session = d["session"].as_str().unwrap_or_default().to_string();
         let dur = d["duration_ms"].as_u64().unwrap_or(0);
@@ -316,13 +400,24 @@ impl State {
                 self.live.clear();
                 self.live_session = Some(session.clone());
                 self.status.clear();
-                self.rec = Rec::Recording { session, base_ms: 0, resumed: Instant::now() };
+                self.rec = Rec::Recording {
+                    session,
+                    base_ms: 0,
+                    resumed: Instant::now(),
+                };
             }
             Some("recording-paused") => {
                 self.rec = if d["paused"].as_bool().unwrap_or(true) {
-                    Rec::Paused { session, base_ms: dur }
+                    Rec::Paused {
+                        session,
+                        base_ms: dur,
+                    }
                 } else {
-                    Rec::Recording { session, base_ms: dur, resumed: Instant::now() }
+                    Rec::Recording {
+                        session,
+                        base_ms: dur,
+                        resumed: Instant::now(),
+                    }
                 };
             }
             Some("recording-stopped") => {
@@ -335,10 +430,16 @@ impl State {
                 self.status = format!("Saved session {session}");
             }
             Some("segment") if d["kind"].as_str().unwrap_or("live") == "live" => {
-                if self.live_session.as_deref().is_some_and(|c| d["session"].as_str().is_none_or(|s| s == c)) {
+                if self
+                    .live_session
+                    .as_deref()
+                    .is_some_and(|c| d["session"].as_str().is_none_or(|s| s == c))
+                {
                     let l = line_of(d);
                     // A live segment re-reporting the same speaker and start refines its line.
-                    match self.live.iter().rposition(|x| x.speaker == l.speaker && x.start.is_some() && x.start == l.start) {
+                    match self.live.iter().rposition(|x| {
+                        x.speaker == l.speaker && x.start.is_some() && x.start == l.start
+                    }) {
                         Some(i) => self.live[i] = l,
                         None => self.live.push(l),
                     }
@@ -351,7 +452,11 @@ impl State {
 
     /// Open the text editor on a row, seeded with its current value.
     pub fn begin_edit(&mut self, path: &'static str, initial: &str) {
-        self.edit = Some(Edit { path, buf: initial.to_string(), error: None });
+        self.edit = Some(Edit {
+            path,
+            buf: initial.to_string(),
+            error: None,
+        });
     }
 
     pub fn cancel_edit(&mut self) {
@@ -361,7 +466,9 @@ impl State {
     /// Feed one key press to the open editor. `key` is the gpui key name, `key_char` the text it
     /// would type; `command` is true when ctrl/alt/cmd is held (never typed).
     pub fn edit_key(&mut self, key: &str, key_char: Option<&str>, command: bool) -> EditKey {
-        let Some(e) = self.edit.as_mut() else { return EditKey::Ignored };
+        let Some(e) = self.edit.as_mut() else {
+            return EditKey::Ignored;
+        };
         match key {
             "enter" => EditKey::Commit,
             "escape" => EditKey::Cancel,
@@ -385,13 +492,22 @@ impl State {
     /// editor stays open with the server's message; on success it closes and the rows reload.
     pub fn commit_edit(&mut self, engine: &Engine) {
         let Some(e) = self.edit.clone() else { return };
-        match model::dispatch(engine, "config-set", json!({"key": e.path, "value": e.buf.trim()})) {
+        match model::dispatch(
+            engine,
+            "config-set",
+            json!({"key": e.path, "value": e.buf.trim()}),
+        ) {
             Ok(_) => {
                 self.edit = None;
                 self.status = String::new();
                 self.refresh(engine);
             }
-            Err(err) => self.edit = Some(Edit { error: Some(err.to_string()), ..e }),
+            Err(err) => {
+                self.edit = Some(Edit {
+                    error: Some(err.to_string()),
+                    ..e
+                })
+            }
         }
     }
 
@@ -413,7 +529,11 @@ mod tests {
     fn seed(dir: &std::path::Path) {
         let d = dir.join("sessions").join("s1");
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("session.json"), r#"{"id":"s1","title":"Standup","startedAt":"2026-10-27T10:00:00Z"}"#).unwrap();
+        std::fs::write(
+            d.join("session.json"),
+            r#"{"id":"s1","title":"Standup","startedAt":"2026-10-27T10:00:00Z"}"#,
+        )
+        .unwrap();
         std::fs::write(
             d.join("transcript.final.jsonl"),
             "{\"speaker\":\"you\",\"text\":\"hello\"}\n{\"speaker\":\"them\",\"text\":\"hi\"}\n",
@@ -431,7 +551,14 @@ mod tests {
         assert_eq!(st.sessions[0].title, "Standup");
         st.select(&engine, "s1");
         assert_eq!(st.transcript.len(), 2);
-        assert_eq!(st.transcript[0], Line { speaker: "you".into(), text: "hello".into(), start: None });
+        assert_eq!(
+            st.transcript[0],
+            Line {
+                speaker: "you".into(),
+                text: "hello".into(),
+                start: None
+            }
+        );
         assert!(!st.settings.is_empty());
     }
 
@@ -440,8 +567,12 @@ mod tests {
         let (engine, dir) = testutil::engine(&[]);
         let mut st = State::default();
         st.refresh(&engine);
-        let compiled = model::dispatch(&engine, "stt-status", json!({})).unwrap()["local"]["compiled"] == true;
-        let p = st.stt_problem.clone().expect("a fresh data dir has no model");
+        let compiled =
+            model::dispatch(&engine, "stt-status", json!({})).unwrap()["local"]["compiled"] == true;
+        let p = st
+            .stt_problem
+            .clone()
+            .expect("a fresh data dir has no model");
         assert!(p.message.contains("audio only"), "{}", p.message);
         // Whisper is compiled into default builds; without it the banner has no fix.
         assert_eq!(p.fix.as_deref(), compiled.then_some("stt-model-fetch"));
@@ -457,7 +588,11 @@ mod tests {
         let (engine, dir) = testutil::engine(&[]);
         seed(dir.path());
         let mut st = State::default();
-        st.act(&engine, "session-rename", json!({"session": "s1", "name": "Retro"}));
+        st.act(
+            &engine,
+            "session-rename",
+            json!({"session": "s1", "name": "Retro"}),
+        );
         assert_eq!(st.sessions[0].title, "Retro");
         assert_eq!(st.status, "");
     }
@@ -509,19 +644,30 @@ mod tests {
         use oats_core::config::keys::{Kind, KEYS};
         let (engine, _d) = testutil::engine(&[]);
         let mut st = State::default();
-        let int = KEYS.iter().find(|k| k.ui && matches!(k.kind, Kind::Int { .. })).unwrap();
-        let Kind::Int { min, max } = int.kind else { unreachable!() };
+        let int = KEYS
+            .iter()
+            .find(|k| k.ui && matches!(k.kind, Kind::Int { .. }))
+            .unwrap();
+        let Kind::Int { min, max } = int.kind else {
+            unreachable!()
+        };
         st.begin_edit(int.path, "");
         st.edit.as_mut().unwrap().buf = "not a number".into();
         st.commit_edit(&engine);
         assert!(st.edit.as_ref().unwrap().error.is_some());
         st.edit.as_mut().unwrap().buf = (max + 1).to_string();
         st.commit_edit(&engine);
-        assert!(st.edit.as_ref().unwrap().error.is_some(), "out of range rejected");
+        assert!(
+            st.edit.as_ref().unwrap().error.is_some(),
+            "out of range rejected"
+        );
         st.edit.as_mut().unwrap().buf = min.to_string();
         st.commit_edit(&engine);
         assert!(st.edit.is_none(), "{:?}", st.edit);
-        let dur = KEYS.iter().find(|k| k.ui && matches!(k.kind, Kind::Duration { .. })).unwrap();
+        let dur = KEYS
+            .iter()
+            .find(|k| k.ui && matches!(k.kind, Kind::Duration { .. }))
+            .unwrap();
         st.begin_edit(dur.path, "");
         st.edit.as_mut().unwrap().buf = "soon".into();
         st.commit_edit(&engine);
@@ -537,7 +683,14 @@ mod tests {
         st.on_event(&engine, &seg("zzz", "live", "them", "other session", 0.0));
         st.on_event(&engine, r#"{"event":"other","data":{}}"#);
         st.on_event(&engine, "garbage");
-        assert_eq!(st.live, vec![Line { speaker: "them".into(), text: "hi".into(), start: Some(0.0) }]);
+        assert_eq!(
+            st.live,
+            vec![Line {
+                speaker: "them".into(),
+                text: "hi".into(),
+                start: Some(0.0)
+            }]
+        );
     }
 
     #[test]
@@ -546,7 +699,10 @@ mod tests {
         let mut st = State::default();
         st.on_event(&engine, &ev("recording-started", json!({"session": "a"})));
         st.on_event(&engine, &seg("a", "live", "you", "Let's review the", 1.0));
-        st.on_event(&engine, &seg("a", "live", "you", "Let's review the roadmap", 1.0));
+        st.on_event(
+            &engine,
+            &seg("a", "live", "you", "Let's review the roadmap", 1.0),
+        );
         st.on_event(&engine, &seg("a", "live", "them", "Sounds good", 4.0));
         assert_eq!(st.live.len(), 2);
         assert_eq!(st.live[0].text, "Let's review the roadmap");
@@ -565,13 +721,27 @@ mod tests {
         st.on_event(&engine, &seg("s1", "final", "you", "hello", 0.0));
         st.on_event(&engine, &seg("s1", "final", "them", "hi", 1.0));
         assert_eq!(st.live.len(), 3);
-        st.on_event(&engine, &ev("recording-stopped", json!({"session": "s1", "duration_ms": 5000})));
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-stopped",
+                json!({"session": "s1", "duration_ms": 5000}),
+            ),
+        );
         assert_eq!(st.rec, Rec::Idle);
         assert_eq!(
             st.live,
             vec![
-                Line { speaker: "you".into(), text: "hello".into(), start: None },
-                Line { speaker: "them".into(), text: "hi".into(), start: None },
+                Line {
+                    speaker: "you".into(),
+                    text: "hello".into(),
+                    start: None
+                },
+                Line {
+                    speaker: "them".into(),
+                    text: "hi".into(),
+                    start: None
+                },
             ]
         );
     }
@@ -596,7 +766,10 @@ mod tests {
         let mut st = State::default();
         st.on_event(&engine, &ev("recording-started", json!({"session": "a"})));
         for i in 0..80 {
-            st.on_event(&engine, &seg("a", "live", "you", &format!("l{i}"), i as f64));
+            st.on_event(
+                &engine,
+                &seg("a", "live", "you", &format!("l{i}"), i as f64),
+            );
         }
         assert_eq!(st.live.len(), 50);
         assert_eq!(st.live[0].text, "l30");
@@ -607,18 +780,60 @@ mod tests {
         let (engine, _d) = testutil::engine(&[]);
         let mut st = State::default();
         let t0 = Instant::now();
-        assert_eq!(Controls::of(&st.rec), Controls { start: true, pause: false, stop: false, pause_label: "Pause" });
+        assert_eq!(
+            Controls::of(&st.rec),
+            Controls {
+                start: true,
+                pause: false,
+                stop: false,
+                pause_label: "Pause"
+            }
+        );
         st.on_event(&engine, &ev("recording-started", json!({"session": "a"})));
         assert!(matches!(st.rec, Rec::Recording { .. }));
-        assert_eq!(Controls::of(&st.rec), Controls { start: false, pause: true, stop: true, pause_label: "Pause" });
-        st.on_event(&engine, &ev("recording-paused", json!({"session": "a", "paused": true, "duration_ms": 12_000})));
-        assert_eq!(st.rec, Rec::Paused { session: "a".into(), base_ms: 12_000 });
+        assert_eq!(
+            Controls::of(&st.rec),
+            Controls {
+                start: false,
+                pause: true,
+                stop: true,
+                pause_label: "Pause"
+            }
+        );
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-paused",
+                json!({"session": "a", "paused": true, "duration_ms": 12_000}),
+            ),
+        );
+        assert_eq!(
+            st.rec,
+            Rec::Paused {
+                session: "a".into(),
+                base_ms: 12_000
+            }
+        );
         assert_eq!(Controls::of(&st.rec).pause_label, "Resume");
         // paused time does not advance
-        assert_eq!(badge_text(&st.rec, t0 + std::time::Duration::from_secs(99), true), "Paused 00:12");
-        st.on_event(&engine, &ev("recording-paused", json!({"session": "a", "paused": false, "duration_ms": 12_000})));
-        let Rec::Recording { resumed, .. } = st.rec.clone() else { panic!("{:?}", st.rec) };
-        assert_eq!(badge_text(&st.rec, resumed + std::time::Duration::from_secs(3), true), "Recording 00:15");
+        assert_eq!(
+            badge_text(&st.rec, t0 + std::time::Duration::from_secs(99), true),
+            "Paused 00:12"
+        );
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-paused",
+                json!({"session": "a", "paused": false, "duration_ms": 12_000}),
+            ),
+        );
+        let Rec::Recording { resumed, .. } = st.rec.clone() else {
+            panic!("{:?}", st.rec)
+        };
+        assert_eq!(
+            badge_text(&st.rec, resumed + std::time::Duration::from_secs(3), true),
+            "Recording 00:15"
+        );
         assert_eq!(badge_text(&st.rec, resumed, false), "Recording");
         st.on_event(&engine, &ev("recording-stopped", json!({"session": "a"})));
         assert_eq!(badge_text(&st.rec, t0, true), "Not recording");

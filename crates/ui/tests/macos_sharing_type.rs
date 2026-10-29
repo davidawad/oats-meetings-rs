@@ -10,7 +10,9 @@ fn main() {
     let failed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let f = failed.clone();
     gpui_platform::application().run(move |cx: &mut App| {
-        let w = cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| Empty)).expect("window");
+        let w = cx
+            .open_window(WindowOptions::default(), |_, cx| cx.new(|_| Empty))
+            .expect("window");
         w.update(cx, |_, window, _| {
             for (hide, method, want_applied, want_ty) in [
                 (true, "sharing_type", Applied::Hidden, 0usize),

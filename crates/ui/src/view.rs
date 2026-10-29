@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use std::time::Instant;
 
-use gpui::{div, prelude::*, px, rgb, Context, FocusHandle, IntoElement, Render, ScrollHandle, SharedString, Window};
+use gpui::{
+    div, prelude::*, px, rgb, Context, FocusHandle, IntoElement, Render, ScrollHandle,
+    SharedString, Window,
+};
 use oats_core::control::engine::Engine;
 use serde_json::json;
 
@@ -37,7 +40,12 @@ impl MainWindow {
         let mut state = State::default();
         state.refresh(&engine);
         state.sync_rec(&engine);
-        Self { engine, state, focus: None, live_scroll: ScrollHandle::new() }
+        Self {
+            engine,
+            state,
+            focus: None,
+            live_scroll: ScrollHandle::new(),
+        }
     }
 
     /// Apply a pending event line from the engine bus and re-render.
@@ -68,7 +76,11 @@ impl MainWindow {
     /// A recording button was pressed: the same engine action as `ctl` and the shortcuts. It runs off
     /// the UI thread (a start loads the ASR model) while the buttons show what is pending.
     pub fn press(&mut self, c: Control, cx: &mut Context<Self>) {
-        let allowed = if self.state.pending.is_some() { Controls::BUSY } else { Controls::of(&self.state.rec) };
+        let allowed = if self.state.pending.is_some() {
+            Controls::BUSY
+        } else {
+            Controls::of(&self.state.rec)
+        };
         let ok = match c {
             Control::Start => allowed.start,
             Control::Pause => allowed.pause,
@@ -82,7 +94,10 @@ impl MainWindow {
         let engine = Arc::clone(&self.engine);
         cx.spawn(async move |this, cx| {
             let eng = Arc::clone(&engine);
-            let res = cx.background_executor().spawn(async move { crate::model::dispatch(&eng, c.action(), json!({})) }).await;
+            let res = cx
+                .background_executor()
+                .spawn(async move { crate::model::dispatch(&eng, c.action(), json!({})) })
+                .await;
             let _ = this.update(cx, |v, cx| {
                 v.state.pending = None;
                 v.state.status = res.err().map(|e| e.to_string()).unwrap_or_default();
@@ -94,10 +109,20 @@ impl MainWindow {
         .detach();
     }
 
-    fn button(&self, id: &'static str, label: &'static str, on: bool, c: Control, cx: &mut Context<Self>) -> impl IntoElement {
+    fn button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        on: bool,
+        c: Control,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let b = div().id(id).px_3().py_1().rounded_md().child(label);
         if on {
-            b.cursor_pointer().bg(rgb(ACCENT)).text_color(rgb(BG)).on_click(cx.listener(move |this, _, _, cx| this.press(c, cx)))
+            b.cursor_pointer()
+                .bg(rgb(ACCENT))
+                .text_color(rgb(BG))
+                .on_click(cx.listener(move |this, _, _, cx| this.press(c, cx)))
         } else {
             b.bg(rgb(PANEL)).text_color(rgb(DIM))
         }
@@ -106,7 +131,11 @@ impl MainWindow {
     fn record_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let cfg = self.engine.snapshot();
         let ui = &cfg.config.ui;
-        let c = if self.state.pending.is_some() { Controls::BUSY } else { Controls::of(&self.state.rec) };
+        let c = if self.state.pending.is_some() {
+            Controls::BUSY
+        } else {
+            Controls::of(&self.state.rec)
+        };
         let colour = match self.state.rec {
             Rec::Idle => DIM,
             Rec::Recording { .. } => REC_RED,
@@ -120,12 +149,25 @@ impl MainWindow {
             .child(self.button("rec-start", "Start", c.start, Control::Start, cx))
             .child(self.button("rec-pause", c.pause_label, c.pause, Control::Pause, cx))
             .child(self.button("rec-stop", "Stop", c.stop, Control::Stop, cx))
-            .child(div().id("rec-badge").flex().gap_2().items_center().ml_2().child(div().size(px(10.)).rounded_full().bg(rgb(colour))).child(
-                div().text_color(rgb(colour)).child(match self.state.pending {
-                    Some(p) => p.busy_label().to_string(),
-                    None => badge_text(&self.state.rec, Instant::now(), ui.show_elapsed),
-                }),
-            ))
+            .child(
+                div()
+                    .id("rec-badge")
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .ml_2()
+                    .child(div().size(px(10.)).rounded_full().bg(rgb(colour)))
+                    .child(
+                        div()
+                            .text_color(rgb(colour))
+                            .child(match self.state.pending {
+                                Some(p) => p.busy_label().to_string(),
+                                None => {
+                                    badge_text(&self.state.rec, Instant::now(), ui.show_elapsed)
+                                }
+                            }),
+                    ),
+            )
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -164,16 +206,37 @@ impl MainWindow {
                 .items_start()
                 .gap_2()
                 .w_full()
-                .child(div().w(px(speaker_w)).flex_none().text_color(rgb(ACCENT)).child(l.speaker.clone()))
+                .child(
+                    div()
+                        .w(px(speaker_w))
+                        .flex_none()
+                        .text_color(rgb(ACCENT))
+                        .child(l.speaker.clone()),
+                )
                 // flex_1 + min_w_0 lets long text wrap inside the row instead of running off the window.
-                .child(div().flex_1().min_w_0().whitespace_normal().child(l.text.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .whitespace_normal()
+                        .child(l.text.clone()),
+                )
         }))
     }
 
     /// The transcription-unavailable banner, with a button when an action fixes it.
     fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let p = self.state.stt_problem.as_ref()?;
-        let mut row = div().flex().gap_3().items_center().px_3().py_2().rounded_md().bg(rgb(PANEL)).text_color(rgb(WARN)).child(p.message.clone());
+        let mut row = div()
+            .flex()
+            .gap_3()
+            .items_center()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(PANEL))
+            .text_color(rgb(WARN))
+            .child(p.message.clone());
         if let Some(fix) = p.fix.clone() {
             row = row.child(
                 div()
@@ -206,7 +269,9 @@ impl MainWindow {
         };
         let header = match (&self.state.rec, &self.state.live_session) {
             (Rec::Idle, Some(s)) => format!("Last recording: {s} (saved; see Sessions)"),
-            (r, _) if r.session().is_some() => format!("Recording {}", r.session().unwrap_or_default()),
+            (r, _) if r.session().is_some() => {
+                format!("Recording {}", r.session().unwrap_or_default())
+            }
             _ => format!("{} audio devices", self.state.devices),
         };
         div()
@@ -214,7 +279,13 @@ impl MainWindow {
             .flex_col()
             .gap_2()
             .size_full()
-            .child(div().text_sm().text_color(rgb(DIM)).flex_none().child(header))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(DIM))
+                    .flex_none()
+                    .child(header),
+            )
             .child(
                 div()
                     .id("live")
@@ -227,11 +298,21 @@ impl MainWindow {
     }
 
     fn sessions(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = div().id("sessions").flex().flex_col().gap_1().w(px(280.)).overflow_y_scroll().children(
-            self.state.sessions.iter().map(|s| {
+        let list = div()
+            .id("sessions")
+            .flex()
+            .flex_col()
+            .gap_1()
+            .w(px(280.))
+            .overflow_y_scroll()
+            .children(self.state.sessions.iter().map(|s| {
                 let id = s.id.clone();
                 let sel = self.state.selected.as_deref() == Some(s.id.as_str());
-                let title = if s.title.is_empty() { s.id.clone() } else { s.title.clone() };
+                let title = if s.title.is_empty() {
+                    s.id.clone()
+                } else {
+                    s.title.clone()
+                };
                 div()
                     .id(SharedString::from(format!("session-{}", s.id)))
                     .px_2()
@@ -245,13 +326,21 @@ impl MainWindow {
                         this.state.select(&this.engine, &id);
                         cx.notify();
                     }))
-            }),
-        );
-        let detail = div().id("transcript").flex_1().min_w_0().overflow_y_scroll().child(Self::lines(
-            &self.state.transcript,
-            if self.state.selected.is_some() { "Empty transcript." } else { "Select a session." },
-            self.speaker_width(),
-        ));
+            }));
+        let detail = div()
+            .id("transcript")
+            .flex_1()
+            .min_w_0()
+            .overflow_y_scroll()
+            .child(Self::lines(
+                &self.state.transcript,
+                if self.state.selected.is_some() {
+                    "Empty transcript."
+                } else {
+                    "Select a session."
+                },
+                self.speaker_width(),
+            ));
         div().flex().gap_4().size_full().child(list).child(detail)
     }
 
@@ -283,20 +372,30 @@ impl MainWindow {
             .border_color(rgb(if editing.is_some() { ACCENT } else { PANEL }))
             .child(value);
         if let Some(v) = next {
-            ctl = ctl.cursor_pointer().on_click(cx.listener(move |this, _, _, cx| {
-                this.state.act(&this.engine, "config-set", json!({"key": path, "value": v}));
-                cx.notify();
-            }));
+            ctl = ctl
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.state
+                        .act(&this.engine, "config-set", json!({"key": path, "value": v}));
+                    cx.notify();
+                }));
         } else if let Some(seed) = text_seed {
-            ctl = ctl.cursor_text().on_click(cx.listener(move |this, _, window, cx| {
-                this.state.begin_edit(path, &seed);
-                if let Some(f) = &this.focus {
-                    f.focus(window, cx);
-                }
-                cx.notify();
-            }));
+            ctl = ctl
+                .cursor_text()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.state.begin_edit(path, &seed);
+                    if let Some(f) = &this.focus {
+                        f.focus(window, cx);
+                    }
+                    cx.notify();
+                }));
         }
-        let mut top = div().flex().gap_3().items_center().child(div().w(px(260.)).flex_none().child(path)).child(ctl);
+        let mut top = div()
+            .flex()
+            .gap_3()
+            .items_center()
+            .child(div().w(px(260.)).flex_none().child(path))
+            .child(ctl);
         if let Some(e) = editing {
             top = top
                 .child(self.chip("save", cx, move |this, _, cx| {
@@ -309,7 +408,13 @@ impl MainWindow {
                 }));
             let _ = e;
         }
-        let mut out = div().flex().flex_col().flex_none().gap_1().w_full().child(top);
+        let mut out = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap_1()
+            .w_full()
+            .child(top);
         if let Some(err) = editing.and_then(|e| e.error.as_ref()) {
             out = out.child(div().text_sm().text_color(rgb(ERR)).child(err.clone()));
         }
@@ -338,31 +443,50 @@ impl MainWindow {
 
     /// Devices from `devices-list`, one click to fill the input; the empty id is the default device.
     fn device_picker(&self, path: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
-        let opts = std::iter::once(("".to_string(), "(default)".to_string()))
-            .chain(self.state.device_opts.iter().map(|d| (d.id.clone(), format!("{} [{}]", d.name, d.kind))));
-        div().flex().flex_wrap().gap_1().children(opts.map(|(id, label)| {
-            div()
-                .id(SharedString::from(format!("dev-{path}-{id}")))
-                .px_2()
-                .rounded_md()
-                .cursor_pointer()
-                .bg(rgb(PANEL))
-                .text_sm()
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(e) = this.state.edit.as_mut() {
-                        e.buf = id.clone();
-                        e.error = None;
-                    }
-                    cx.notify();
-                }))
-        }))
+        let opts = std::iter::once(("".to_string(), "(default)".to_string())).chain(
+            self.state
+                .device_opts
+                .iter()
+                .map(|d| (d.id.clone(), format!("{} [{}]", d.name, d.kind))),
+        );
+        div()
+            .flex()
+            .flex_wrap()
+            .gap_1()
+            .children(opts.map(|(id, label)| {
+                div()
+                    .id(SharedString::from(format!("dev-{path}-{id}")))
+                    .px_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgb(PANEL))
+                    .text_sm()
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(e) = this.state.edit.as_mut() {
+                            e.buf = id.clone();
+                            e.error = None;
+                        }
+                        cx.notify();
+                    }))
+            }))
     }
 
     fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut col = div().id("settings").flex().flex_col().gap_3().size_full().overflow_y_scroll();
+        let mut col = div()
+            .id("settings")
+            .flex()
+            .flex_col()
+            .gap_3()
+            .size_full()
+            .overflow_y_scroll();
         for g in &self.state.settings {
-            col = col.child(div().flex_none().text_color(rgb(ACCENT)).child(g.name.clone()));
+            col = col.child(
+                div()
+                    .flex_none()
+                    .text_color(rgb(ACCENT))
+                    .child(g.name.clone()),
+            );
             for r in &g.rows {
                 col = col.child(self.setting_row(r, cx));
             }
@@ -406,7 +530,17 @@ impl Render for MainWindow {
             .children(self.banner(cx))
             .children(controls.then(|| self.record_bar(cx)))
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
-            .child(div().text_sm().text_color(rgb(if self.state.status.starts_with("Saved") { OK_GREEN } else { DIM })).flex_none().child(self.state.status.clone()))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(if self.state.status.starts_with("Saved") {
+                        OK_GREEN
+                    } else {
+                        DIM
+                    }))
+                    .flex_none()
+                    .child(self.state.status.clone()),
+            )
     }
 }
 
@@ -420,8 +554,16 @@ mod tests {
         let (engine, dir) = testutil::engine(pairs);
         let s = dir.path().join("sessions/s1");
         std::fs::create_dir_all(&s).unwrap();
-        std::fs::write(s.join("session.json"), r#"{"id":"s1","title":"T","startedAt":"2026-10-27T10:00:00Z"}"#).unwrap();
-        std::fs::write(s.join("transcript.final.jsonl"), "{\"speaker\":\"you\",\"text\":\"hello\"}\n").unwrap();
+        std::fs::write(
+            s.join("session.json"),
+            r#"{"id":"s1","title":"T","startedAt":"2026-10-27T10:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            s.join("transcript.final.jsonl"),
+            "{\"speaker\":\"you\",\"text\":\"hello\"}\n",
+        )
+        .unwrap();
         let mut cx = TestAppContext::single();
         let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
         for tab in Tab::ALL {
@@ -491,11 +633,15 @@ mod tests {
         assert!(engine.recording() == Some(None));
         press(Control::Start, cx);
         assert!(engine.recording().flatten().is_some_and(|r| !r.1));
-        view.read_with(cx, |v, _| assert!(matches!(v.state.rec, Rec::Recording { .. })));
+        view.read_with(cx, |v, _| {
+            assert!(matches!(v.state.rec, Rec::Recording { .. }))
+        });
         press(Control::Start, cx); // already recording: ignored, no error
         press(Control::Pause, cx);
         assert!(engine.recording().flatten().is_some_and(|r| r.1));
-        view.read_with(cx, |v, _| assert!(matches!(v.state.rec, Rec::Paused { .. })));
+        view.read_with(cx, |v, _| {
+            assert!(matches!(v.state.rec, Rec::Paused { .. }))
+        });
         press(Control::Pause, cx);
         assert!(engine.recording().flatten().is_some_and(|r| !r.1));
         press(Control::Stop, cx);
@@ -505,7 +651,11 @@ mod tests {
 
     #[test]
     fn main_window_renders_with_controls_hidden() {
-        render_each_tab(&[("ui.record_controls", json!(false)), ("ui.live_follow", json!(false)), ("ui.show_elapsed", json!(false))]);
+        render_each_tab(&[
+            ("ui.record_controls", json!(false)),
+            ("ui.live_follow", json!(false)),
+            ("ui.show_elapsed", json!(false)),
+        ]);
     }
 
     #[test]

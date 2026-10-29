@@ -27,7 +27,9 @@ pub struct TrayState {
 
 impl TrayState {
     pub fn new(initial: bool) -> Self {
-        Self { want: AtomicBool::new(initial) }
+        Self {
+            want: AtomicBool::new(initial),
+        }
     }
 
     pub fn wanted(&self) -> bool {
@@ -78,7 +80,12 @@ pub struct Gate {
 
 impl Gate {
     /// Returns the reason to log when the backend refuses the tray now.
-    pub fn step(&mut self, want: bool, backend: &mut dyn TrayBackend, entries: &[Entry]) -> Option<String> {
+    pub fn step(
+        &mut self,
+        want: bool,
+        backend: &mut dyn TrayBackend,
+        entries: &[Entry],
+    ) -> Option<String> {
         if !want {
             self.unsupported = false;
         } else if self.unsupported {
@@ -118,7 +125,9 @@ pub mod native {
 
     /// 16x16 flat placeholder glyph; the real icon is the packaging bead's (dot-4uzgol.10).
     fn glyph() -> Result<Icon, String> {
-        let px: Vec<u8> = (0..16 * 16).flat_map(|_| [0x89u8, 0xb4, 0xfa, 0xff]).collect();
+        let px: Vec<u8> = (0..16 * 16)
+            .flat_map(|_| [0x89u8, 0xb4, 0xfa, 0xff])
+            .collect();
         Icon::from_rgba(px, 16, 16).map_err(|e| e.to_string())
     }
 
@@ -184,7 +193,10 @@ pub mod sni {
 
     impl Item {
         pub fn new(entries: &[Entry]) -> Self {
-            Self { entries: entries.to_vec(), clicks: Clicks::default() }
+            Self {
+                entries: entries.to_vec(),
+                clicks: Clicks::default(),
+            }
         }
 
         fn push(&self, id: &str) {
@@ -212,12 +224,21 @@ pub mod sni {
 
         /// Same 16x16 placeholder glyph as tray-icon, in SNI's ARGB byte order (dot-4uzgol.10).
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-            let data = (0..16 * 16).flat_map(|_| [0xffu8, 0x89, 0xb4, 0xfa]).collect();
-            vec![ksni::Icon { width: 16, height: 16, data }]
+            let data = (0..16 * 16)
+                .flat_map(|_| [0xffu8, 0x89, 0xb4, 0xfa])
+                .collect();
+            vec![ksni::Icon {
+                width: 16,
+                height: 16,
+                data,
+            }]
         }
 
         fn tool_tip(&self) -> ksni::ToolTip {
-            ksni::ToolTip { title: "Oats".into(), ..Default::default() }
+            ksni::ToolTip {
+                title: "Oats".into(),
+                ..Default::default()
+            }
         }
 
         /// Primary click on the icon (waybar left click) toggles the window; the menu is on the
@@ -253,7 +274,9 @@ pub mod sni {
             let item = Item::new(entries);
             let clicks = item.clicks.clone();
             // Errors when there is no session bus or no StatusNotifierWatcher (no tray host).
-            let handle = item.spawn().map_err(|e| format!("no StatusNotifierItem host: {e}"))?;
+            let handle = item
+                .spawn()
+                .map_err(|e| format!("no StatusNotifierItem host: {e}"))?;
             self.clicks = clicks;
             self.handle = Some(handle);
             Ok(())
@@ -306,13 +329,18 @@ pub mod sni {
             let mut want = vec![];
             for (i, e) in model::TRAY.iter().enumerate() {
                 let Some(id) = e.action else { continue };
-                let ksni::MenuItem::Standard(s) = &item.menu()[i] else { unreachable!() };
+                let ksni::MenuItem::Standard(s) = &item.menu()[i] else {
+                    unreachable!()
+                };
                 (s.activate)(&mut item);
                 want.push(id.to_string());
             }
             item.activate(0, 0);
             want.push("window-toggle".into());
-            let mut b = Sni { handle: None, clicks: item.clicks.clone() };
+            let mut b = Sni {
+                handle: None,
+                clicks: item.clicks.clone(),
+            };
             assert_eq!(b.take_clicks(), want);
             assert!(b.take_clicks().is_empty());
         }
@@ -320,7 +348,10 @@ pub mod sni {
         #[test]
         fn icon_is_a_16px_argb_pixmap() {
             let icons = Item::new(model::TRAY).icon_pixmap();
-            assert_eq!((icons[0].width, icons[0].height, icons[0].data.len()), (16, 16, 16 * 16 * 4));
+            assert_eq!(
+                (icons[0].width, icons[0].height, icons[0].data.len()),
+                (16, 16, 16 * 16 * 4)
+            );
         }
 
         #[test]
@@ -398,7 +429,13 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
-    fn wired(initial: &[(&str, serde_json::Value)]) -> (Arc<oats_core::control::engine::Engine>, Arc<TrayState>, tempfile::TempDir) {
+    fn wired(
+        initial: &[(&str, serde_json::Value)],
+    ) -> (
+        Arc<oats_core::control::engine::Engine>,
+        Arc<TrayState>,
+        tempfile::TempDir,
+    ) {
         let (engine, dir) = testutil::engine(initial);
         let state = Arc::new(TrayState::new(engine.snapshot().config.app.menubar));
         engine.register(state.clone());
@@ -409,7 +446,10 @@ mod tests {
     fn menubar_off_never_creates_a_tray() {
         let (_e, state, _d) = wired(&[("app.menubar", json!(false))]);
         let mut b = Mock::default();
-        assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Unchanged);
+        assert_eq!(
+            reconcile(state.wanted(), &mut b, model::TRAY),
+            Reconciled::Unchanged
+        );
         assert!(b.shown.is_empty() && !b.visible());
     }
 
@@ -417,10 +457,16 @@ mod tests {
     fn menubar_on_creates_the_tray_with_the_tray_entries() {
         let (_e, state, _d) = wired(&[("app.menubar", json!(true))]);
         let mut b = Mock::default();
-        assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Shown);
+        assert_eq!(
+            reconcile(state.wanted(), &mut b, model::TRAY),
+            Reconciled::Shown
+        );
         assert_eq!(b.shown, vec![model::TRAY.to_vec()]);
         // idempotent
-        assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Unchanged);
+        assert_eq!(
+            reconcile(state.wanted(), &mut b, model::TRAY),
+            Reconciled::Unchanged
+        );
         assert_eq!(b.shown.len(), 1);
     }
 
@@ -428,11 +474,30 @@ mod tests {
     fn toggling_the_key_at_runtime_shows_then_hides() {
         let (engine, state, _d) = wired(&[]);
         let mut b = Mock::default();
-        assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Unchanged);
-        model::dispatch(&engine, "config-set", json!({"key": "app.menubar", "value": true})).unwrap();
-        assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Shown);
-        model::dispatch(&engine, "config-set", json!({"key": "app.menubar", "value": false})).unwrap();
-        assert_eq!(reconcile(state.wanted(), &mut b, model::TRAY), Reconciled::Hidden);
+        assert_eq!(
+            reconcile(state.wanted(), &mut b, model::TRAY),
+            Reconciled::Unchanged
+        );
+        model::dispatch(
+            &engine,
+            "config-set",
+            json!({"key": "app.menubar", "value": true}),
+        )
+        .unwrap();
+        assert_eq!(
+            reconcile(state.wanted(), &mut b, model::TRAY),
+            Reconciled::Shown
+        );
+        model::dispatch(
+            &engine,
+            "config-set",
+            json!({"key": "app.menubar", "value": false}),
+        )
+        .unwrap();
+        assert_eq!(
+            reconcile(state.wanted(), &mut b, model::TRAY),
+            Reconciled::Hidden
+        );
         assert_eq!((b.shown.len(), b.hides), (1, 1));
     }
 
@@ -450,7 +515,10 @@ mod tests {
     #[test]
     fn unsupported_platform_reports_and_does_not_panic() {
         let mut b = Unsupported;
-        assert!(matches!(reconcile(true, &mut b, model::TRAY), Reconciled::Unsupported(_)));
+        assert!(matches!(
+            reconcile(true, &mut b, model::TRAY),
+            Reconciled::Unsupported(_)
+        ));
         assert_eq!(reconcile(false, &mut b, model::TRAY), Reconciled::Unchanged);
     }
 

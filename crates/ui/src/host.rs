@@ -12,8 +12,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use gpui::{
-    App, AppContext as _, AsyncApp, Bounds, KeyBinding, Menu, MenuItem, QuitMode,
-    WindowBounds, WindowHandle, WindowOptions, px, size,
+    px, size, App, AppContext as _, AsyncApp, Bounds, KeyBinding, Menu, MenuItem, QuitMode,
+    WindowBounds, WindowHandle, WindowOptions,
 };
 use oats_core::config::ConfigError;
 use oats_core::control::engine::Engine;
@@ -37,7 +37,6 @@ pub struct Do {
     pub id: String,
 }
 
-
 fn menus() -> Vec<Menu> {
     MENUS
         .iter()
@@ -51,7 +50,11 @@ fn menus() -> Vec<Menu> {
 }
 
 fn mod_prefix() -> &'static str {
-    if cfg!(target_os = "macos") { "cmd-" } else { "ctrl-" }
+    if cfg!(target_os = "macos") {
+        "cmd-"
+    } else {
+        "ctrl-"
+    }
 }
 
 fn bindings(cx: &App) -> Vec<KeyBinding> {
@@ -60,7 +63,9 @@ fn bindings(cx: &App) -> Vec<KeyBinding> {
         .filter_map(|b| {
             KeyBinding::load(
                 &format!("{}{}", mod_prefix(), b.keys),
-                Box::new(Do { id: b.action.to_string() }),
+                Box::new(Do {
+                    id: b.action.to_string(),
+                }),
                 None,
                 false,
                 None,
@@ -89,7 +94,10 @@ fn capture_plan(engine: &Engine) -> capture::Plan {
     let cfg = engine.snapshot();
     capture::plan(
         cfg.config.privacy.hide_from_capture,
-        &engine.resolved().flat["privacy.hide_method"].as_str().unwrap_or("none").to_string(),
+        &engine.resolved().flat["privacy.hide_method"]
+            .as_str()
+            .unwrap_or("none")
+            .to_string(),
     )
 }
 
@@ -129,8 +137,13 @@ fn tick(host: &Shared, cx: &mut App) {
     for line in &lines {
         let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
         match v["event"].as_str() {
-            Some("window-changed") => h.want_visible = v["data"]["visible"].as_bool().unwrap_or(false),
-            Some("session-saved" | "session-deleted" | "config-reloaded" | "setting-changed" | "model-download") => changed_sessions = true,
+            Some("window-changed") => {
+                h.want_visible = v["data"]["visible"].as_bool().unwrap_or(false)
+            }
+            Some(
+                "session-saved" | "session-deleted" | "config-reloaded" | "setting-changed"
+                | "model-download",
+            ) => changed_sessions = true,
             _ => {}
         }
     }
@@ -159,8 +172,12 @@ fn tick(host: &Shared, cx: &mut App) {
         if h.applied_capture != Some(plan) {
             let out = w.update(cx, |_, window, _| capture::apply(window, plan));
             match out {
-                Ok(capture::Applied::Failed(e)) => oats_core::elog!("oats-meetings-rs: capture hiding failed: {e}"),
-                Ok(capture::Applied::WrongPlatform(why)) => oats_core::elog!("oats-meetings-rs: capture hiding unavailable: {why}"),
+                Ok(capture::Applied::Failed(e)) => {
+                    oats_core::elog!("oats-meetings-rs: capture hiding failed: {e}")
+                }
+                Ok(capture::Applied::WrongPlatform(why)) => {
+                    oats_core::elog!("oats-meetings-rs: capture hiding unavailable: {why}")
+                }
                 _ => {}
             }
             h.applied_capture = Some(plan);
@@ -188,7 +205,11 @@ pub fn run(engine: Arc<Engine>, runtime_dir: &std::path::Path) -> i32 {
     run_with(engine, runtime_dir, tray::native_backend())
 }
 
-pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box<dyn TrayBackend>) -> i32 {
+pub fn run_with(
+    engine: Arc<Engine>,
+    runtime_dir: &std::path::Path,
+    backend: Box<dyn TrayBackend>,
+) -> i32 {
     let tray_state = Arc::new(TrayState::new(engine.snapshot().config.app.menubar));
     engine.register(tray_state.clone());
     let handle = match server::serve(Arc::clone(&engine), runtime_dir) {
@@ -198,7 +219,10 @@ pub fn run_with(engine: Arc<Engine>, runtime_dir: &std::path::Path, backend: Box
             return 1;
         }
     };
-    oats_core::elog!("oats-meetings-rs: engine listening on {}", handle.socket_display());
+    oats_core::elog!(
+        "oats-meetings-rs: engine listening on {}",
+        handle.socket_display()
+    );
     let host: Shared = Rc::new(RefCell::new(Host {
         engine: Arc::clone(&engine),
         events: engine.bus.subscribe(vec![]),
@@ -261,7 +285,11 @@ mod tests {
     #[test]
     fn app_id_matches_the_desktop_file() {
         let desktop = include_str!("../../../packaging/linux/oats-meetings-rs.desktop");
-        assert!(desktop.lines().any(|l| l == format!("StartupWMClass={}", super::APP_ID)));
-        assert!(desktop.lines().any(|l| l == format!("Icon={}", super::APP_ID)));
+        assert!(desktop
+            .lines()
+            .any(|l| l == format!("StartupWMClass={}", super::APP_ID)));
+        assert!(desktop
+            .lines()
+            .any(|l| l == format!("Icon={}", super::APP_ID)));
     }
 }

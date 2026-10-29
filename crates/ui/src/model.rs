@@ -18,10 +18,16 @@ pub struct Entry {
 }
 
 const fn item(label: &'static str, action: &'static str) -> Entry {
-    Entry { label, action: Some(action) }
+    Entry {
+        label,
+        action: Some(action),
+    }
 }
 
-pub const SEP: Entry = Entry { label: "", action: None };
+pub const SEP: Entry = Entry {
+    label: "",
+    action: None,
+};
 
 pub struct Menu {
     pub title: &'static str,
@@ -74,15 +80,42 @@ pub struct Binding {
 }
 
 pub const BINDINGS: &[Binding] = &[
-    Binding { keys: "shift-r", action: "record-start" },
-    Binding { keys: "shift-s", action: "record-stop" },
-    Binding { keys: "shift-p", action: "record-pause" },
-    Binding { keys: "shift-h", action: "privacy-toggle" },
-    Binding { keys: "w", action: "window-hide" },
-    Binding { keys: "shift-w", action: "window-toggle" },
-    Binding { keys: "shift-o", action: "window-show" },
-    Binding { keys: "r", action: "session-list" },
-    Binding { keys: "q", action: "quit" },
+    Binding {
+        keys: "shift-r",
+        action: "record-start",
+    },
+    Binding {
+        keys: "shift-s",
+        action: "record-stop",
+    },
+    Binding {
+        keys: "shift-p",
+        action: "record-pause",
+    },
+    Binding {
+        keys: "shift-h",
+        action: "privacy-toggle",
+    },
+    Binding {
+        keys: "w",
+        action: "window-hide",
+    },
+    Binding {
+        keys: "shift-w",
+        action: "window-toggle",
+    },
+    Binding {
+        keys: "shift-o",
+        action: "window-show",
+    },
+    Binding {
+        keys: "r",
+        action: "session-list",
+    },
+    Binding {
+        keys: "q",
+        action: "quit",
+    },
 ];
 
 pub const TRAY: &[Entry] = &[
@@ -123,12 +156,21 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("ics-add", "feed management is ctl / config"),
     ("ics-remove", "feed management is ctl / config"),
     ("ics-events", "agent query (ctl)"),
-    ("secret-set", "secrets never pass through the window (ctl, stdin)"),
+    (
+        "secret-set",
+        "secrets never pass through the window (ctl, stdin)",
+    ),
     ("secret-delete", "secrets never pass through the window"),
     ("secret-has", "secrets never pass through the window"),
     ("stt-transcribe", "batch file transcription (ctl)"),
-    ("transcript-search", "planned in the engine; search box lands with it"),
-    ("notes-generate", "needs a template + session picker (ctl for now)"),
+    (
+        "transcript-search",
+        "planned in the engine; search box lands with it",
+    ),
+    (
+        "notes-generate",
+        "needs a template + session picker (ctl for now)",
+    ),
     ("template-get", "agent query (ctl)"),
     ("template-import", "one-shot migration verb (ctl)"),
     ("kb-search", "agent query (ctl)"),
@@ -139,7 +181,10 @@ fn ids<'a>(it: impl Iterator<Item = &'a str>) -> BTreeSet<String> {
 }
 
 pub fn menu_ids() -> BTreeSet<String> {
-    ids(MENUS.iter().flat_map(|m| m.items.iter()).filter_map(|e| e.action))
+    ids(MENUS
+        .iter()
+        .flat_map(|m| m.items.iter())
+        .filter_map(|e| e.action))
 }
 
 pub fn binding_ids() -> BTreeSet<String> {
@@ -175,9 +220,8 @@ pub fn dispatch(engine: &Engine, id: &str, params: Value) -> Result<Value> {
         _ => serde_json::Map::new(),
     };
     obj.insert("action".into(), json!(id));
-    let a: Action = serde_json::from_value(Value::Object(obj)).map_err(|e| {
-        oats_core::config::ConfigError::new("bad_request", format!("{id}: {e}"))
-    })?;
+    let a: Action = serde_json::from_value(Value::Object(obj))
+        .map_err(|e| oats_core::config::ConfigError::new("bad_request", format!("{id}: {e}")))?;
     engine.dispatch(&a)
 }
 
@@ -194,12 +238,25 @@ mod tests {
         let manifest = manifest_ids();
         let ui = ui_ids();
         let exempt = exempt_ids();
-        assert!(ui.is_disjoint(&exempt), "both UI and exempt: {:?}", ui.intersection(&exempt).collect::<Vec<_>>());
-        let unknown: Vec<_> = ui.union(&exempt).filter(|i| !manifest.contains(*i)).collect();
-        assert!(unknown.is_empty(), "ids not in the action manifest: {unknown:?}");
+        assert!(
+            ui.is_disjoint(&exempt),
+            "both UI and exempt: {:?}",
+            ui.intersection(&exempt).collect::<Vec<_>>()
+        );
+        let unknown: Vec<_> = ui
+            .union(&exempt)
+            .filter(|i| !manifest.contains(*i))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "ids not in the action manifest: {unknown:?}"
+        );
         let union: BTreeSet<String> = ui.union(&exempt).cloned().collect();
         let missing: Vec<_> = manifest.difference(&union).collect();
-        assert!(missing.is_empty(), "actions with no UI surface and not exempt: {missing:?}");
+        assert!(
+            missing.is_empty(),
+            "actions with no UI surface and not exempt: {missing:?}"
+        );
     }
 
     #[test]
@@ -207,7 +264,10 @@ mod tests {
         // Menu, key and tray dispatch carry no arguments, so each id must build from its name alone.
         for id in menu_ids().iter().chain(&binding_ids()).chain(&tray_ids()) {
             let a: std::result::Result<Action, _> = serde_json::from_value(json!({"action": id}));
-            assert!(a.is_ok(), "{id} needs parameters; it cannot be a menu / key / tray item");
+            assert!(
+                a.is_ok(),
+                "{id} needs parameters; it cannot be a menu / key / tray item"
+            );
         }
     }
 
@@ -230,14 +290,17 @@ mod tests {
     #[test]
     fn menu_dispatch_reaches_engine() {
         let (engine, _dir) = crate::testutil::engine(&[]);
-                for id in menu_ids() {
+        for id in menu_ids() {
             if matches!(id.as_str(), "quit" | "ics-refresh" | "record-start") {
                 continue; // quit stops the engine; ics-refresh needs network.allow; record-start opens audio
             }
             // Domain errors (not_recording, not_implemented) are fine; a menu id must never be
             // rejected as a malformed request.
             if let Err(e) = dispatch(&engine, &id, json!({})) {
-                assert!(!matches!(e.code, "bad_request" | "unknown_action"), "{id}: {e}");
+                assert!(
+                    !matches!(e.code, "bad_request" | "unknown_action"),
+                    "{id}: {e}"
+                );
             }
         }
     }
