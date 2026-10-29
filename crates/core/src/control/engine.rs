@@ -769,7 +769,8 @@ impl Engine {
 
     fn set_window(&self, visible: bool) -> Value {
         let was = self.window_visible.swap(visible, Ordering::SeqCst);
-        if was != visible {
+        // A show of a visible window still publishes: it asks the GUI to raise the window.
+        if was != visible || visible {
             self.bus
                 .publish("window-changed", json!({"visible": visible}));
         }

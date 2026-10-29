@@ -144,12 +144,16 @@ fn tick(host: &Shared, cx: &mut App) {
         return;
     }
     let mut changed_sessions = false;
+    // Raise only on a show request: activating every tick keeps making the window key and
+    // ordering it front on macOS, which fights the user and any other app (dot-4uzgol.52).
+    let mut raise = false;
     let lines: Vec<String> = h.events.try_iter().collect();
     for line in &lines {
         let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
         match v["event"].as_str() {
             Some("window-changed") => {
-                h.want_visible = v["data"]["visible"].as_bool().unwrap_or(false)
+                h.want_visible = v["data"]["visible"].as_bool().unwrap_or(false);
+                raise = h.want_visible;
             }
             Some(
                 "session-saved" | "session-deleted" | "config-reloaded" | "setting-changed"
@@ -169,14 +173,14 @@ fn tick(host: &Shared, cx: &mut App) {
     }
     match (h.want_visible, h.window) {
         (true, None) => open_window(&mut h, cx),
-        (true, Some(w)) => {
+        (true, Some(w)) if raise => {
             let _ = w.update(cx, |_, window, _| window.activate_window());
         }
         (false, Some(w)) => {
             let _ = w.update(cx, |_, window, _| window.remove_window());
             h.window = None;
         }
-        (false, None) => {}
+        (true, Some(_)) | (false, None) => {}
     }
     if let Some(w) = h.window {
         let plan = capture_plan(&h.engine);
@@ -351,6 +355,45 @@ mod tests {
             assert_eq!(v.state.live_session.as_deref(), Some("session_a"));
         })
         .unwrap();
+    }
+
+    #[test]
+    fn ticks_raise_the_window_only_on_a_show_request() {
+        let (engine, _d) = testutil::engine(&[]);
+        let host: Shared = Rc::new(RefCell::new(Host {
+            engine: Arc::clone(&engine),
+            events: engine.bus.subscribe(vec![]),
+            tray_state: Arc::new(TrayState::new(false)),
+            tray: Box::new(Mock::default()),
+            window: None,
+            kept: Rc::default(),
+            applied_capture: None,
+            want_visible: false,
+            tray_gate: tray::Gate::default(),
+            tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
+            capture_supported: engine.capture_hiding_supported(),
+        }));
+        let mut cx = TestAppContext::single();
+        let tick_n = |n: usize, cx: &mut TestAppContext| {
+            for _ in 0..n {
+                cx.update(|cx| tick(&host, cx));
+                cx.run_until_parked();
+            }
+        };
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_n(1, &mut cx);
+        let w = host.borrow().window.expect("window opened");
+        gpui::VisualTestContext::from_window(w.into(), &cx).deactivate_window();
+        tick_n(5, &mut cx);
+        assert_eq!(
+            cx.update(|cx| cx.active_window()),
+            None,
+            "idle ticks raised the window"
+        );
+        // A show of the already-visible window raises it.
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_n(1, &mut cx);
+        assert_eq!(cx.update(|cx| cx.active_window()), Some(w.into()));
     }
 
     #[test]
