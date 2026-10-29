@@ -282,19 +282,14 @@ mod tests {
     #[test]
     fn linux_engine_reports_capture_hiding_unsupported() {
         // config/axes.json resolves hide_method none on Linux; the UI must not claim it works.
+        // testutil::engine always resolves the linux axis, whatever the host OS.
         let (engine, _d) = crate::testutil::engine(&[]);
-        let supported = engine.capture_hiding_supported();
-        assert_eq!(
-            supported,
-            cfg!(any(target_os = "macos", target_os = "windows"))
-        );
-        if !supported {
-            let tray = entries(TRAY, supported);
-            assert!(tray.iter().any(|e| e.label == PRIVACY_UNSUPPORTED_LABEL));
-            let r = dispatch(&engine, "privacy-toggle", json!({})).unwrap();
-            assert_eq!(r["supported"], false);
-            assert!(r["warning"].is_string());
-        }
+        assert!(!engine.capture_hiding_supported());
+        let tray = entries(TRAY, false);
+        assert!(tray.iter().any(|e| e.label == PRIVACY_UNSUPPORTED_LABEL));
+        let r = dispatch(&engine, "privacy-toggle", json!({})).unwrap();
+        assert_eq!(r["supported"], false);
+        assert!(r["warning"].is_string());
     }
 
     #[test]
