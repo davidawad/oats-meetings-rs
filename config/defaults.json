@@ -78,6 +78,8 @@
     "error_snippet": 300
   },
   "notes": {
+    "confirm_regenerate": true,
+    "default_template": "",
     "enforce_headings": true
   },
   "privacy": {

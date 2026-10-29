@@ -495,6 +495,37 @@
       "status": "implemented"
     },
     {
+      "doc": "A session's notes (notes.md) and how they were made; empty text when it has none.",
+      "effect": "read",
+      "name": "notes-get",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Replace a session's notes with edited text (marked edited; template and backend kept).",
+      "effect": "write",
+      "name": "notes-set",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "notes",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "List note templates.",
       "effect": "read",
       "name": "template-list",

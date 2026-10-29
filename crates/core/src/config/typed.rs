@@ -174,6 +174,8 @@ pub struct Kb {
 #[serde(deny_unknown_fields)]
 pub struct Notes {
     pub enforce_headings: bool,
+    pub default_template: String,
+    pub confirm_regenerate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

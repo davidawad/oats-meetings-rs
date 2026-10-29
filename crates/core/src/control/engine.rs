@@ -659,6 +659,12 @@ impl Engine {
                 }
                 Ok(v)
             }
+            Action::NotesGet { session } => self.store().notes(session),
+            Action::NotesSet { session, notes } => {
+                let v = self.store().edit_notes(session, notes)?;
+                self.session_event(session, "notes");
+                Ok(v)
+            }
             Action::TemplateList {} => {
                 let tdir = self.templates_dir(&self.snapshot().config);
                 let all = templates::load_all(&tdir)?;

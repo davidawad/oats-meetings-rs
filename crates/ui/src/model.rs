@@ -142,6 +142,9 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "stt-model-fetch",
     "ics-list",
     "devices-list",
+    "notes-get",
+    "notes-set",
+    "notes-generate",
 ];
 
 /// Actions with deliberately no UI surface: protocol plumbing, or batch/automation verbs that need
@@ -166,10 +169,6 @@ pub const EXEMPT: &[(&str, &str)] = &[
     (
         "transcript-search",
         "planned in the engine; search box lands with it",
-    ),
-    (
-        "notes-generate",
-        "needs a template + session picker (ctl for now)",
     ),
     ("template-get", "agent query (ctl)"),
     ("template-import", "one-shot migration verb (ctl)"),

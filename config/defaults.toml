@@ -135,6 +135,10 @@ allow = false
 error_snippet = 300
 
 [notes]
+# Regenerating over existing notes in the Notes view needs a second click.
+confirm_regenerate = true
+# Template the Notes view picks for regenerating; empty means the first one listed.
+default_template = ""
 # Reject generated notes that lack a '## ' heading the template's prompt demands.
 enforce_headings = true
 

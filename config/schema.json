@@ -611,6 +611,20 @@
     "notes": {
       "additionalProperties": false,
       "properties": {
+        "confirm_regenerate": {
+          "default": true,
+          "description": "Regenerating over existing notes in the Notes view needs a second click.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "default_template": {
+          "default": "",
+          "description": "Template the Notes view picks for regenerating; empty means the first one listed.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
         "enforce_headings": {
           "default": true,
           "description": "Reject generated notes that lack a '## ' heading the template's prompt demands.",

@@ -530,6 +530,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "notes.default_template",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "Template the Notes view picks for regenerating; empty means the first one listed.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "notes.confirm_regenerate",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "Regenerating over existing notes in the Notes view needs a second click.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "templates.dir",
         kind: Kind::Str,
         default: Def::S(""),

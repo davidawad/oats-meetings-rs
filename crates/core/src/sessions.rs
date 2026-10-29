@@ -269,9 +269,47 @@ impl Store {
         l.meta.insert("notesTemplate".into(), json!(template));
         l.meta.insert("notesBackend".into(), json!(backend));
         l.meta.insert("notesModel".into(), json!(model));
+        l.meta.remove("notesEdited");
         l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
         write_meta(&l.dir, &l.meta)?;
         Ok(path)
+    }
+
+    /// The session's `notes.md` (empty when there is none) and the provenance `set_notes` recorded.
+    pub fn notes(&self, id: &str) -> Result<Value> {
+        let l = self.find(id)?;
+        let path = l.dir.join("notes.md");
+        let (text, has) = match std::fs::read_to_string(&path) {
+            Ok(t) => (t, true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
+            Err(e) => return Err(io(&path, e)),
+        };
+        let m = |k: &str| l.meta.get(k).cloned().unwrap_or(Value::Null);
+        Ok(json!({
+            "session": id_of(&l),
+            "has_notes": has,
+            "notes": text,
+            "template": m("notesTemplate"),
+            "backend": m("notesBackend"),
+            "model": m("notesModel"),
+            "edited": l.meta.get("notesEdited").and_then(Value::as_bool).unwrap_or(false),
+            "path": path,
+        }))
+    }
+
+    /// Replace `notes.md` with hand-edited text, keeping how it was first generated.
+    pub fn edit_notes(&self, id: &str, notes: &str) -> Result<Value> {
+        let mut l = self.find(id)?;
+        let path = l.dir.join("notes.md");
+        let tmp = l.dir.join(format!(".notes.md.tmp{}", std::process::id()));
+        std::fs::write(&tmp, notes)
+            .and_then(|_| std::fs::rename(&tmp, &path))
+            .map_err(|e| io(&path, e))?;
+        l.meta.insert("hasNotes".into(), json!(true));
+        l.meta.insert("notesEdited".into(), json!(true));
+        l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+        write_meta(&l.dir, &l.meta)?;
+        self.notes(id)
     }
 
     /// Callers enforce the `--confirm` policy. `Trash` moves the session directory to the OS

@@ -78,6 +78,8 @@ actions! {
     TranscriptGet, "transcript-get", "A session transcript (final, else live).", "implemented", "read", { session: String };
     TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
     NotesGenerate, "notes-generate", "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.", "implemented", "write", { session: String, template: String, dry_run: Option<bool> };
+    NotesGet, "notes-get", "A session's notes (notes.md) and how they were made; empty text when it has none.", "implemented", "read", { session: String };
+    NotesSet, "notes-set", "Replace a session's notes with edited text (marked edited; template and backend kept).", "implemented", "write", { session: String, notes: String };
     TemplateList, "template-list", "List note templates.", "implemented", "read", {};
     TemplateGet, "template-get", "One note template.", "implemented", "read", { name: String };
     TemplateImport, "template-import", "Import an OpenOats templates.json into the templates folder.", "implemented", "write", { from: String, overwrite: Option<bool> };

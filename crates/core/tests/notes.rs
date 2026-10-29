@@ -327,6 +327,35 @@ fn backend_failures_have_stable_codes() {
 }
 
 #[test]
+fn notes_get_and_set_show_and_edit_the_session_notes() {
+    let mock = Mock::start(|_, _| (200, chat_reply("ollama", NOTES)));
+    let rig = Rig::new(&llm_toml("ollama", &mock.base, ""), &[]);
+    let get = || rig.client().call("notes-get", p(&[("session", json!(SESSION))])).unwrap();
+    let r = get();
+    assert_eq!((r["data"]["notes"].as_str(), r["data"]["has_notes"].as_bool()), (Some(""), Some(false)), "{r}");
+    assert_eq!(rig.generate("Sales Prospect Call", &[])["ok"], true);
+    let r = get();
+    assert_eq!(r["data"]["notes"], NOTES);
+    assert_eq!((r["data"]["template"].as_str(), r["data"]["backend"].as_str()), (Some("Sales Prospect Call"), Some("ollama")));
+    assert_eq!(r["data"]["edited"], false);
+    let r = rig
+        .client()
+        .call("notes-set", p(&[("session", json!(SESSION)), ("notes", json!("## Summary\nby hand"))]))
+        .unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["data"]["edited"], true);
+    let dir = rig.dir.join("sessions").join(SESSION);
+    assert_eq!(std::fs::read_to_string(dir.join("notes.md")).unwrap(), "## Summary\nby hand");
+    let r = get();
+    assert_eq!((r["data"]["notes"].as_str(), r["data"]["template"].as_str()), (Some("## Summary\nby hand"), Some("Sales Prospect Call")));
+    // Regenerating clears the edited mark.
+    assert_eq!(rig.generate("Sales Prospect Call", &[])["ok"], true);
+    assert_eq!(get()["data"]["edited"], false);
+    let r = rig.client().call("notes-get", p(&[("session", json!("nope"))])).unwrap();
+    assert_eq!(r["error"]["code"], "not_found");
+}
+
+#[test]
 fn unknown_template_session_and_empty_transcript() {
     let mock = Mock::start(|_, _| (200, chat_reply("ollama", NOTES)));
     let rig = Rig::new(&llm_toml("ollama", &mock.base, ""), &[]);
