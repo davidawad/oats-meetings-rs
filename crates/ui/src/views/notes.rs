@@ -197,6 +197,8 @@ impl Notes {
 
 fn run_regenerate(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
     let confirm = this.engine.snapshot().config.notes.confirm_regenerate;
+    // Re-read the picker so a template added or removed outside this tab is honoured.
+    cx.global_mut::<Notes>().load_templates(&this.engine);
     let Some((id, template)) = cx.global_mut::<Notes>().regenerate(confirm) else {
         cx.notify();
         return;
@@ -614,5 +616,84 @@ mod tests {
             assert_eq!(n.text, "hi\nx");
         });
         assert!(dir.path().join("sessions/s1/notes.md").is_file());
+    }
+    #[test]
+    fn templates_created_after_launch_reach_the_notes_picker_without_restart() {
+        use crate::views::templates::Templates;
+        let (engine, dir) = testutil::engine(&[
+            ("notes.confirm_regenerate", json!(false)),
+            ("llm.backend", json!("openai-compatible")),
+            ("llm.base_url", json!("")),
+        ]);
+        seed(dir.path(), None);
+        for name in ["Alpha", "Beta"] {
+            std::fs::remove_file(dir.path().join(format!("templates/{name}.toml"))).unwrap();
+        }
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        // Notes first, with no templates yet: the picker is read and is empty.
+        view.update(cx, |v, cx| {
+            v.state.select(&v.engine, "s1");
+            v.switch_tab(Tab::Notes, cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |_, cx| {
+            assert!(cx.global::<Notes>().templates.is_empty())
+        });
+        // Templates tab > New > "QA Standup" > ctrl-s.
+        view.update(cx, |v, cx| v.switch_tab(Tab::Templates, cx));
+        cx.run_until_parked();
+        view.update_in(cx, |_, window, cx| {
+            cx.global_mut::<Templates>().create();
+            let f = cx.global::<Templates>().focus.clone().unwrap();
+            f.focus(window, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_input("QA Standup");
+        cx.simulate_keystrokes("enter tab");
+        cx.simulate_input("##");
+        cx.simulate_keystrokes("space");
+        cx.simulate_input("Summary");
+        cx.simulate_keystrokes("ctrl-s");
+        cx.run_until_parked();
+        view.update(cx, |_, cx| assert_eq!(cx.global::<Templates>().error, None));
+        // Back on Notes the new template is offered and Regenerate gets past the template check
+        // to the (unconfigured) backend.
+        view.update(cx, |v, cx| v.switch_tab(Tab::Notes, cx));
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            let n = cx.global::<Notes>();
+            assert_eq!(n.templates, ["QA Standup"]);
+            assert_eq!(n.template.as_deref(), Some("QA Standup"));
+            run_regenerate(v, cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |_, cx| {
+            let n = cx.global::<Notes>();
+            let e = n.error.clone().unwrap_or_default();
+            assert!(e.contains("base_url"), "{e}");
+        });
+        // A template saved outside the tab (ctl template-save) while Notes is open is picked up
+        // by Regenerate itself.
+        view.update(cx, |v, cx| {
+            cx.global_mut::<Notes>().template = None;
+            model::dispatch(&v.engine, "template-delete", json!({"name": "QA Standup"})).unwrap();
+            model::dispatch(
+                &v.engine,
+                "template-save",
+                json!({"name": "Retro", "system_prompt": "## Wins"}),
+            )
+            .unwrap();
+            run_regenerate(v, cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |_, cx| {
+            let n = cx.global::<Notes>();
+            assert_eq!(n.templates, ["Retro"]);
+            assert_eq!(n.template.as_deref(), Some("Retro"));
+            let e = n.error.clone().unwrap_or_default();
+            assert!(e.contains("base_url"), "{e}");
+        });
     }
 }

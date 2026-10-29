@@ -194,15 +194,21 @@ impl MainWindow {
                 .bg(rgb(if active { ACCENT } else { PANEL }))
                 .text_color(rgb(if active { BG } else { FG }))
                 .child(t.label())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.state.tab = t;
-                    this.state.cancel_edit();
-                    if t == Tab::Trash {
-                        this.trash.load(&this.engine);
-                    }
-                    cx.notify();
-                }))
+                .on_click(cx.listener(move |this, _, _, cx| this.switch_tab(t, cx)))
         }))
+    }
+
+    /// A tab-bar click: views that cache engine reads reload them on entry.
+    pub(crate) fn switch_tab(&mut self, t: Tab, cx: &mut Context<Self>) {
+        self.state.tab = t;
+        self.state.cancel_edit();
+        match t {
+            Tab::Trash => self.trash.load(&self.engine),
+            // Templates may have been created, imported or deleted since the picker was read.
+            Tab::Notes => cx.default_global::<views::notes::Notes>().loaded = false,
+            _ => {}
+        }
+        cx.notify();
     }
 
     pub(crate) fn lines(lines: &[Line], empty: &str, speaker_w: f32) -> impl IntoElement {
