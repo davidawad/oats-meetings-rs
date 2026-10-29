@@ -167,6 +167,8 @@ delete_mode = "trash"
 max_id_len = 200
 # Session store directory (OpenOats layout); empty means the per-user data dir.
 root = ""
+# Characters of context kept either side of a transcript-search match in its snippet (the Sessions search shows it under the row).
+search_snippet_chars = 40
 
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.

@@ -218,7 +218,9 @@ impl Engine {
         } else {
             PathBuf::from(&snap.config.sessions.root)
         };
-        Store::new(root).with_max_id(snap.config.sessions.max_id_len as usize)
+        Store::new(root)
+            .with_max_id(snap.config.sessions.max_id_len as usize)
+            .with_snippet_chars(snap.config.sessions.search_snippet_chars as usize)
     }
 
     fn templates_dir(&self, cfg: &Config) -> PathBuf {

@@ -234,6 +234,7 @@ pub struct Sessions {
     pub delete_mode: DeleteMode,
     pub max_id_len: u32,
     pub root: String,
+    pub search_snippet_chars: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

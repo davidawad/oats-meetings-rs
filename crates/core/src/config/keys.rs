@@ -312,6 +312,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "sessions.search_snippet_chars",
+        kind: Kind::Int { min: 0, max: 400 },
+        default: Def::I(40),
+        doc: "Characters of context kept either side of a transcript-search match in its snippet (the Sessions search shows it under the row).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "secrets.max_key_len",
         kind: Kind::Int { min: 16, max: 512 },
         default: Def::I(128),

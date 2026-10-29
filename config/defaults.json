@@ -96,7 +96,8 @@
     "confirm_delete": true,
     "delete_mode": "trash",
     "max_id_len": 200,
-    "root": ""
+    "root": "",
+    "search_snippet_chars": 40
   },
   "stt": {
     "backend": "local",

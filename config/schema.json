@@ -737,6 +737,15 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": true
+        },
+        "search_snippet_chars": {
+          "default": 40,
+          "description": "Characters of context kept either side of a transcript-search match in its snippet (the Sessions search shows it under the row).",
+          "maximum": 400,
+          "minimum": 0,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"

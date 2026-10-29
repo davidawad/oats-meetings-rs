@@ -75,6 +75,8 @@ pub struct Store {
     pub root: PathBuf,
     /// Longest session id, bytes (`sessions.max_id_len`).
     pub max_id: usize,
+    /// Context either side of a search match, chars (`sessions.search_snippet_chars`).
+    pub snippet_chars: usize,
 }
 
 struct Loaded {
@@ -180,12 +182,11 @@ fn find(hay: &[char], needle: &[char]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-/// About 40 characters either side of the match at char `at`, `…` where it was cut.
-fn snippet(text: &str, at: usize, len: usize) -> String {
-    const CTX: usize = 40;
+/// `ctx` characters either side of the match at char `at`, `…` where it was cut.
+fn snippet(text: &str, at: usize, len: usize, ctx: usize) -> String {
     let chars: Vec<char> = text.chars().collect();
-    let from = at.saturating_sub(CTX);
-    let to = (at + len + CTX).min(chars.len());
+    let from = at.saturating_sub(ctx);
+    let to = (at + len).saturating_add(ctx).min(chars.len());
     let mut out: String = chars[from..to].iter().collect();
     out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     if from > 0 {
@@ -234,12 +235,16 @@ fn parse_bound(v: Option<&str>, flag: &str) -> Result<()> {
 }
 
 impl Store {
-    /// A store with the default id limit; the engine uses `with_max_id` to apply the config.
+    /// A store with the default limits; the engine uses `with_max_id` and `with_snippet_chars` to
+    /// apply the config.
     pub fn new(root: impl Into<PathBuf>) -> Store {
         let max_id = crate::config::keys::default_int("sessions.max_id_len") as usize;
+        let snippet_chars =
+            crate::config::keys::default_int("sessions.search_snippet_chars") as usize;
         Store {
             root: root.into(),
             max_id,
+            snippet_chars,
         }
     }
 
@@ -248,11 +253,17 @@ impl Store {
         self
     }
 
+    pub fn with_snippet_chars(mut self, snippet_chars: usize) -> Store {
+        self.snippet_chars = snippet_chars;
+        self
+    }
+
     /// Another handle on the same directory with the same limits.
     pub fn sibling(&self) -> Store {
         Store {
             root: self.root.clone(),
             max_id: self.max_id,
+            snippet_chars: self.snippet_chars,
         }
     }
 
@@ -346,7 +357,7 @@ impl Store {
                     "timestamp": u.get("timestamp").cloned().unwrap_or(Value::Null),
                     "text": text,
                     "match_at": at,
-                    "snippet": snippet(&text, at, len),
+                    "snippet": snippet(&text, at, len, self.snippet_chars),
                 }));
             }
         }
@@ -909,7 +920,25 @@ mod tests {
         );
         assert_eq!(h["snippet"], "The renewal is OK.");
         assert_eq!(s.search("nothing-said", 50).unwrap()["count"], 0);
-        assert_eq!(snippet(&"a ".repeat(60), 60, 1).chars().next(), Some('…'));
+        assert_eq!(
+            snippet(&"a ".repeat(60), 60, 1, 40).chars().next(),
+            Some('…')
+        );
+    }
+
+    /// sessions.search_snippet_chars sets the context either side of the match.
+    #[test]
+    fn search_snippet_context_follows_the_config() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::new(d.path().join("store"));
+        assert_eq!(s.snippet_chars, 40);
+        s.import(&fixture_dir(), false).unwrap();
+        let s = s.with_snippet_chars(4);
+        let r = s.search("renewal", 50).unwrap();
+        assert_eq!(r["hits"][0]["snippet"], "The renewal is…", "{r}");
+        let r = s.with_snippet_chars(0).search("renewal", 50).unwrap();
+        assert_eq!(r["hits"][0]["snippet"], "…renewal…", "{r}");
+        assert_eq!(snippet("abc", 1, 1, usize::MAX), "abc");
     }
 
     #[test]
