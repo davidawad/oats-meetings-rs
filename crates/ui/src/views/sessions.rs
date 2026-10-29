@@ -203,7 +203,7 @@ pub fn transcribed(
 }
 
 /// The Transcribe button: the ASR runs over the whole recording, so off the UI thread.
-fn transcribe(this: &mut MainWindow, id: String, cx: &mut Context<MainWindow>) {
+pub(crate) fn transcribe(this: &mut MainWindow, id: String, cx: &mut Context<MainWindow>) {
     if this.state.sessions_ui.transcribing.is_some() {
         return;
     }

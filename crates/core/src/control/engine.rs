@@ -46,6 +46,15 @@ pub struct EngineOpts {
 
 type Stamp = Option<(SystemTime, u64)>;
 
+/// The GUI's side of the `ui-*` actions (dot-4uzgol.53). GUI mode registers one with
+/// `Engine::set_ui`; it runs a request on the window's thread and answers with the window's state
+/// dump. Without one (headless, or the window is closed) the actions answer `no_window`.
+pub trait UiPort: Send + Sync {
+    /// `req` is `{"op": "select", "tab": ..}`, `{"op": "state"}` or `{"op": "invoke", "name": ..,
+    /// "args": {..}}`.
+    fn call(&self, req: Value) -> Result<Value>;
+}
+
 /// What `privacy-toggle` warns, and the UI shows, where capture hiding cannot take effect.
 pub const CAPTURE_UNSUPPORTED: &str =
     "hiding from screen capture is not supported on this platform; the window is still capturable";
@@ -117,6 +126,7 @@ pub struct Engine {
     me: Weak<Engine>,
     // One session-transcribe at a time (ctl, the GUI and the model-arrived pass).
     transcribe_lock: Mutex<()>,
+    ui: RwLock<Option<Arc<dyn UiPort>>>,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -285,6 +295,7 @@ impl Engine {
             recorder: Arc::new(Recorder::default()),
             me: me.clone(),
             transcribe_lock: Mutex::new(()),
+            ui: RwLock::new(None),
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
@@ -543,6 +554,22 @@ impl Engine {
     /// Register a subsystem (audio, hotkeys, ...). It sees every later reload.
     pub fn register(&self, s: Arc<dyn Subsystem>) {
         self.subsystems.write().expect("subsystems").push(s);
+    }
+
+    /// Route the `ui-*` actions to a GUI (or stop routing them, with `None`).
+    pub fn set_ui(&self, port: Option<Arc<dyn UiPort>>) {
+        *self.ui.write().expect("ui") = port;
+    }
+
+    fn ui_call(&self, req: Value) -> Result<Value> {
+        let port = self.ui.read().expect("ui").clone();
+        match port {
+            Some(p) => p.call(req),
+            None => Err(ConfigError::new(
+                "no_window",
+                "no GUI window to drive: ui-* actions need GUI mode (not --headless)",
+            )),
+        }
     }
 
     pub fn unregister(&self, name: &str) {
@@ -1017,6 +1044,13 @@ impl Engine {
                     secrets: &*secrets,
                 })
             }
+            Action::UiSelect { tab } => self.ui_call(json!({"op": "select", "tab": tab})),
+            Action::UiState {} => self.ui_call(json!({"op": "state"})),
+            Action::UiInvoke { op, args } => self.ui_call(json!({
+                "op": "invoke",
+                "name": op,
+                "args": args.clone().unwrap_or_else(|| json!({})),
+            })),
             Action::KbSearch { query, limit } => {
                 let snap = self.snapshot();
                 let secrets = self.secret_store(&snap.config);

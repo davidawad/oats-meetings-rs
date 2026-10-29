@@ -117,6 +117,16 @@ fn check(menubar: bool) {
         Value::Bool(true)
     );
     std::thread::sleep(Duration::from_millis(500));
+    // ctl drives the views (dot-4uzgol.53): with a window open, ui-select switches it and ui-state
+    // reads it back; a window that could not open (no GPU) answers no_window, never a stale dump.
+    let (code, v) = p.ctl(&["ui", "select", "Calendar"]);
+    if code == 0 {
+        assert_eq!(v["data"]["tab"], "Calendar");
+        let (code, s) = p.ctl(&["ui", "state"]);
+        assert_eq!((code, &s["data"]["tab"]), (0, &Value::from("Calendar")));
+    } else {
+        assert_eq!(v["error"]["code"], "no_window", "{v}");
+    }
     // The process is still the GUI, alive after window churn.
     assert!(p.gui.try_wait().unwrap().is_none());
     assert_eq!(p.ctl(&["quit"]).0, 0);

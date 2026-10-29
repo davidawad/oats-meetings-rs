@@ -93,6 +93,9 @@ actions! {
     TemplateImport, "template-import", "Import an OpenOats templates.json into the templates folder.", "implemented", "write", { from: String, overwrite: Option<bool> };
     KbSearch, "kb-search", "Search the knowledge base (deterministic ranking).", "implemented", "read", { query: String, limit: Option<u64> };
     KbReindex, "kb-reindex", "Rebuild the knowledge base index.", "implemented", "write", {};
+    UiSelect, "ui-select", "Switch the open GUI window to a tab (Live, Sessions, Notes, Templates, Calendar, Trash, Models, Settings) as a tab-bar click does; returns the ui-state dump. GUI mode only (headless: no_window).", "implemented", "control", { tab: String };
+    UiState, "ui-state", "Dump what the open GUI window shows: active tab, status line, banner and the active view's rows and labels. GUI mode only (headless: no_window).", "implemented", "read", {};
+    UiInvoke, "ui-invoke", "Press a view's button in the open GUI window, as a click does (one call is one click: two-step deletes need two); op is view.verb (e.g. templates.save, calendar.add, sessions.search), args its fields; switches to the view and returns the ui-state dump. ui-invoke op=help lists the ops. GUI mode only (headless: no_window).", "implemented", "control", { op: String, args: Option<Value> };
 }
 
 pub const EVENTS: &[&str] = &[

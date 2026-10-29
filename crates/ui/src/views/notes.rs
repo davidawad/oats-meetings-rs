@@ -193,7 +193,7 @@ impl Notes {
     }
 }
 
-fn run_regenerate(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
+pub(crate) fn run_regenerate(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
     let confirm = this.engine.snapshot().config.notes.confirm_regenerate;
     // Re-read the picker so a template added or removed outside this tab is honoured.
     cx.global_mut::<Notes>().load_templates(&this.engine);
@@ -227,7 +227,7 @@ fn run_regenerate(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
     .detach();
 }
 
-fn save(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
+pub(crate) fn save(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
     if cx.global_mut::<Notes>().save(&this.engine) {
         this.state.status = "Saved notes".into();
     }

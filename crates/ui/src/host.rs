@@ -21,6 +21,7 @@ use oats_core::control::{paths, server};
 use serde_json::{json, Value};
 
 use crate::capture;
+use crate::drive;
 use crate::model::{self, BINDINGS, MENUS};
 use crate::state::State;
 use crate::tray::{self, TrayBackend, TrayState};
@@ -96,6 +97,8 @@ struct Host {
     tray_entries: Vec<model::Entry>,
     /// Capture-hiding support the menus were last built for.
     capture_supported: bool,
+    /// `ui-*` requests from the engine (`ctl ui-select`, `ui-state`, `ui-invoke`).
+    port: Arc<drive::Port>,
 }
 
 type Shared = Rc<RefCell<Host>>;
@@ -205,6 +208,19 @@ fn tick(host: &Shared, cx: &mut App) {
             let _ = w.update(cx, |v, _, cx| v.refresh(cx));
         }
     }
+    // After the window is reconciled, so `window-show` then `ui-select` finds it open.
+    for r in h.port.take() {
+        let out = match h.window {
+            Some(w) => w
+                .update(cx, |v, _, cx| v.drive(&r.req, cx))
+                .unwrap_or_else(|e| Err(ConfigError::new("no_window", e.to_string()))),
+            None => Err(ConfigError::new(
+                "no_window",
+                "the window is hidden: window-show first",
+            )),
+        };
+        let _ = r.reply.send(out);
+    }
     let supported = h.engine.capture_hiding_supported();
     if supported != h.capture_supported {
         // privacy.hide_method changed at runtime: relabel the menus, and re-show the tray.
@@ -238,6 +254,8 @@ pub fn run_with(
     let tray_state = Arc::new(TrayState::new(engine.snapshot().config.app.menubar));
     let capture_supported = engine.capture_hiding_supported();
     engine.register(tray_state.clone());
+    let port = Arc::new(drive::Port::default());
+    engine.set_ui(Some(port.clone()));
     let handle = match server::serve(Arc::clone(&engine), runtime_dir) {
         Ok(h) => h,
         Err(e) => {
@@ -262,6 +280,7 @@ pub fn run_with(
         tray_gate: tray::Gate::default(),
         tray_entries: model::entries(model::TRAY, capture_supported),
         capture_supported,
+        port,
     }));
     let h2 = Rc::clone(&host);
     gpui_platform::application().run(move |cx: &mut App| {
@@ -294,6 +313,7 @@ pub fn run_with(
         .detach();
         cx.activate(true);
     });
+    engine.set_ui(None);
     handle.shutdown();
     0
 }
@@ -332,6 +352,7 @@ mod tests {
             tray_gate: tray::Gate::default(),
             tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
             capture_supported: engine.capture_hiding_supported(),
+            port: Arc::default(),
         }));
         let mut cx = TestAppContext::single();
         let step = |action: &str, cx: &mut TestAppContext| {
@@ -355,6 +376,177 @@ mod tests {
             assert_eq!(v.state.live_session.as_deref(), Some("session_a"));
         })
         .unwrap();
+    }
+
+    fn host_of(engine: &Arc<Engine>) -> Shared {
+        let port = Arc::new(drive::Port::default());
+        engine.set_ui(Some(port.clone()));
+        Rc::new(RefCell::new(Host {
+            engine: Arc::clone(engine),
+            events: engine.bus.subscribe(vec![]),
+            tray_state: Arc::new(TrayState::new(false)),
+            tray: Box::new(Mock::default()),
+            window: None,
+            kept: Rc::default(),
+            applied_capture: None,
+            want_visible: false,
+            tray_gate: tray::Gate::default(),
+            tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
+            capture_supported: engine.capture_hiding_supported(),
+            port,
+        }))
+    }
+
+    /// One action the way `ctl` sends it: from another thread, while the GPUI thread ticks.
+    fn ctl(
+        host: &Shared,
+        cx: &mut TestAppContext,
+        action: &str,
+        params: Value,
+    ) -> oats_core::config::Result<Value> {
+        let engine = Arc::clone(&host.borrow().engine);
+        let (id, p) = (action.to_string(), params);
+        let t = std::thread::spawn(move || model::dispatch(&engine, &id, p));
+        while !t.is_finished() {
+            cx.update(|cx| tick(host, cx));
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        cx.update(|cx| tick(host, cx));
+        cx.run_until_parked();
+        t.join().unwrap()
+    }
+
+    #[test]
+    fn ctl_view_select_switches_the_window_and_the_state_dump_shows_it() {
+        let (engine, _d) = testutil::engine(&[]);
+        // Headless (no GUI port): the ui-* actions say there is no window.
+        let e = model::dispatch(&engine, "ui-state", json!({})).unwrap_err();
+        assert_eq!(e.code, "no_window");
+        let host = host_of(&engine);
+        let mut cx = TestAppContext::single();
+        // GUI mode with the window hidden: still no window to drive.
+        let e = ctl(&host, &mut cx, "ui-select", json!({"tab": "Calendar"})).unwrap_err();
+        assert_eq!(e.code, "no_window");
+        ctl(&host, &mut cx, "window-show", json!({})).unwrap();
+        let w = host.borrow().window.expect("window opened");
+        for t in Tab::ALL {
+            let name = t.label().to_lowercase();
+            let d = ctl(&host, &mut cx, "ui-select", json!({ "tab": name })).unwrap();
+            assert_eq!(d["tab"], t.label());
+            assert!(d["view"].is_object(), "{d}");
+            w.update(&mut cx, |v, _, _| assert_eq!(v.state.tab, t))
+                .unwrap();
+            let s = ctl(&host, &mut cx, "ui-state", json!({})).unwrap();
+            assert_eq!(s["tab"], t.label());
+            assert_eq!(s["view"], d["view"], "{t:?}");
+        }
+        let e = ctl(&host, &mut cx, "ui-select", json!({"tab": "Nope"})).unwrap_err();
+        assert_eq!(e.code, "bad_request");
+        let d = ctl(&host, &mut cx, "ui-select", json!({"tab": "Settings"})).unwrap();
+        assert!(d["view"]["groups"]
+            .as_array()
+            .is_some_and(|g| !g.is_empty()));
+        // A window closed and reopened still answers, on the tab it kept.
+        ctl(&host, &mut cx, "window-hide", json!({})).unwrap();
+        ctl(&host, &mut cx, "window-show", json!({})).unwrap();
+        let s = ctl(&host, &mut cx, "ui-state", json!({})).unwrap();
+        assert_eq!(s["tab"], "Settings");
+    }
+
+    #[test]
+    fn ctl_presses_view_buttons_and_the_dump_shows_the_result() {
+        let (engine, d) = testutil::engine(&[("ui.tz", json!("UTC"))]);
+        let s = d.path().join("sessions/s1");
+        std::fs::create_dir_all(&s).unwrap();
+        std::fs::write(
+            s.join("session.json"),
+            r#"{"id":"s1","title":"Standup","startedAt":"2026-10-27T10:00:00Z"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            s.join("transcript.final.jsonl"),
+            "{\"speaker\":\"you\",\"text\":\"the budget is approved\"}\n",
+        )
+        .unwrap();
+        let host = host_of(&engine);
+        let mut cx = TestAppContext::single();
+        ctl(&host, &mut cx, "window-show", json!({})).unwrap();
+        let invoke = |cx: &mut TestAppContext, op: &str, args: Value| {
+            ctl(&host, cx, "ui-invoke", json!({"op": op, "args": args})).unwrap()
+        };
+
+        let h = invoke(&mut cx, "help", json!({}));
+        assert_eq!(h["ops"].as_array().unwrap().len(), drive::OPS.len());
+
+        // Templates: New, fill the form, Save.
+        let v = invoke(
+            &mut cx,
+            "templates.save",
+            json!({"name": "Retro", "system_prompt": "Summarise.\n## Wins\n"}),
+        );
+        assert_eq!(v["tab"], "Templates");
+        assert_eq!(v["view"]["error"], Value::Null, "{v}");
+        assert!(v["view"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["name"] == "Retro"));
+        assert_eq!(v["view"]["selected"]["name"], "Retro");
+        assert_eq!(v["view"]["draft"], Value::Null);
+
+        // Sessions: the search box matches transcript text, with a snippet.
+        let v = invoke(&mut cx, "sessions.search", json!({"query": "budget"}));
+        assert_eq!(v["tab"], "Sessions");
+        let rows = v["view"]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{v}");
+        assert_eq!(rows[0]["id"], "s1");
+        assert!(rows[0]["snippet"].as_str().unwrap().contains("budget"));
+        let v = invoke(&mut cx, "sessions.search", json!({"query": "zebra"}));
+        assert!(v["view"]["rows"].as_array().unwrap().is_empty());
+        invoke(&mut cx, "sessions.search", json!({"query": ""}));
+        let v = invoke(&mut cx, "sessions.select", json!({"session": "s1"}));
+        assert_eq!(v["view"]["transcript"][0]["text"], "the budget is approved");
+        let v = invoke(&mut cx, "sessions.rename", json!({"name": "Daily"}));
+        assert_eq!(v["view"]["rows"][0]["title"], "Daily", "{v}");
+
+        // Calendar: fill the add-feed form, Add.
+        let ics = d.path().join("team.ics");
+        std::fs::write(&ics, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n").unwrap();
+        let url = format!("file://{}", ics.display());
+        let v = invoke(&mut cx, "calendar.add", json!({"name": "team", "url": url}));
+        assert_eq!(v["tab"], "Calendar");
+        assert!(v["view"]["feeds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "team" && f["url"] == url.as_str()));
+        assert!(v["status"].as_str().unwrap().contains("team"), "{v}");
+
+        // Settings: one row changed through the view.
+        let v = invoke(
+            &mut cx,
+            "settings.set",
+            json!({"key": "ui.show_elapsed", "value": false}),
+        );
+        let row = v["view"]["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|g| g["rows"].as_array().unwrap())
+            .find(|r| r["path"] == "ui.show_elapsed")
+            .cloned()
+            .unwrap();
+        assert_eq!(row["value"], false);
+
+        // Bad ops and missing args are request errors, not silent no-ops.
+        for (op, args) in [
+            ("nope.op", json!({})),
+            ("templates.save", json!({"name": "x"})),
+        ] {
+            let e = ctl(&host, &mut cx, "ui-invoke", json!({"op": op, "args": args})).unwrap_err();
+            assert_eq!(e.code, "bad_request", "{op}");
+        }
     }
 
     #[test]

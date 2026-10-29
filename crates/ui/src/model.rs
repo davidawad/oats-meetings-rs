@@ -202,6 +202,18 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("stt-transcribe", "batch file transcription (ctl)"),
     ("template-import", "one-shot migration verb (ctl)"),
     ("kb-search", "agent query (ctl)"),
+    (
+        "ui-select",
+        "drives the window itself (ctl, headless acceptance)",
+    ),
+    (
+        "ui-state",
+        "reads the window itself (ctl, headless acceptance)",
+    ),
+    (
+        "ui-invoke",
+        "presses the window's own buttons (ctl, headless acceptance)",
+    ),
 ];
 
 fn ids<'a>(it: impl Iterator<Item = &'a str>) -> BTreeSet<String> {
