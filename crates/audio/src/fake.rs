@@ -117,3 +117,37 @@ impl CaptureBackend for FakeBackend {
         Ok(Box::new(FakeCapture { stop, th: Some(th) }))
     }
 }
+
+/// A backend whose `list_devices` does not return until `release` gets a message or is dropped:
+/// a device that never answers its probe (a CoreAudio AudioUnit, dot-4uzgol.57). Opening
+/// devices works as in `FakeBackend`.
+pub struct StuckBackend {
+    pub gate: Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl StuckBackend {
+    /// The backend factory side of the gate and the sender that releases every listing waiting
+    /// on it.
+    pub fn gate() -> (
+        Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Arc::new(std::sync::Mutex::new(rx)), tx)
+    }
+}
+
+impl CaptureBackend for StuckBackend {
+    fn name(&self) -> &'static str {
+        "stuck"
+    }
+
+    fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let _ = self.gate.lock().map(|rx| rx.recv());
+        FakeBackend::default().list_devices()
+    }
+
+    fn open(&self, kind: DeviceKind, device: &str, on: OnSamples) -> Result<Box<dyn Capture>> {
+        FakeBackend::default().open(kind, device, on)
+    }
+}

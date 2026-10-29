@@ -252,6 +252,11 @@ pub struct Problem {
     pub fix: Option<String>,
 }
 
+/// `devices_note` while the backend is still listing its devices.
+pub const DEVICES_PENDING: &str = "listing audio devices...";
+/// `devices_note` when the backend did not list them within `audio.devices_timeout`, or failed.
+pub const DEVICES_UNAVAILABLE: &str = "devices unavailable";
+
 #[derive(Debug, Default)]
 pub struct State {
     pub edit: Option<Edit>,
@@ -272,6 +277,8 @@ pub struct State {
     pub settings: Vec<Group>,
     /// Number of capture devices the audio backend reports (0 when none or unavailable).
     pub devices: usize,
+    /// Why there is no device list: still listing, or `devices unavailable` (timed out / failed).
+    pub devices_note: Option<String>,
     pub status: String,
     pub sessions_ui: crate::views::sessions::Ui,
 }
@@ -326,18 +333,7 @@ impl State {
             }
             Err(e) => self.status = e.to_string(),
         }
-        let devs = model::dispatch(engine, "devices-list", json!({})).ok();
-        let arr = devs.as_ref().and_then(|v| v["devices"].as_array());
-        self.devices = arr.map_or(0, Vec::len);
-        self.device_opts = arr
-            .into_iter()
-            .flatten()
-            .map(|d| DeviceOpt {
-                id: s(d, "id"),
-                name: s(d, "name"),
-                kind: s(d, "kind"),
-            })
-            .collect();
+        self.sync_devices(engine);
         self.stt_problem = model::dispatch(engine, "stt-status", json!({}))
             .ok()
             .and_then(|v| {
@@ -351,6 +347,30 @@ impl State {
         if let Some(id) = self.selected.clone() {
             self.select(engine, &id);
         }
+    }
+
+    /// The device list from the engine's cache: never the backend, which can block (dot-4uzgol.57).
+    /// While the first listing runs the list is empty; past `audio.devices_timeout`, or when the
+    /// backend fails, it is empty and `devices_note` says devices are unavailable. Cheap, so the
+    /// view calls it every tick until a listing arrives.
+    pub fn sync_devices(&mut self, engine: &Engine) {
+        let (devs, note) = match engine.devices_cached() {
+            Ok(Some(v)) => (Some(v), None),
+            Ok(None) => (None, Some(DEVICES_PENDING)),
+            Err(_) => (None, Some(DEVICES_UNAVAILABLE)),
+        };
+        self.devices_note = note.map(str::to_string);
+        let arr = devs.as_ref().and_then(|v| v["devices"].as_array());
+        self.devices = arr.map_or(0, Vec::len);
+        self.device_opts = arr
+            .into_iter()
+            .flatten()
+            .map(|d| DeviceOpt {
+                id: s(d, "id"),
+                name: s(d, "name"),
+                kind: s(d, "kind"),
+            })
+            .collect();
     }
 
     pub fn select(&mut self, engine: &Engine, id: &str) {
@@ -936,6 +956,40 @@ mod tests {
         assert_eq!(fmt_elapsed(0), "00:00");
         assert_eq!(fmt_elapsed(61_999), "01:01");
         assert_eq!(fmt_elapsed(3_723_000), "1:02:03");
+    }
+
+    /// A backend whose device probe never answers (dot-4uzgol.57): refresh reads only the
+    /// engine's cache, so it returns at once; past audio.devices_timeout the view says devices
+    /// unavailable, and the listing shows once the backend answers.
+    #[test]
+    fn refresh_never_waits_on_a_stuck_audio_backend() {
+        let (engine, _d) = testutil::engine(&[("audio.devices_timeout", json!("200ms"))]);
+        let (stuck, release) = testutil::stuck_audio();
+        engine.set_audio_factory(stuck);
+        let mut st = State::default();
+        let t = std::time::Instant::now();
+        st.refresh(&engine);
+        assert!(
+            t.elapsed() < std::time::Duration::from_millis(150),
+            "{:?}",
+            t.elapsed()
+        );
+        assert_eq!(st.devices_note.as_deref(), Some(DEVICES_PENDING));
+        assert_eq!(st.devices, 0);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let t = std::time::Instant::now();
+        st.refresh(&engine);
+        assert!(t.elapsed() < std::time::Duration::from_millis(150));
+        assert_eq!(st.devices_note.as_deref(), Some(DEVICES_UNAVAILABLE));
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while st.devices_note.is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            st.sync_devices(&engine);
+        }
+        assert_eq!(st.devices_note, None);
+        assert_eq!(st.devices, 3);
+        assert!(st.device_opts.iter().any(|d| d.id == "fake.mic"));
     }
 
     #[test]

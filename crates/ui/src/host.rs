@@ -7,9 +7,11 @@
 //! menus, keys, tray clicks and view buttons all call `model::dispatch`.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use gpui::{
     px, size, App, AppContext as _, AsyncApp, Bounds, KeyBinding, Menu, MenuItem, QuitMode,
@@ -103,20 +105,63 @@ struct Host {
     launch_show: bool,
     /// `cx.quit()` has been called.
     quitting: bool,
-    /// Started at quit with `ui.quit_timeout`: `force_exit_after` (tests record the call).
-    backstop: fn(std::time::Duration),
     /// How many times the app took focus (`cx.activate`); only explicit show requests do.
     activations: usize,
 }
 
-/// Backstop for `ctl quit`: if `NSApplication terminate:` has not ended the process within
-/// `after`, exit(0) (the engine lock is a flock, released with the process).
-fn force_exit_after(after: std::time::Duration) {
-    std::thread::spawn(move || {
-        std::thread::sleep(after);
-        oats_core::elog!("oats-meetings-rs: quit did not finish in time; exiting");
-        std::process::exit(0);
-    });
+/// Ends the process with a code: `std::process::exit`; tests record the call instead.
+pub type ExitFn = fn(i32);
+
+/// The `ctl quit` watchdog (dot-4uzgol.57, .58). A thread of its own, woken by the bus `quit`
+/// event, so a main thread that never ticks again (wedged in a platform call) cannot keep it from
+/// firing: `ui.quit_timeout` after the quit it removes `engine.lock` (when this engine holds it,
+/// `app.single_instance`) and exits 0. A quit that finishes first ends the process before it, or
+/// `cancel`s it.
+pub struct QuitWatchdog {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl QuitWatchdog {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+}
+
+pub fn spawn_quit_watchdog(engine: &Arc<Engine>, lock: PathBuf, exit: ExitFn) -> QuitWatchdog {
+    // Subscribed before the thread runs: a quit sent right after this call is not missed.
+    let quit = engine.bus.subscribe(vec!["quit".into()]);
+    let (cancelled, flag) = {
+        let c = Arc::new(AtomicBool::new(false));
+        (Arc::clone(&c), c)
+    };
+    let weak: Weak<Engine> = Arc::downgrade(engine);
+    let spawned = std::thread::Builder::new()
+        .name("oats-quit-watchdog".into())
+        .spawn(move || {
+            // Err: the engine (and its bus) is gone without a quit; nothing to watch.
+            if quit.recv().is_err() {
+                return;
+            }
+            let Some((after, single)) = weak.upgrade().map(|e| {
+                let c = &e.snapshot().config;
+                (c.ui.quit_timeout.as_duration(), c.app.single_instance)
+            }) else {
+                return;
+            };
+            std::thread::sleep(after);
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+            oats_core::elog!("oats-meetings-rs: quit did not finish in time; exiting");
+            if single {
+                let _ = std::fs::remove_file(&lock);
+            }
+            exit(0);
+        });
+    if let Err(e) = spawned {
+        oats_core::elog!("oats-meetings-rs: cannot start the quit watchdog: {e}");
+    }
+    QuitWatchdog { cancelled }
 }
 
 type Shared = Rc<RefCell<Host>>;
@@ -206,7 +251,7 @@ fn tick(host: &Shared, cx: &mut App) {
             if let Some(w) = h.window.take() {
                 let _ = w.update(cx, |_, window, _| window.remove_window());
             }
-            (h.backstop)(h.engine.snapshot().config.ui.quit_timeout.as_duration());
+            // The watchdog (spawn_quit_watchdog) backs this up if the run loop never ends.
             cx.quit();
         }
         return;
@@ -354,6 +399,10 @@ pub fn run_with(
         "oats-meetings-rs: engine listening on {}",
         handle.socket_display()
     );
+    // Before anything that can block the main thread: it must be able to fire with no tick.
+    let watchdog = spawn_quit_watchdog(&engine, paths::lock_path(runtime_dir), |c| {
+        std::process::exit(c)
+    });
     engine.launched();
     let host: Shared = Rc::new(RefCell::new(Host {
         engine: Arc::clone(&engine),
@@ -370,7 +419,6 @@ pub fn run_with(
         port,
         launch_show: false,
         quitting: false,
-        backstop: force_exit_after,
         activations: 0,
     }));
     let h2 = Rc::clone(&host);
@@ -409,6 +457,7 @@ pub fn run_with(
     });
     engine.set_ui(None);
     handle.shutdown();
+    watchdog.cancel();
     0
 }
 
@@ -449,7 +498,6 @@ mod tests {
             port: Arc::default(),
             launch_show: false,
             quitting: false,
-            backstop: |_| {},
             activations: 0,
         }));
         let mut cx = TestAppContext::single();
@@ -494,7 +542,6 @@ mod tests {
             port,
             launch_show: false,
             quitting: false,
-            backstop: |_| {},
             activations: 0,
         }))
     }
@@ -669,7 +716,6 @@ mod tests {
             port: Arc::default(),
             launch_show: false,
             quitting: false,
-            backstop: |_| {},
             activations: 0,
         }));
         let mut cx = TestAppContext::single();
@@ -711,7 +757,6 @@ mod tests {
             port: Arc::default(),
             launch_show: false,
             quitting: false,
-            backstop: |_| {},
             activations: 0,
         }))
     }
@@ -800,39 +845,72 @@ mod tests {
     }
 
     #[test]
-    fn quit_closes_the_window_quits_once_and_arms_the_backstop() {
-        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-        static ARMED: AtomicUsize = AtomicUsize::new(0);
-        static AFTER_MS: AtomicU64 = AtomicU64::new(0);
-        let (engine, _d) = testutil::engine(&[("ui.quit_timeout", json!("2s"))]);
+    fn quit_closes_the_window_and_quits_once() {
+        let (engine, _d) = testutil::engine(&[]);
         let host = plain_host(&engine);
-        host.borrow_mut().backstop = |after| {
-            ARMED.fetch_add(1, Ordering::SeqCst);
-            AFTER_MS.store(after.as_millis() as u64, Ordering::SeqCst);
-        };
         let mut cx = TestAppContext::single();
         model::dispatch(&engine, "window-show", json!({})).unwrap();
         tick_once(&host, &mut cx);
         assert!(host.borrow().window.is_some());
-        engine.request_shutdown();
+        model::dispatch(&engine, "quit", json!({})).unwrap();
         tick_once(&host, &mut cx);
         assert!(host.borrow().quitting);
         assert!(host.borrow().window.is_none(), "window kept open at quit");
         assert!(cx.update(|cx| cx.windows().is_empty()));
-        assert_eq!(ARMED.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            AFTER_MS.load(Ordering::SeqCst),
-            engine
-                .snapshot()
-                .config
-                .ui
-                .quit_timeout
-                .as_duration()
-                .as_millis() as u64
-        );
-        // Later ticks do not quit or arm again.
+        // Later ticks do not quit again.
         tick_once(&host, &mut cx);
-        assert_eq!(ARMED.load(Ordering::SeqCst), 1);
+        assert!(host.borrow().quitting);
+    }
+
+    /// Wait (this thread blocked, the way a wedged main thread is) until `cond` or 10 s.
+    fn blocked_until(cond: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !cond() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        cond()
+    }
+
+    #[test]
+    fn the_quit_watchdog_fires_with_the_main_loop_blocked_and_removes_the_lock() {
+        use std::sync::atomic::{AtomicI32, AtomicUsize};
+        static EXITS: AtomicUsize = AtomicUsize::new(0);
+        static CODE: AtomicI32 = AtomicI32::new(-1);
+        let (engine, d) = testutil::engine(&[("ui.quit_timeout", json!("200ms"))]);
+        let lock = paths::lock_path(d.path());
+        std::fs::write(&lock, "").unwrap();
+        let _w = spawn_quit_watchdog(&engine, lock.clone(), |code| {
+            CODE.store(code, Ordering::SeqCst);
+            EXITS.fetch_add(1, Ordering::SeqCst);
+        });
+        // Nothing before the quit: the watchdog is not a timer from launch.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(EXITS.load(Ordering::SeqCst), 0);
+        assert!(lock.exists());
+        let t = std::time::Instant::now();
+        model::dispatch(&engine, "quit", json!({})).unwrap();
+        // No tick runs from here on: only the watchdog thread can end the process.
+        assert!(blocked_until(|| EXITS.load(Ordering::SeqCst) == 1));
+        assert!(t.elapsed() >= std::time::Duration::from_millis(200));
+        assert_eq!(CODE.load(Ordering::SeqCst), 0);
+        assert!(!lock.exists(), "engine.lock left on disk");
+    }
+
+    #[test]
+    fn a_quit_that_finishes_first_cancels_the_watchdog() {
+        use std::sync::atomic::AtomicUsize;
+        static EXITS: AtomicUsize = AtomicUsize::new(0);
+        let (engine, d) = testutil::engine(&[("ui.quit_timeout", json!("200ms"))]);
+        let lock = paths::lock_path(d.path());
+        std::fs::write(&lock, "").unwrap();
+        let w = spawn_quit_watchdog(&engine, lock.clone(), |_| {
+            EXITS.fetch_add(1, Ordering::SeqCst);
+        });
+        model::dispatch(&engine, "quit", json!({})).unwrap();
+        w.cancel();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert_eq!(EXITS.load(Ordering::SeqCst), 0);
+        assert!(lock.exists());
     }
 
     #[test]

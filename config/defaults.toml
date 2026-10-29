@@ -9,6 +9,10 @@ single_instance = true
 [audio]
 # Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).
 backend = "auto"
+# How long devices-list (and the device check of a reload) waits for the audio backend to list its devices before failing with devices_timeout; the GUI shows devices unavailable.
+devices_timeout = "3s"
+# How long a device listing is reused before the audio backend is asked again.
+devices_ttl = "30s"
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"
 # How long a capture backend waits for audio to start flowing before giving up.

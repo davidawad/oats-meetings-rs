@@ -98,6 +98,8 @@ pub struct AudioEndpoint {
 #[serde(deny_unknown_fields)]
 pub struct Audio {
     pub backend: AudioBackend,
+    pub devices_timeout: Dur,
+    pub devices_ttl: Dur,
     pub layout: AudioLayout,
     pub mic: AudioEndpoint,
     pub open_timeout: Dur,

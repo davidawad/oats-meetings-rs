@@ -1,5 +1,10 @@
-//! Test helpers: a real `Engine` over a temp dir with the given user-config keys set.
+//! Test helpers: a real `Engine` over a temp dir with the given user-config keys set, on a fake
+//! audio backend: no lib test touches the OS audio stack (CoreAudio enumeration can hang,
+//! dot-4uzgol.57).
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+use oats_audio::fake::{FakeBackend, StuckBackend};
 
 use oats_core::config::resolve::nest;
 use oats_core::control::engine::{Engine, EngineOpts};
@@ -24,5 +29,22 @@ pub fn engine(pairs: &[(&str, Value)]) -> (Arc<Engine>, tempfile::TempDir) {
         secrets: None,
     })
     .expect("engine");
+    engine.set_audio_factory(fake_audio());
     (engine, dir)
+}
+
+/// The deterministic in-memory backend (`oats_audio::fake::FakeBackend`).
+pub fn fake_audio() -> oats_core::record::Factory {
+    Box::new(|_| Ok(Box::new(FakeBackend::default())))
+}
+
+/// A backend whose device listing hangs until the returned sender sends (or is dropped).
+pub fn stuck_audio() -> (oats_core::record::Factory, Sender<()>) {
+    let (gate, release) = StuckBackend::gate();
+    let f: oats_core::record::Factory = Box::new(move |_| {
+        Ok(Box::new(StuckBackend {
+            gate: Arc::clone(&gate),
+        }))
+    });
+    (f, release)
 }

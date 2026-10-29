@@ -5,7 +5,8 @@
 //! the captured audio to a `stt::capture::Transcriber`.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
 use oats_audio::{AudioError, AudioSettings, BackendChoice, CaptureBackend, Layout, Recording};
@@ -38,18 +39,67 @@ struct Active {
     no_trans: Value,
 }
 
+/// How long a device listing may take and how long its result is reused (`audio.devices_timeout`,
+/// `audio.devices_ttl`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceWait {
+    pub timeout: Duration,
+    pub ttl: Duration,
+}
+
+/// Device listings, enumerated off the caller's thread (dot-4uzgol.57): one backend that never
+/// answers (a CoreAudio AudioUnit probe) must not hang the GUI main thread or `ctl devices-list`.
+#[derive(Default)]
+struct DevCache {
+    /// The last finished enumeration: when, for which `audio.backend`, and what it returned.
+    done: Option<(Instant, BackendChoice, Result<Value>)>,
+    /// The enumeration in flight: since when, for which backend. At most one runs at a time, so a
+    /// wedged backend holds one thread, not one per call.
+    running: Option<(Instant, BackendChoice)>,
+    /// Bumped by `set_factory`: a worker of an older factory neither fills nor holds the cache.
+    generation: u64,
+}
+
+impl DevCache {
+    /// The listing for `st` if younger than `ttl` or finished after `since`.
+    fn fresh(&self, st: &AudioSettings, ttl: Duration, since: Instant) -> Option<Result<Value>> {
+        self.done
+            .as_ref()
+            .filter(|(at, b, _)| *b == st.backend && (at.elapsed() < ttl || *at >= since))
+            .map(|(_, _, v)| v.clone())
+    }
+
+    fn timed_out(&self, wait: DeviceWait) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(|(since, _)| since.elapsed() >= wait.timeout)
+    }
+}
+
+fn devices_timeout(wait: DeviceWait) -> ConfigError {
+    ConfigError::new(
+        "devices_timeout",
+        format!(
+            "the audio backend did not list its devices within {:?} (audio.devices_timeout)",
+            wait.timeout
+        ),
+    )
+}
+
 pub struct Recorder {
     active: Mutex<Option<Active>>,
-    factory: Mutex<Factory>,
+    factory: Arc<Mutex<Factory>>,
     asr: Mutex<Option<AsrFactory>>,
+    devices: Arc<(Mutex<DevCache>, Condvar)>,
 }
 
 impl Default for Recorder {
     fn default() -> Self {
         Self {
             active: Mutex::new(None),
-            factory: Mutex::new(Box::new(oats_audio::select)),
+            factory: Arc::new(Mutex::new(Box::new(oats_audio::select))),
             asr: Mutex::new(None),
+            devices: Arc::default(),
         }
     }
 }
@@ -121,6 +171,26 @@ pub fn settings_of(c: &Config) -> AudioSettings {
     }
 }
 
+/// One backend listing, as `devices-list` answers it.
+fn enumerate(factory: &Mutex<Factory>, st: &AudioSettings) -> Result<Value> {
+    let be = (factory.lock().expect("factory"))(st).map_err(audio_err)?;
+    let devices = be.list_devices().map_err(audio_err)?;
+    let loopback = devices
+        .iter()
+        .any(|d| d.kind == oats_audio::DeviceKind::Loopback);
+    Ok(
+        json!({"backend": be.name(), "os": std::env::consts::OS, "loopback_available": loopback, "devices": devices}),
+    )
+}
+
+/// The device-listing waits from the typed config.
+pub fn device_wait_of(c: &Config) -> DeviceWait {
+    DeviceWait {
+        timeout: c.audio.devices_timeout.as_duration(),
+        ttl: c.audio.devices_ttl.as_duration(),
+    }
+}
+
 fn read_meta(dir: &Path) -> Option<Map<String, Value>> {
     match serde_json::from_slice::<Value>(&std::fs::read(dir.join("session.json")).ok()?).ok()? {
         Value::Object(m) => Some(m),
@@ -152,6 +222,11 @@ fn merge_audio_meta(dir: &Path, duration_ms: u64, channels: u16) -> Result<()> {
 impl Recorder {
     pub fn set_factory(&self, f: Factory) {
         *self.factory.lock().expect("factory") = f;
+        // A listing from the old backend is not this backend's.
+        let mut c = self.devices.0.lock().expect("devices");
+        c.generation += 1;
+        c.done = None;
+        c.running = None;
     }
 
     pub fn set_asr_factory(&self, f: AsrFactory) {
@@ -174,21 +249,83 @@ impl Recorder {
         (self.factory.lock().expect("factory"))(st).map_err(audio_err)
     }
 
-    pub fn devices(&self, st: &AudioSettings) -> Result<Value> {
-        let be = self.backend(st)?;
-        let devices = be.list_devices().map_err(audio_err)?;
-        let loopback = devices
-            .iter()
-            .any(|d| d.kind == oats_audio::DeviceKind::Loopback);
-        Ok(
-            json!({"backend": be.name(), "os": std::env::consts::OS, "loopback_available": loopback, "devices": devices}),
-        )
+    /// Start an enumeration for `st` on a worker thread unless one is already running.
+    fn kick(&self, c: &mut DevCache, st: &AudioSettings) {
+        if c.running.is_some() {
+            return;
+        }
+        c.running = Some((Instant::now(), st.backend));
+        let generation = c.generation;
+        let (factory, cache, want) = (
+            Arc::clone(&self.factory),
+            Arc::clone(&self.devices),
+            st.clone(),
+        );
+        let spawned = std::thread::Builder::new()
+            .name("oats-devices".into())
+            .spawn(move || {
+                let out = enumerate(&factory, &want);
+                let (m, cv) = &*cache;
+                let mut c = m.lock().expect("devices");
+                if c.generation == generation {
+                    c.running = None;
+                    c.done = Some((Instant::now(), want.backend, out));
+                    cv.notify_all();
+                }
+            });
+        if let Err(e) = spawned {
+            c.running = None;
+            c.done = Some((
+                Instant::now(),
+                st.backend,
+                Err(ConfigError::new("io_error", format!("spawn devices: {e}"))),
+            ));
+        }
+    }
+
+    /// `devices-list`: the cached listing if younger than `wait.ttl`, else a fresh one from a worker
+    /// thread, waited for at most `wait.timeout` (then `devices_timeout`; the worker keeps going
+    /// and fills the cache when the backend answers).
+    pub fn devices(&self, st: &AudioSettings, wait: DeviceWait) -> Result<Value> {
+        let (m, cv) = &*self.devices;
+        let since = Instant::now();
+        let deadline = since + wait.timeout;
+        let mut c = m.lock().expect("devices");
+        loop {
+            if let Some(v) = c.fresh(st, wait.ttl, since) {
+                return v;
+            }
+            self.kick(&mut c, st);
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(devices_timeout(wait));
+            }
+            c = cv.wait_timeout(c, left).expect("devices").0;
+        }
+    }
+
+    /// The listing without waiting, for the GUI thread (it never calls the backend): the cached
+    /// one (a stale one too, while a fresh one is fetched), `Ok(None)` while the first is still
+    /// within `wait.timeout`, `devices_timeout` past it.
+    pub fn devices_cached(&self, st: &AudioSettings, wait: DeviceWait) -> Result<Option<Value>> {
+        let mut c = self.devices.0.lock().expect("devices");
+        if let Some(v) = c.fresh(st, wait.ttl, Instant::now()) {
+            return v.map(Some);
+        }
+        self.kick(&mut c, st);
+        let stale = c.done.as_ref().filter(|(_, b, _)| *b == st.backend);
+        match stale {
+            Some((_, _, Ok(v))) => Ok(Some(v.clone())),
+            _ if c.timed_out(wait) => Err(devices_timeout(wait)),
+            Some((_, _, Err(e))) => Err(e.clone()),
+            None => Ok(None),
+        }
     }
 
     /// Reload check: with an enumerable backend, a named device must exist; both sources off is
     /// never valid. A machine with no audio stack cannot be checked and is not vetoed (the error
     /// comes at `record start`).
-    pub fn validate(&self, st: &AudioSettings) -> Result<()> {
+    pub fn validate(&self, st: &AudioSettings, wait: DeviceWait) -> Result<()> {
         if !st.system_enabled && !st.mic_enabled {
             return Err(ConfigError::new(
                 "invalid_config",
@@ -202,19 +339,24 @@ impl Recorder {
         if named.iter().all(|(on, _, d)| !on || d.is_empty()) {
             return Ok(());
         }
-        let Ok(be) = self.backend(st) else {
+        // A fresh listing (a device plugged in a moment ago counts), bounded like devices-list: a
+        // backend that does not answer cannot be checked either.
+        let wait = DeviceWait {
+            ttl: Duration::ZERO,
+            ..wait
+        };
+        let Ok(v) = self.devices(st, wait) else {
             return Ok(());
         };
-        let Ok(devices) = be.list_devices() else {
-            return Ok(());
-        };
+        let devices = v["devices"].as_array().cloned().unwrap_or_default();
+        let has = |d: &str| devices.iter().any(|x| x["id"] == d || x["name"] == d);
         for (on, key, d) in named {
-            if on && !d.is_empty() && !devices.iter().any(|x| &x.id == d || &x.name == d) {
+            if on && !d.is_empty() && !has(d) {
                 return Err(ConfigError::new(
                     "device_not_found",
                     format!(
                         "{key} = '{d}' is not a device of the {} backend (see `ctl devices list`)",
-                        be.name()
+                        v["backend"].as_str().unwrap_or_default()
                     ),
                 ));
             }

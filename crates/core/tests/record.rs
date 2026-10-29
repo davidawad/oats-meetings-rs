@@ -92,6 +92,81 @@ fn stop(r: &Rig) -> Value {
     r.engine.dispatch(&Action::RecordStop {}).unwrap()
 }
 
+/// A backend that never answers its device probe (dot-4uzgol.57): devices-list fails with
+/// devices_timeout after audio.devices_timeout instead of hanging, the GUI's cached read never
+/// waits, and the listing lands in the cache once the backend answers.
+#[test]
+fn a_stuck_backend_times_devices_list_out_and_the_cached_read_never_blocks() {
+    use oats_audio::fake::StuckBackend;
+    let r = rig();
+    r.engine
+        .set("audio.devices_timeout", &json!("300ms"), "test")
+        .unwrap();
+    let (gate, release) = StuckBackend::gate();
+    r.engine.set_audio_factory(Box::new(move |_| {
+        Ok(Box::new(StuckBackend {
+            gate: Arc::clone(&gate),
+        }))
+    }));
+    let t = std::time::Instant::now();
+    assert_eq!(r.engine.devices_cached().unwrap(), None, "first read waits");
+    assert!(
+        t.elapsed() < Duration::from_millis(250),
+        "{:?}",
+        t.elapsed()
+    );
+    let e = r.engine.dispatch(&Action::DevicesList {}).unwrap_err();
+    assert_eq!(e.code, "devices_timeout", "{e}");
+    assert!(e.message.contains("audio.devices_timeout"), "{e}");
+    let took = t.elapsed();
+    assert!(
+        took >= Duration::from_millis(300) && took < Duration::from_secs(5),
+        "{took:?}"
+    );
+    // Past the timeout the cached read says so, still without waiting.
+    let t = std::time::Instant::now();
+    assert_eq!(
+        r.engine.devices_cached().unwrap_err().code,
+        "devices_timeout"
+    );
+    assert!(t.elapsed() < Duration::from_millis(250));
+    // A config reload with a named device is not vetoed by a backend that cannot answer.
+    r.engine
+        .set("audio.mic.device", &json!("fake.mic2"), "test")
+        .unwrap();
+    // The backend answers: the worker fills the cache and both reads return the listing.
+    release.send(()).unwrap();
+    wait_until("the cached listing", || {
+        matches!(r.engine.devices_cached(), Ok(Some(_)))
+    });
+    let v = r.engine.dispatch(&Action::DevicesList {}).unwrap();
+    assert_eq!(v["backend"], "stuck");
+}
+
+/// One listing serves audio.devices_ttl of devices-list calls; a new backend is asked anew.
+#[test]
+fn devices_list_is_cached_for_the_ttl() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let r = rig();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let n = Arc::clone(&calls);
+    r.engine.set_audio_factory(Box::new(move |_| {
+        n.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(FakeBackend::default()))
+    }));
+    for _ in 0..3 {
+        r.engine.dispatch(&Action::DevicesList {}).unwrap();
+    }
+    assert!(r.engine.devices_cached().unwrap().is_some());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    r.engine
+        .set("audio.devices_ttl", &json!("100ms"), "test")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    r.engine.dispatch(&Action::DevicesList {}).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
 #[test]
 fn devices_list_reports_a_loopback_source() {
     let r = rig();
@@ -314,7 +389,8 @@ fn every_backend_value_resolves_or_fails_with_a_structured_error() {
                     "backend_unavailable",
                     "unsupported_platform",
                     "device_not_found",
-                    "capture_failed"
+                    "capture_failed",
+                    "devices_timeout"
                 ]
                 .contains(&e.code),
                 "{v}: {e}"

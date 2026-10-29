@@ -107,7 +107,12 @@ impl MainWindow {
         if self.state.pending.is_none() {
             self.state.sync_rec(&self.engine);
         }
-        if self.state.rec != before || matches!(self.state.rec, Rec::Recording { .. }) {
+        // Until a listing arrives: the worker fills the engine's cache after the first refresh.
+        let listing = self.state.devices_note.is_some();
+        if listing {
+            self.state.sync_devices(&self.engine);
+        }
+        if listing || self.state.rec != before || matches!(self.state.rec, Rec::Recording { .. }) {
             cx.notify();
         }
     }
@@ -321,7 +326,10 @@ impl MainWindow {
             (r, _) if r.session().is_some() => {
                 format!("Recording {}", r.session().unwrap_or_default())
             }
-            _ => format!("{} audio devices", self.state.devices),
+            _ => match &self.state.devices_note {
+                Some(note) => note.clone(),
+                None => format!("{} audio devices", self.state.devices),
+            },
         };
         div()
             .flex()

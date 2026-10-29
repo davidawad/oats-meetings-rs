@@ -5,6 +5,8 @@
   },
   "audio": {
     "backend": "auto",
+    "devices_timeout": "3s",
+    "devices_ttl": "30s",
     "layout": "split",
     "mic": {
       "device": "",

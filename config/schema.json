@@ -40,6 +40,34 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "devices_timeout": {
+          "default": "3s",
+          "description": "How long devices-list (and the device check of a reload) waits for the audio backend to list its devices before failing with devices_timeout; the GUI shows devices unavailable.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "devices_ttl": {
+          "default": "30s",
+          "description": "How long a device listing is reused before the audio backend is asked again.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "layout": {
           "default": "split",
           "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",

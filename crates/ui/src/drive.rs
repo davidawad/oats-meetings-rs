@@ -440,6 +440,7 @@ impl MainWindow {
             Tab::Live => json!({
                 "session": st.rec.session().map(str::to_string).or_else(|| st.live_session.clone()),
                 "devices": st.devices,
+                "devices_note": st.devices_note,
                 "lines": lines(&st.live),
             }),
             Tab::Sessions => json!({

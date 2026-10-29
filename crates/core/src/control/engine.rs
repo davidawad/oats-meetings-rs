@@ -83,7 +83,8 @@ impl Subsystem for AudioSubsystem {
     }
 
     fn validate(&self, new: &Config) -> Result<()> {
-        self.recorder.validate(&record::settings_of(new))
+        self.recorder
+            .validate(&record::settings_of(new), record::device_wait_of(new))
     }
 
     fn apply(&self, old: &Config, new: &Config) {
@@ -350,6 +351,14 @@ impl Engine {
 
     fn audio_settings(&self) -> Result<oats_audio::AudioSettings> {
         record::settings_from(&self.snapshot().resolved.flat)
+    }
+
+    /// The capture devices as `devices-list` reports them, without waiting on the backend (for
+    /// the GUI thread): `Ok(None)` while the first listing is still running, `devices_timeout`
+    /// once it has run past `audio.devices_timeout`.
+    pub fn devices_cached(&self) -> Result<Option<Value>> {
+        let wait = record::device_wait_of(&self.snapshot().config);
+        self.recorder.devices_cached(&self.audio_settings()?, wait)
     }
 
     /// Transcription plan for a new recording per `audio.transcribe`: the plan (if any) and, when
@@ -861,7 +870,10 @@ impl Engine {
                 }
                 Ok(v)
             }
-            Action::DevicesList {} => self.recorder.devices(&self.audio_settings()?),
+            Action::DevicesList {} => self.recorder.devices(
+                &self.audio_settings()?,
+                record::device_wait_of(&self.snapshot().config),
+            ),
             Action::RecordStart { session, title } => {
                 let cfg = self.snapshot().config.clone();
                 let (plan, why) = self.transcribe_plan(&cfg)?;

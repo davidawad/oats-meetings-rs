@@ -232,6 +232,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "audio.devices_timeout",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: MIN },
+        default: Def::D(3 * SEC),
+        doc: "How long devices-list (and the device check of a reload) waits for the audio backend to list its devices before failing with devices_timeout; the GUI shows devices unavailable.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "audio.devices_ttl",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: HOUR },
+        default: Def::D(30 * SEC),
+        doc: "How long a device listing is reused before the audio backend is asked again.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "audio.poll_interval",
         kind: Kind::Duration { min_ms: 5 * MS, max_ms: SEC },
         default: Def::D(25 * MS),
