@@ -2,6 +2,12 @@
 //! dash-joined prefix of the words that names an action in the manifest is the action
 //! (`config set k v` -> `config-set`), and the remaining words fill its parameters.
 //!
+//! Parameters may be positional, `--name value`, `--name=value`, a `name=value` word, or a JSON
+//! object word (`'{"session":"abc"}'`) whose keys are parameter names. A `k=v` word whose `k` looks
+//! like a name but is not one of the action's parameters, a `{` word that is not such an object,
+//! or a parameter given twice is a usage error (exit 2), never a silent positional value
+//! (dot-4uzgol.51). After `--` every word is a literal positional value.
+//!
 //! Exit codes: 0 ok, 1 error response, 2 usage, 3 engine not running. A reader that closes stdout
 //! early (`ctl list-actions | head`, EPIPE) is a normal early exit: 0, no panic (dot-4uzgol.47).
 
@@ -27,7 +33,7 @@ struct Parsed {
 fn usage(msg: &str) -> Result<Parsed, String> {
     let names: Vec<&str> = SPECS.iter().map(|s| s.0).collect();
     Err(format!(
-        "ctl: {msg}\nusage: oats-meetings-rs ctl [--json] [--runtime-dir D] <action words> [params]\nactions: {}",
+        "ctl: {msg}\nusage: oats-meetings-rs ctl [--json] [--runtime-dir D] <action words> [params]\nparams: positional, --name value, name=value, or a JSON object; -- ends named forms\nactions: {}",
         names.join(" ")
     ))
 }
@@ -73,6 +79,23 @@ fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
 }
 
+/// `name=value` with a snake_case `name`: the shape of a named parameter word.
+fn named_word(w: &str) -> Option<(&str, &str)> {
+    let (k, v) = w.split_once('=')?;
+    let ident = k.starts_with(|c: char| c.is_ascii_lowercase())
+        && k.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    ident.then_some((k, v))
+}
+
+/// The raw text a named parameter carries to `typed_value`; JSON strings lose their quotes.
+fn raw_of(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
 fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut json = false;
     let mut runtime_dir = None;
@@ -85,10 +108,17 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     let mut words: Vec<String> = vec![];
     let mut flags: Vec<(String, String)> = vec![];
     let mut topics: Vec<String> = vec![];
+    // Index into `words` from which words are literal positionals (`--`).
+    let mut literal_from = None;
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
         match a {
+            "--" => {
+                literal_from = Some(words.len());
+                words.extend(args[i + 1..].iter().cloned());
+                break;
+            }
             "--json" => json = true,
             "--runtime-dir" | "--socket" | "--count" | "--timeout-ms" | "--topic" => {
                 i += 1;
@@ -102,6 +132,13 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                     "--timeout-ms" => timeout_ms = v.parse().unwrap_or(timeout_ms),
                     _ => topics.push(v.clone()),
                 }
+            }
+            f if f.starts_with("--") && f.contains('=') => {
+                let (k, v) = f
+                    .trim_start_matches("--")
+                    .split_once('=')
+                    .unwrap_or_default();
+                flags.push((k.to_string(), v.to_string()));
             }
             f if f.starts_with("--") && is_bool_flag(f.trim_start_matches("--")) => {
                 let v = match args.get(i + 1).map(String::as_str) {
@@ -132,10 +169,35 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     };
     let wire = words[..n].join("-");
     let names = action::param_names(&wire);
+    let literal_from = literal_from.unwrap_or(words.len()).max(n);
+    let mut positional: Vec<&String> = vec![];
+    for w in &words[n..literal_from] {
+        if w.starts_with('{') {
+            let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(w) else {
+                return usage(&format!(
+                    "'{w}' is not a JSON object of parameters (put literal values after --)"
+                ));
+            };
+            flags.extend(obj.iter().map(|(k, v)| (k.clone(), raw_of(v))));
+        } else if let Some((k, v)) = named_word(w) {
+            if !names.contains(&k) {
+                return usage(&format!(
+                    "action '{wire}' has no parameter '{k}' (put literal values after --)"
+                ));
+            }
+            flags.push((k.to_string(), v.to_string()));
+        } else {
+            positional.push(w);
+        }
+    }
+    positional.extend(&words[literal_from..]);
     let mut params = Map::new();
     for (k, v) in flags {
         if !names.contains(&k.as_str()) {
             return usage(&format!("action '{wire}' has no parameter '{k}'"));
+        }
+        if params.contains_key(&k) {
+            return usage(&format!("parameter '{k}' given twice"));
         }
         params.insert(k.clone(), typed_value(&wire, &k, &v));
     }
@@ -145,7 +207,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         .filter(|p| !params.contains_key(*p))
         .collect();
     let mut free = free_names.into_iter();
-    for w in &words[n..] {
+    for w in positional {
         let Some(p) = free.next() else {
             return usage(&format!("too many arguments for '{wire}'"));
         };
@@ -342,5 +404,82 @@ mod tests {
         assert!(parse(&s(&["frobnicate"])).is_err());
         assert!(parse(&s(&["ping", "extra"])).is_err());
         assert!(parse(&s(&["config", "get", "--nope", "x"])).is_err());
+    }
+
+    #[test]
+    fn key_value_words_are_named_params() {
+        let p = parse(&s(&["session", "delete", "session=abc", "confirm=true"])).unwrap();
+        assert_eq!(p.params["session"], json!("abc"));
+        assert_eq!(p.params["confirm"], json!(true));
+        let p = parse(&s(&["config", "set", "value=true", "app.menubar"])).unwrap();
+        assert_eq!(p.params["key"], json!("app.menubar"));
+        assert_eq!(p.params["value"], json!(true));
+        let p = parse(&s(&["session", "delete", "--session=abc"])).unwrap();
+        assert_eq!(p.params["session"], json!("abc"));
+        // A dotted key is not a parameter name: still a positional value.
+        let p = parse(&s(&["config", "get", "a.b=c"])).unwrap();
+        assert_eq!(p.params["key"], json!("a.b=c"));
+    }
+
+    #[test]
+    fn json_object_word_is_named_params() {
+        let p = parse(&s(&[
+            "session",
+            "delete",
+            r#"{"session":"abc","confirm":true}"#,
+        ]))
+        .unwrap();
+        assert_eq!(p.params["session"], json!("abc"));
+        assert_eq!(p.params["confirm"], json!(true));
+        let p = parse(&s(&["session", "get", r#"{"session":42}"#])).unwrap();
+        assert_eq!(p.params["session"], json!("42"));
+    }
+
+    #[test]
+    fn unknown_named_forms_are_rejected() {
+        let e = parse(&s(&["session", "get", "nope=abc"])).err().unwrap();
+        assert!(e.contains("no parameter 'nope'"), "{e}");
+        assert!(e.contains("usage:"), "{e}");
+        assert!(parse(&s(&["session", "get", r#"{"nope":"abc"}"#])).is_err());
+        assert!(parse(&s(&["session", "get", "{not json"])).is_err());
+        assert!(parse(&s(&["session", "get", "[1]"])).is_ok());
+        assert!(parse(&s(&["session", "get", "abc", "session=def"])).is_err());
+        assert!(parse(&s(&["session", "get", "session=a", "--session", "b"])).is_err());
+    }
+
+    #[test]
+    fn double_dash_makes_words_literal() {
+        let p = parse(&s(&["config", "set", "k", "--", "x=y"])).unwrap();
+        assert_eq!(p.params["key"], json!("k"));
+        assert_eq!(p.params["value"], json!("x=y"));
+        let p = parse(&s(&["session", "get", "--", r#"{"session":"abc"}"#])).unwrap();
+        assert_eq!(p.params["session"], json!(r#"{"session":"abc"}"#));
+    }
+
+    #[test]
+    fn rejected_params_exit_2_before_connecting() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path().to_string_lossy().into_owned();
+        let mut out = vec![];
+        let code = run_to(
+            &s(&["--runtime-dir", &d, "session", "get", "nope=abc"]),
+            &|_| None,
+            &mut out,
+        );
+        assert_eq!(code, 2);
+        let code = run_to(
+            &s(&["--runtime-dir", &d, "session", "get", "{\"nope\":1}"]),
+            &|_| None,
+            &mut out,
+        );
+        assert_eq!(code, 2);
+        assert!(out.is_empty());
+        // A well-formed named param parses, then fails only on the missing engine.
+        let code = run_to(
+            &s(&["--runtime-dir", &d, "session", "get", "session=abc"]),
+            &|_| None,
+            &mut out,
+        );
+        assert_eq!(code, 3);
     }
 }
