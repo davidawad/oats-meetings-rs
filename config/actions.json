@@ -343,14 +343,39 @@
       "status": "implemented"
     },
     {
-      "doc": "Download the selected stt.local.model (whisper, SHA-256 pinned) into the models directory. Returns at once with the download state (progress: stt-status and model-download events); wait=true blocks until it is done.",
+      "doc": "Download a whisper model (default: the selected stt.local.model; SHA-256 pinned) into the models directory. Returns at once with the download state (progress: stt-status, stt-model-list and model-download events); wait=true blocks until it is done.",
       "effect": "write",
       "name": "stt-model-fetch",
       "params": [
         {
+          "name": "model",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
           "name": "wait",
           "required": false,
           "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "The downloadable whisper models: which are present in the models directory, which is selected, and any download in progress.",
+      "effect": "read",
+      "name": "stt-model-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Delete a downloaded whisper model file from the models directory (not while it downloads).",
+      "effect": "write",
+      "name": "stt-model-delete",
+      "params": [
+        {
+          "name": "model",
+          "required": true,
+          "type": "String"
         }
       ],
       "status": "implemented"

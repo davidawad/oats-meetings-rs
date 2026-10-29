@@ -140,6 +140,8 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "config-resolved",
     "stt-status",
     "stt-model-fetch",
+    "stt-model-list",
+    "stt-model-delete",
     "ics-list",
     "devices-list",
     "notes-get",

@@ -106,6 +106,8 @@ pub struct Settings {
     pub engine: SttEngine,
     pub model: String,
     pub model_file: PathBuf,
+    /// Where downloaded models live (`stt.local.models_dir`, else `<data>/models`).
+    pub models_dir: PathBuf,
     /// `stt.local.model_path` is set: the file is the user's to provide.
     pub explicit_model_path: bool,
     pub model_url: String,
@@ -175,6 +177,7 @@ impl Settings {
             engine: c.local.engine,
             model: model.to_string(),
             model_file,
+            models_dir,
             explicit_model_path: !c.local.model_path.trim().is_empty(),
             model_url: c.local.model_url.trim().to_string(),
             auto_download: c.local.auto_download,
@@ -666,8 +669,14 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 now,
             )
         }
-        Action::SttModelFetch { wait } => {
+        Action::SttModelList {} => Ok(models::list(&s)),
+        Action::SttModelDelete { model } => models::delete(&s, model, Some(&*engine.bus)),
+        Action::SttModelFetch { model, wait } => {
             let wait = wait.unwrap_or(false);
+            let s = match model {
+                Some(m) => models::for_model(&s, m)?,
+                None => s,
+            };
             if !cfg!(feature = "whisper") {
                 return Err(ConfigError::new(
                     "backend_unavailable",

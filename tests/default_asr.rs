@@ -90,7 +90,7 @@ fn recording_without_a_model_says_so_at_start_and_at_stop_and_keeps_the_audio() 
 fn a_failed_download_is_visible_and_leaves_no_file() {
     let (url, _srv) = serve(b"definitely not a model");
     let r = rig(false, &url);
-    let e = r.engine.dispatch(&Action::SttModelFetch { wait: Some(true) }).unwrap_err();
+    let e = r.engine.dispatch(&Action::SttModelFetch { model: None, wait: Some(true) }).unwrap_err();
     assert_eq!(e.code, "model_checksum_mismatch");
     let s = status(&r);
     assert!(!r.dir.path().join("models/ggml-base.en.bin").exists());
@@ -117,12 +117,12 @@ fn the_first_recording_starts_the_download_and_tells_the_user() {
 fn fetch_without_wait_returns_at_once_and_a_present_model_is_left_alone() {
     let (url, _srv) = serve(b"definitely not a model");
     let r = rig(false, &url);
-    let v = r.engine.dispatch(&Action::SttModelFetch { wait: None }).unwrap();
+    let v = r.engine.dispatch(&Action::SttModelFetch { model: None, wait: None }).unwrap();
     assert_eq!(v["state"], "downloading");
     wait("the download to settle", || status(&r)["local"]["download"]["state"] == "failed");
     std::fs::create_dir_all(r.dir.path().join("models")).unwrap();
     std::fs::write(r.dir.path().join("models/ggml-base.en.bin"), b"x").unwrap();
-    let v = r.engine.dispatch(&Action::SttModelFetch { wait: Some(true) }).unwrap();
+    let v = r.engine.dispatch(&Action::SttModelFetch { model: None, wait: Some(true) }).unwrap();
     assert_eq!(v["state"], "present");
     assert_eq!(status(&r)["problem"], Value::Null);
 }

@@ -809,9 +809,11 @@ impl Engine {
                 }
                 Ok(v)
             }
-            Action::SttTranscribe { .. } | Action::SttModelFetch { .. } | Action::SttStatus {} => {
-                crate::stt::dispatch(self, a)
-            }
+            Action::SttTranscribe { .. }
+            | Action::SttModelFetch { .. }
+            | Action::SttModelList {}
+            | Action::SttModelDelete { .. }
+            | Action::SttStatus {} => crate::stt::dispatch(self, a),
             Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
                 crate::secrets::dispatch(self, a)
             }
