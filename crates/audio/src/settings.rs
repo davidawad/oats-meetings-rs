@@ -103,7 +103,10 @@ impl AudioSettings {
 
 #[cfg(test)]
 pub(crate) fn test_settings() -> AudioSettings {
-    AudioSettings::new(Timing { open_timeout: Duration::from_secs(15), poll: Duration::from_millis(25) })
+    AudioSettings::new(Timing {
+        open_timeout: Duration::from_secs(15),
+        poll: Duration::from_millis(25),
+    })
 }
 
 #[cfg(test)]
@@ -118,7 +121,10 @@ mod tests {
         for l in LAYOUTS {
             Layout::parse(l).unwrap();
         }
-        assert_eq!(BackendChoice::parse("alsa").unwrap_err().code, "invalid_value");
+        assert_eq!(
+            BackendChoice::parse("alsa").unwrap_err().code,
+            "invalid_value"
+        );
         assert_eq!(Layout::parse("quad").unwrap_err().code, "invalid_value");
         assert_eq!(Layout::Split.channels(), 2);
         assert_eq!(Layout::Mix.channels(), 1);

@@ -527,6 +527,160 @@ impl Store {
     }
 }
 
+/// Sessions in the OS trash: what `delete` with `sessions.delete_mode = "trash"` moved there.
+/// Listing, restoring and purging the trash needs the Freedesktop trash (Linux) or the Windows
+/// recycle bin; macOS gives no API for it without Full Disk Access, so there it is `unsupported`.
+impl Store {
+    /// Trashed sessions whose original folder is this store, newest first.
+    pub fn trash_list(&self) -> Result<Value> {
+        let items: Vec<Value> = trashed(&self.root)?
+            .iter()
+            .map(|t| {
+                json!({
+                    "id": t.name.to_string_lossy(),
+                    "deleted_at": deleted_at(t.time_deleted),
+                    "original_path": t.original_path().display().to_string(),
+                })
+            })
+            .collect();
+        Ok(json!({"root": self.root.display().to_string(), "count": items.len(), "trash": items}))
+    }
+
+    /// Put a trashed session back (the most recently trashed copy). Fails when the id is live.
+    pub fn trash_restore(&self, id: &str) -> Result<Value> {
+        check_id(id, self.max_id)?;
+        if self.root.join(id).exists() {
+            return Err(ConfigError::new(
+                "conflict",
+                format!("session '{id}' already exists; delete or rename it first"),
+            ));
+        }
+        let item = trashed(&self.root)?
+            .into_iter()
+            .find(|t| t.name.to_string_lossy() == id)
+            .ok_or_else(|| {
+                ConfigError::new("not_found", format!("no session '{id}' in the trash"))
+            })?;
+        os_trash::restore(vec![item])
+            .map_err(|e| ConfigError::new("trash_failed", format!("restore {id}: {e}")))?;
+        Ok(json!({"id": id, "restored": true}))
+    }
+
+    /// Delete trashed sessions for good: one id, or every session of this store. Callers enforce
+    /// the `--confirm` policy. Returns the purged ids.
+    pub fn trash_empty(&self, id: Option<&str>) -> Result<Value> {
+        if let Some(id) = id {
+            check_id(id, self.max_id)?;
+        }
+        let items: Vec<_> = trashed(&self.root)?
+            .into_iter()
+            .filter(|t| id.is_none_or(|id| t.name.to_string_lossy() == id))
+            .collect();
+        if let (Some(id), true) = (id, items.is_empty()) {
+            return Err(ConfigError::new(
+                "not_found",
+                format!("no session '{id}' in the trash"),
+            ));
+        }
+        let ids: Vec<String> = items
+            .iter()
+            .map(|t| t.name.to_string_lossy().into_owned())
+            .collect();
+        if !items.is_empty() {
+            os_trash::purge(items)
+                .map_err(|e| ConfigError::new("trash_failed", format!("empty trash: {e}")))?;
+        }
+        Ok(json!({"purged": ids, "count": ids.len()}))
+    }
+}
+
+fn deleted_at(secs: i64) -> Value {
+    chrono::DateTime::from_timestamp(secs, 0)
+        .map(|t| json!(t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)))
+        .unwrap_or(Value::Null)
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    a == b || canon(a) == canon(b)
+}
+
+/// OS trash entries that came from `root`, newest first.
+fn trashed(root: &Path) -> Result<Vec<trash::TrashItem>> {
+    if !os_trash::SUPPORTED {
+        return Err(ConfigError::new(
+            "unsupported",
+            "listing the OS trash is not available on this OS; use the Finder (sessions.delete_mode = \"trash\")",
+        ));
+    }
+    let mut items: Vec<_> = os_trash::list()
+        .map_err(|e| ConfigError::new("trash_failed", format!("list trash: {e}")))?
+        .into_iter()
+        .filter(|t| same_dir(&t.original_parent, root))
+        .collect();
+    items.sort_by(|a, b| {
+        b.time_deleted
+            .cmp(&a.time_deleted)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Ok(items)
+}
+
+#[cfg(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+mod os_trash {
+    use trash::{os_limited, Error, TrashItem};
+
+    pub const SUPPORTED: bool = true;
+
+    pub fn list() -> std::result::Result<Vec<TrashItem>, Error> {
+        os_limited::list()
+    }
+    pub fn restore(items: Vec<TrashItem>) -> std::result::Result<(), Error> {
+        os_limited::restore_all(items)
+    }
+    pub fn purge(items: Vec<TrashItem>) -> std::result::Result<(), Error> {
+        os_limited::purge_all(items)
+    }
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+)))]
+mod os_trash {
+    use trash::{Error, TrashItem};
+
+    pub const SUPPORTED: bool = false;
+
+    fn unsupported() -> Error {
+        Error::Unknown {
+            description: "this OS gives no trash listing API (unsupported)".into(),
+        }
+    }
+    pub fn list() -> std::result::Result<Vec<TrashItem>, Error> {
+        Err(unsupported())
+    }
+    pub fn restore(_: Vec<TrashItem>) -> std::result::Result<(), Error> {
+        Err(unsupported())
+    }
+    pub fn purge(_: Vec<TrashItem>) -> std::result::Result<(), Error> {
+        Err(unsupported())
+    }
+}
+
 /// Move `path` to the OS trash. On macOS use NSFileManager: the crate's default (Finder via
 /// AppleScript) is slow and raises an Automation permission prompt.
 #[cfg(target_os = "macos")]

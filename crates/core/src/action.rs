@@ -77,6 +77,9 @@ actions! {
     SessionRename, "session-rename", "Rename (retitle) a session.", "implemented", "write", { session: String, name: String };
     SessionTag, "session-tag", "Add a tag to a session, or remove it with remove=true.", "implemented", "write", { session: String, tag: String, remove: Option<bool> };
     SessionDelete, "session-delete", "Delete a session; needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: String, confirm: Option<bool> };
+    TrashList, "trash-list", "Sessions in the OS trash (moved there by session-delete with sessions.delete_mode=trash), newest first. Linux and Windows; macOS says unsupported.", "implemented", "read", {};
+    TrashRestore, "trash-restore", "Restore a trashed session to the session store.", "implemented", "write", { session: String };
+    TrashEmpty, "trash-empty", "Delete trashed sessions for good (one session, or all of them); needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: Option<String>, confirm: Option<bool> };
     TranscriptGet, "transcript-get", "A session transcript (final, else live).", "implemented", "read", { session: String };
     TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
     NotesGenerate, "notes-generate", "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.", "implemented", "write", { session: String, template: String, dry_run: Option<bool> };

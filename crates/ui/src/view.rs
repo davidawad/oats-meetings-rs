@@ -31,6 +31,8 @@ const OK_GREEN: u32 = 0xa6e3a1;
 pub struct MainWindow {
     pub(crate) engine: Arc<Engine>,
     pub state: State,
+    /// Trash tab listing (`views::trash`), reloaded with the session list.
+    pub(crate) trash: views::trash::Trash,
     /// Keyboard focus for the settings text editor; created on first render.
     pub(crate) focus: Option<FocusHandle>,
     live_scroll: ScrollHandle,
@@ -41,9 +43,12 @@ impl MainWindow {
         let mut state = State::default();
         state.refresh(&engine);
         state.sync_rec(&engine);
+        let mut trash = views::trash::Trash::default();
+        trash.load(&engine);
         Self {
             engine,
             state,
+            trash,
             focus: None,
             live_scroll: ScrollHandle::new(),
         }
@@ -173,6 +178,7 @@ impl MainWindow {
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.state.refresh(&self.engine);
+        self.trash.load(&self.engine);
         cx.notify();
     }
 
@@ -191,6 +197,9 @@ impl MainWindow {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.state.tab = t;
                     this.state.cancel_edit();
+                    if t == Tab::Trash {
+                        this.trash.load(&this.engine);
+                    }
                     cx.notify();
                 }))
         }))

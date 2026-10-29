@@ -25,9 +25,15 @@ pub fn decode_f32le(carry: &mut Vec<u8>, bytes: &[u8], out: &mut Vec<f32>) {
     carry.drain(..whole);
 }
 
-pub fn spawn(mut cmd: Command, mut on_samples: OnSamples, timing: crate::settings::Timing) -> Result<Box<dyn Capture>> {
+pub fn spawn(
+    mut cmd: Command,
+    mut on_samples: OnSamples,
+    timing: crate::settings::Timing,
+) -> Result<Box<dyn Capture>> {
     let name = cmd.get_program().to_string_lossy().into_owned();
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             AudioError::new("tool_missing", format!("{name} not found on PATH"))
@@ -77,10 +83,16 @@ pub fn spawn(mut cmd: Command, mut on_samples: OnSamples, timing: crate::setting
                 Some(st) if !timed_out || exited.is_some() => format!("exited at once ({st})"),
                 _ => format!("delivered no audio within {:?}", timing.open_timeout),
             };
-            return Err(AudioError::new("capture_failed", format!("{name} {why}: {}", err.trim())));
+            return Err(AudioError::new(
+                "capture_failed",
+                format!("{name} {why}: {}", err.trim()),
+            ));
         }
     }
-    Ok(Box::new(ProcCapture { child, reader: Some(reader) }))
+    Ok(Box::new(ProcCapture {
+        child,
+        reader: Some(reader),
+    }))
 }
 
 impl Capture for ProcCapture {
@@ -122,9 +134,17 @@ mod tests {
     #[test]
     fn missing_tool_and_instant_exit_are_errors() {
         let t = timing(15_000, 25);
-        let e = spawn(Command::new("definitely-not-a-real-tool-oats"), Box::new(|_| {}), t).err().unwrap();
+        let e = spawn(
+            Command::new("definitely-not-a-real-tool-oats"),
+            Box::new(|_| {}),
+            t,
+        )
+        .err()
+        .unwrap();
         assert_eq!(e.code, "tool_missing");
-        let e = spawn(Command::new("false"), Box::new(|_| {}), t).err().unwrap();
+        let e = spawn(Command::new("false"), Box::new(|_| {}), t)
+            .err()
+            .unwrap();
         assert_eq!(e.code, "capture_failed");
     }
 
@@ -144,11 +164,20 @@ mod tests {
             let mut cmd = Command::new("sleep");
             cmd.arg("30");
             let t0 = std::time::Instant::now();
-            let e = spawn(cmd, Box::new(|_| {}), timing(open_ms, 10)).err().unwrap();
+            let e = spawn(cmd, Box::new(|_| {}), timing(open_ms, 10))
+                .err()
+                .unwrap();
             let took = t0.elapsed().as_millis() as u64;
             assert_eq!(e.code, "capture_failed");
-            assert!(e.message.contains("delivered no audio within"), "{}", e.message);
-            assert!(took >= open_ms && took < open_ms + 1500, "open {open_ms}ms took {took}ms");
+            assert!(
+                e.message.contains("delivered no audio within"),
+                "{}",
+                e.message
+            );
+            assert!(
+                took >= open_ms && took < open_ms + 1500,
+                "open {open_ms}ms took {took}ms"
+            );
         }
     }
 }

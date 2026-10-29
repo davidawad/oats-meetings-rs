@@ -19,7 +19,12 @@ pub struct FakeBackend {
 
 impl Default for FakeBackend {
     fn default() -> Self {
-        Self { loopback_hz: 440.0, mic_hz: 880.0, mic2_hz: 1320.0, amplitude: 0.5 }
+        Self {
+            loopback_hz: 440.0,
+            mic_hz: 880.0,
+            mic2_hz: 1320.0,
+            amplitude: 0.5,
+        }
     }
 }
 
@@ -49,18 +54,38 @@ impl CaptureBackend for FakeBackend {
     }
 
     fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
-        let d = |id: &str, kind| DeviceInfo { id: id.into(), name: id.into(), kind, backend: "fake", default: true };
+        let d = |id: &str, kind| DeviceInfo {
+            id: id.into(),
+            name: id.into(),
+            kind,
+            backend: "fake",
+            default: true,
+        };
         let mut mic2 = d("fake.mic2", DeviceKind::Mic);
         mic2.default = false;
-        Ok(vec![d("fake.monitor", DeviceKind::Loopback), d("fake.mic", DeviceKind::Mic), mic2])
+        Ok(vec![
+            d("fake.monitor", DeviceKind::Loopback),
+            d("fake.mic", DeviceKind::Mic),
+            mic2,
+        ])
     }
 
-    fn open(&self, kind: DeviceKind, device: &str, mut on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+    fn open(
+        &self,
+        kind: DeviceKind,
+        device: &str,
+        mut on_samples: OnSamples,
+    ) -> Result<Box<dyn Capture>> {
         let hz = match (kind, device) {
             (DeviceKind::Loopback, "" | "fake.monitor") => self.loopback_hz,
             (DeviceKind::Mic, "" | "fake.mic") => self.mic_hz,
             (DeviceKind::Mic, "fake.mic2") => self.mic2_hz,
-            _ => return Err(AudioError::new("device_not_found", format!("device '{device}' not found"))),
+            _ => {
+                return Err(AudioError::new(
+                    "device_not_found",
+                    format!("device '{device}' not found"),
+                ))
+            }
         };
         let amp = self.amplitude;
         let stop = Arc::new(AtomicBool::new(false));

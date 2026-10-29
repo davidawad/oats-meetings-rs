@@ -23,7 +23,9 @@ fn parts(secs: i64) -> (i64, u32, u32, i64, i64, i64) {
 }
 
 pub fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 /// `2026-10-27T23:05:39Z`

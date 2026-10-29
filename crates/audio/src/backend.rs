@@ -36,7 +36,12 @@ pub trait CaptureBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn list_devices(&self) -> Result<Vec<DeviceInfo>>;
     /// `device` empty means the default for `kind`.
-    fn open(&self, kind: DeviceKind, device: &str, on_samples: OnSamples) -> Result<Box<dyn Capture>>;
+    fn open(
+        &self,
+        kind: DeviceKind,
+        device: &str,
+        on_samples: OnSamples,
+    ) -> Result<Box<dyn Capture>>;
 }
 
 pub(crate) fn tool_works(tool: &str, arg: &str) -> bool {
@@ -49,7 +54,12 @@ pub(crate) fn tool_works(tool: &str, arg: &str) -> bool {
 
 /// Choose the backend for `settings.backend` on this OS.
 pub fn select(settings: &AudioSettings) -> Result<Box<dyn CaptureBackend>> {
-    select_for(settings.backend, std::env::consts::OS, &tool_works, settings.timing)
+    select_for(
+        settings.backend,
+        std::env::consts::OS,
+        &tool_works,
+        settings.timing,
+    )
 }
 
 /// Pure on the OS name and a tool probe, so every (choice, os) pair is testable anywhere.
@@ -70,7 +80,9 @@ pub fn select_for(
         (BackendChoice::ScreenCaptureKit, _) => unsupported("screencapturekit"),
         (BackendChoice::Pulse, "linux") => Ok(Box::new(crate::pulse::PulseBackend::new(timing))),
         (BackendChoice::Pulse, _) => unsupported("pulse"),
-        (BackendChoice::Pipewire, "linux") => Ok(Box::new(crate::pipewire::PipewireBackend::new(timing))),
+        (BackendChoice::Pipewire, "linux") => {
+            Ok(Box::new(crate::pipewire::PipewireBackend::new(timing)))
+        }
         (BackendChoice::Pipewire, _) => unsupported("pipewire"),
         (BackendChoice::Cpal, "windows") => cpal_boxed(timing),
         (BackendChoice::Cpal, _) => unsupported("cpal"),
@@ -98,7 +110,10 @@ fn macos_boxed(timing: Timing) -> Result<Box<dyn CaptureBackend>> {
 
 #[cfg(not(target_os = "macos"))]
 fn macos_boxed(_timing: Timing) -> Result<Box<dyn CaptureBackend>> {
-    Err(AudioError::new("unsupported_platform", "screencapturekit backend is built on macOS only"))
+    Err(AudioError::new(
+        "unsupported_platform",
+        "screencapturekit backend is built on macOS only",
+    ))
 }
 
 #[cfg(windows)]
@@ -108,7 +123,10 @@ fn cpal_boxed(timing: Timing) -> Result<Box<dyn CaptureBackend>> {
 
 #[cfg(not(windows))]
 fn cpal_boxed(_timing: Timing) -> Result<Box<dyn CaptureBackend>> {
-    Err(AudioError::new("unsupported_platform", "cpal (WASAPI) backend is built on Windows only"))
+    Err(AudioError::new(
+        "unsupported_platform",
+        "cpal (WASAPI) backend is built on Windows only",
+    ))
 }
 
 #[cfg(test)]
@@ -116,7 +134,10 @@ mod tests {
     use super::*;
 
     fn t() -> Timing {
-        Timing { open_timeout: std::time::Duration::from_secs(1), poll: std::time::Duration::from_millis(5) }
+        Timing {
+            open_timeout: std::time::Duration::from_secs(1),
+            poll: std::time::Duration::from_millis(5),
+        }
     }
 
     fn name(r: Result<Box<dyn CaptureBackend>>) -> String {
@@ -143,26 +164,83 @@ mod tests {
                 let _ = select_for(c, os, &all, t());
             }
         }
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &all, t())), "pulse");
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &only_pw, t())), "pipewire");
-        assert_eq!(name(select_for(BackendChoice::Auto, "linux", &none, t())), "tool_missing");
-        assert_eq!(name(select_for(BackendChoice::Cpal, "linux", &all, t())), "unsupported_platform");
+        assert_eq!(
+            name(select_for(BackendChoice::Auto, "linux", &all, t())),
+            "pulse"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Auto, "linux", &only_pw, t())),
+            "pipewire"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Auto, "linux", &none, t())),
+            "tool_missing"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Cpal, "linux", &all, t())),
+            "unsupported_platform"
+        );
         #[cfg(windows)]
-        assert_eq!(name(select_for(BackendChoice::Auto, "windows", &none, t())), "cpal");
-        assert_eq!(name(select_for(BackendChoice::Pulse, "linux", &none, t())), "pulse");
-        assert_eq!(name(select_for(BackendChoice::Pipewire, "linux", &none, t())), "pipewire");
+        assert_eq!(
+            name(select_for(BackendChoice::Auto, "windows", &none, t())),
+            "cpal"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Pulse, "linux", &none, t())),
+            "pulse"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Pipewire, "linux", &none, t())),
+            "pipewire"
+        );
         #[cfg(windows)]
-        assert_eq!(name(select_for(BackendChoice::Cpal, "windows", &none, t())), "cpal");
-        assert_eq!(name(select_for(BackendChoice::Pulse, "windows", &all, t())), "unsupported_platform");
-        assert_eq!(name(select_for(BackendChoice::Pipewire, "windows", &all, t())), "unsupported_platform");
-        let mac = if cfg!(target_os = "macos") { "screencapturekit" } else { "unsupported_platform" };
-        assert_eq!(name(select_for(BackendChoice::Auto, "macos", &all, t())), mac);
-        assert_eq!(name(select_for(BackendChoice::ScreenCaptureKit, "macos", &none, t())), mac);
-        assert_eq!(name(select_for(BackendChoice::Pulse, "macos", &all, t())), "unsupported_platform");
-        assert_eq!(name(select_for(BackendChoice::Pipewire, "macos", &all, t())), "unsupported_platform");
-        assert_eq!(name(select_for(BackendChoice::Cpal, "macos", &all, t())), "unsupported_platform");
+        assert_eq!(
+            name(select_for(BackendChoice::Cpal, "windows", &none, t())),
+            "cpal"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Pulse, "windows", &all, t())),
+            "unsupported_platform"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Pipewire, "windows", &all, t())),
+            "unsupported_platform"
+        );
+        let mac = if cfg!(target_os = "macos") {
+            "screencapturekit"
+        } else {
+            "unsupported_platform"
+        };
+        assert_eq!(
+            name(select_for(BackendChoice::Auto, "macos", &all, t())),
+            mac
+        );
+        assert_eq!(
+            name(select_for(
+                BackendChoice::ScreenCaptureKit,
+                "macos",
+                &none,
+                t()
+            )),
+            mac
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Pulse, "macos", &all, t())),
+            "unsupported_platform"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Pipewire, "macos", &all, t())),
+            "unsupported_platform"
+        );
+        assert_eq!(
+            name(select_for(BackendChoice::Cpal, "macos", &all, t())),
+            "unsupported_platform"
+        );
         for os in ["linux", "windows"] {
-            assert_eq!(name(select_for(BackendChoice::ScreenCaptureKit, os, &all, t())), "unsupported_platform");
+            assert_eq!(
+                name(select_for(BackendChoice::ScreenCaptureKit, os, &all, t())),
+                "unsupported_platform"
+            );
         }
     }
 }

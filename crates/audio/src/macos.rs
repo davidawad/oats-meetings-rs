@@ -52,7 +52,10 @@ pub trait Permissions: Send + Sync {
 pub fn permission_denied(which: Permission) -> AudioError {
     AudioError::new(
         "permission_denied",
-        format!("macOS denied {which:?} access to this app; allow it in System Settings > {}", which.pane()),
+        format!(
+            "macOS denied {which:?} access to this app; allow it in System Settings > {}",
+            which.pane()
+        ),
     )
 }
 
@@ -75,7 +78,13 @@ pub fn classify_sck_failure(code: Option<i32>, message: &str) -> AudioError {
         || m.contains("tcc")
         || m.contains("permission");
     if denied {
-        AudioError::new("permission_denied", format!("ScreenCaptureKit: {message}; allow {}", Permission::ScreenRecording.pane()))
+        AudioError::new(
+            "permission_denied",
+            format!(
+                "ScreenCaptureKit: {message}; allow {}",
+                Permission::ScreenRecording.pane()
+            ),
+        )
     } else {
         AudioError::new("capture_failed", format!("ScreenCaptureKit: {message}"))
     }
@@ -96,8 +105,14 @@ pub fn decode_mono(bufs: &[(u32, &[u8])], fmt: PcmFormat) -> Vec<f32> {
         .iter()
         .map(|(ch, bytes)| {
             let samples: Vec<f32> = match fmt {
-                PcmFormat::F32 => bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect(),
-                PcmFormat::I16 => bytes.chunks_exact(2).map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0).collect(),
+                PcmFormat::F32 => bytes
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                    .collect(),
+                PcmFormat::I16 => bytes
+                    .chunks_exact(2)
+                    .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
+                    .collect(),
             };
             ((*ch).max(1) as usize, samples)
         })
@@ -108,7 +123,10 @@ pub fn decode_mono(bufs: &[(u32, &[u8])], fmt: PcmFormat) -> Vec<f32> {
     let channels: usize = planes.iter().map(|(ch, _)| ch).sum();
     (0..frames)
         .map(|i| {
-            let sum: f32 = planes.iter().map(|(ch, s)| s[i * ch..(i + 1) * ch].iter().sum::<f32>()).sum();
+            let sum: f32 = planes
+                .iter()
+                .map(|(ch, s)| s[i * ch..(i + 1) * ch].iter().sum::<f32>())
+                .sum();
             sum / channels as f32
         })
         .collect()
@@ -149,13 +167,20 @@ impl CaptureBackend for MacosBackend {
         Ok(v)
     }
 
-    fn open(&self, kind: DeviceKind, device: &str, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+    fn open(
+        &self,
+        kind: DeviceKind,
+        device: &str,
+        on_samples: OnSamples,
+    ) -> Result<Box<dyn Capture>> {
         match kind {
             DeviceKind::Loopback => {
                 if !device.is_empty() && device != SYSTEM_DEVICE {
                     return Err(AudioError::new(
                         "device_not_found",
-                        format!("no system-audio device '{device}'; macOS has only '{SYSTEM_DEVICE}'"),
+                        format!(
+                            "no system-audio device '{device}'; macOS has only '{SYSTEM_DEVICE}'"
+                        ),
                     ));
                 }
                 require(self.perms.as_ref(), Permission::ScreenRecording)?;
@@ -189,7 +214,10 @@ mod native {
 
     /// The real backend: SCK system audio, cpal mic, TCC state from the system.
     pub fn native(timing: Timing) -> MacosBackend {
-        MacosBackend::with(Arc::new(SystemPermissions), Arc::new(NativeSources { timing }))
+        MacosBackend::with(
+            Arc::new(SystemPermissions),
+            Arc::new(NativeSources { timing }),
+        )
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -230,7 +258,7 @@ mod native {
             return PermissionState::NotDetermined;
         };
         let media = NSString::from_str("soun"); // AVMediaTypeAudio
-        // AVAuthorizationStatus: 0 notDetermined, 1 restricted, 2 denied, 3 authorized.
+                                                // AVAuthorizationStatus: 0 notDetermined, 1 restricted, 2 denied, 3 authorized.
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: &*media] };
         match status {
             3 => PermissionState::Granted,
@@ -290,7 +318,10 @@ mod native {
                     stop.store(true, Ordering::SeqCst);
                     Err(AudioError::new(
                         "capture_failed",
-                        format!("ScreenCaptureKit did not start within {:?}", timing.open_timeout),
+                        format!(
+                            "ScreenCaptureKit did not start within {:?}",
+                            timing.open_timeout
+                        ),
                     ))
                 }
             }
@@ -337,16 +368,26 @@ mod native {
             if !matches!(ty, SCStreamOutputType::Audio) {
                 return;
             }
-            let Ok(list) = sample.audio_buffer_list() else { return };
+            let Ok(list) = sample.audio_buffer_list() else {
+                return;
+            };
             let desc = sample.format_description();
-            let rate = desc.as_ref().and_then(|d| d.audio_sample_rate()).unwrap_or(f64::from(SAMPLE_RATE)) as u32;
+            let rate = desc
+                .as_ref()
+                .and_then(|d| d.audio_sample_rate())
+                .unwrap_or(f64::from(SAMPLE_RATE)) as u32;
             let fmt = match desc.as_ref() {
-                Some(d) if !d.audio_is_float() && d.audio_bits_per_channel() == Some(16) => PcmFormat::I16,
+                Some(d) if !d.audio_is_float() && d.audio_bits_per_channel() == Some(16) => {
+                    PcmFormat::I16
+                }
                 _ => PcmFormat::F32,
             };
-            let bufs: Vec<(u32, &[u8])> = list.iter().map(|b| (b.number_channels, b.data())).collect();
+            let bufs: Vec<(u32, &[u8])> =
+                list.iter().map(|b| (b.number_channels, b.data())).collect();
             let mono = decode_mono(&bufs, fmt);
-            let Ok(mut st) = self.state.lock() else { return };
+            let Ok(mut st) = self.state.lock() else {
+                return;
+            };
             let st = &mut *st;
             if st.resampler.as_ref().map(|(r, _)| *r) != Some(rate) {
                 st.resampler = Some((rate, Resampler::new(rate, SAMPLE_RATE)));
@@ -373,12 +414,17 @@ mod native {
 
     fn start_stream(on_samples: OnSamples) -> Result<SCStream> {
         let content = SCShareableContent::get().map_err(|e| sck_err(&e))?;
-        let display = content
-            .displays()
-            .into_iter()
-            .next()
-            .ok_or_else(|| AudioError::new("device_not_found", "ScreenCaptureKit lists no display to attach audio capture to"))?;
-        let filter = SCContentFilter::create().with_display(&display).with_excluding_windows(&[]).build().map_err(|e| sck_err(&e))?;
+        let display = content.displays().into_iter().next().ok_or_else(|| {
+            AudioError::new(
+                "device_not_found",
+                "ScreenCaptureKit lists no display to attach audio capture to",
+            )
+        })?;
+        let filter = SCContentFilter::create()
+            .with_display(&display)
+            .with_excluding_windows(&[])
+            .build()
+            .map_err(|e| sck_err(&e))?;
         let config = SCStreamConfiguration::new()
             .with_width(2)
             .with_height(2)
@@ -386,9 +432,20 @@ mod native {
             .with_sample_rate(i32::try_from(SAMPLE_RATE).unwrap_or(48_000))
             .with_channel_count(2);
         let mut stream = SCStream::new(&filter, &config).map_err(|e| sck_err(&e))?;
-        stream.add_output_handler(Sink, SCStreamOutputType::Screen).map_err(|e| sck_err(&e))?;
-        let handler = Handler { state: Mutex::new(AudioOut { on_samples, resampler: None, mono: vec![], out: vec![] }) };
-        stream.add_output_handler(handler, SCStreamOutputType::Audio).map_err(|e| sck_err(&e))?;
+        stream
+            .add_output_handler(Sink, SCStreamOutputType::Screen)
+            .map_err(|e| sck_err(&e))?;
+        let handler = Handler {
+            state: Mutex::new(AudioOut {
+                on_samples,
+                resampler: None,
+                mono: vec![],
+                out: vec![],
+            }),
+        };
+        stream
+            .add_output_handler(handler, SCStreamOutputType::Audio)
+            .map_err(|e| sck_err(&e))?;
         stream.start_capture().map_err(|e| sck_err(&e))?;
         Ok(stream)
     }
@@ -425,7 +482,13 @@ mod tests {
 
     impl Sources for FakeSources {
         fn list_mics(&self) -> Result<Vec<DeviceInfo>> {
-            Ok(vec![DeviceInfo { id: "in:Mac mic".into(), name: "Mac mic".into(), kind: DeviceKind::Mic, backend: NAME, default: true }])
+            Ok(vec![DeviceInfo {
+                id: "in:Mac mic".into(),
+                name: "Mac mic".into(),
+                kind: DeviceKind::Mic,
+                backend: NAME,
+                default: true,
+            }])
         }
         fn open_system(&self, _: OnSamples) -> Result<Box<dyn Capture>> {
             self.opened.fetch_add(1, Ordering::SeqCst);
@@ -439,7 +502,10 @@ mod tests {
 
     fn backend(mic: PermissionState, screen: PermissionState) -> (MacosBackend, Arc<FakeSources>) {
         let s = Arc::new(FakeSources::default());
-        (MacosBackend::with(Arc::new(FakePerms { mic, screen }), s.clone()), s)
+        (
+            MacosBackend::with(Arc::new(FakePerms { mic, screen }), s.clone()),
+            s,
+        )
     }
 
     fn code(r: Result<Box<dyn Capture>>) -> &'static str {
@@ -453,8 +519,14 @@ mod tests {
     fn denied_permission_is_structured_and_opens_nothing() {
         use PermissionState::*;
         let (b, s) = backend(Denied, Denied);
-        assert_eq!(code(b.open(DeviceKind::Mic, "", Box::new(|_| {}))), "permission_denied");
-        assert_eq!(code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))), "permission_denied");
+        assert_eq!(
+            code(b.open(DeviceKind::Mic, "", Box::new(|_| {}))),
+            "permission_denied"
+        );
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "permission_denied"
+        );
         assert_eq!(s.opened.load(Ordering::SeqCst), 0);
         let e = b.open(DeviceKind::Mic, "", Box::new(|_| {})).err().unwrap();
         assert!(e.message.contains("Microphone"), "{e}");
@@ -465,7 +537,10 @@ mod tests {
         use PermissionState::*;
         let (b, s) = backend(Granted, NotDetermined);
         assert_eq!(code(b.open(DeviceKind::Mic, "", Box::new(|_| {}))), "ok");
-        assert_eq!(code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))), "ok");
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "ok"
+        );
         assert_eq!(s.opened.load(Ordering::SeqCst), 2);
     }
 
@@ -473,17 +548,29 @@ mod tests {
     fn each_source_is_gated_by_its_own_permission() {
         use PermissionState::*;
         let (b, _) = backend(Denied, Granted);
-        assert_eq!(code(b.open(DeviceKind::Mic, "", Box::new(|_| {}))), "permission_denied");
-        assert_eq!(code(b.open(DeviceKind::Loopback, SYSTEM_DEVICE, Box::new(|_| {}))), "ok");
+        assert_eq!(
+            code(b.open(DeviceKind::Mic, "", Box::new(|_| {}))),
+            "permission_denied"
+        );
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, SYSTEM_DEVICE, Box::new(|_| {}))),
+            "ok"
+        );
         let (b, _) = backend(Granted, Denied);
         assert_eq!(code(b.open(DeviceKind::Mic, "x", Box::new(|_| {}))), "ok");
-        assert_eq!(code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))), "permission_denied");
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "permission_denied"
+        );
     }
 
     #[test]
     fn unknown_system_device_is_not_found_before_any_permission_check() {
         let (b, _) = backend(PermissionState::Denied, PermissionState::Denied);
-        assert_eq!(code(b.open(DeviceKind::Loopback, "other", Box::new(|_| {}))), "device_not_found");
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "other", Box::new(|_| {}))),
+            "device_not_found"
+        );
     }
 
     #[test]
@@ -499,10 +586,22 @@ mod tests {
 
     #[test]
     fn sck_failures_classify() {
-        assert_eq!(classify_sck_failure(Some(-3801), "x").code, "permission_denied");
-        assert_eq!(classify_sck_failure(Some(-3803), "x").code, "permission_denied");
-        assert_eq!(classify_sck_failure(None, "The user declined TCCs for application").code, "permission_denied");
-        assert_eq!(classify_sck_failure(Some(-3811), "internal").code, "capture_failed");
+        assert_eq!(
+            classify_sck_failure(Some(-3801), "x").code,
+            "permission_denied"
+        );
+        assert_eq!(
+            classify_sck_failure(Some(-3803), "x").code,
+            "permission_denied"
+        );
+        assert_eq!(
+            classify_sck_failure(None, "The user declined TCCs for application").code,
+            "permission_denied"
+        );
+        assert_eq!(
+            classify_sck_failure(Some(-3811), "internal").code,
+            "capture_failed"
+        );
         assert_eq!(classify_sck_failure(None, "boom").code, "capture_failed");
     }
 
@@ -527,7 +626,10 @@ mod tests {
 
     #[test]
     fn i16_scales_and_ragged_cuts() {
-        let b: Vec<u8> = [16384i16, -16384].iter().flat_map(|x| x.to_le_bytes()).collect();
+        let b: Vec<u8> = [16384i16, -16384]
+            .iter()
+            .flat_map(|x| x.to_le_bytes())
+            .collect();
         assert_eq!(decode_mono(&[(1, &b)], PcmFormat::I16), vec![0.5, -0.5]);
         let (a, c) = (f32s(&[1.0, 1.0, 1.0]), f32s(&[1.0]));
         assert_eq!(decode_mono(&[(1, &a), (1, &c)], PcmFormat::F32).len(), 1);

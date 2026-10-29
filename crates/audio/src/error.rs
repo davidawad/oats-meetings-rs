@@ -9,7 +9,10 @@ pub struct AudioError {
 
 impl AudioError {
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 }
 

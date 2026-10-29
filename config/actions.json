@@ -471,6 +471,44 @@
       "status": "implemented"
     },
     {
+      "doc": "Sessions in the OS trash (moved there by session-delete with sessions.delete_mode=trash), newest first. Linux and Windows; macOS says unsupported.",
+      "effect": "read",
+      "name": "trash-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Restore a trashed session to the session store.",
+      "effect": "write",
+      "name": "trash-restore",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Delete trashed sessions for good (one session, or all of them); needs confirm=true while sessions.confirm_delete is on.",
+      "effect": "write",
+      "name": "trash-empty",
+      "params": [
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "confirm",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "A session transcript (final, else live).",
       "effect": "read",
       "name": "transcript-get",

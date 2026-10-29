@@ -18,7 +18,13 @@ impl WavWriter {
     pub fn create(path: &Path, channels: u16, rate: u32) -> Result<Self> {
         let p = path.display().to_string();
         let f = File::create(path).map_err(|e| io_err(&p, e))?;
-        let mut me = Self { w: BufWriter::new(f), channels, rate, frames: 0, path: p };
+        let mut me = Self {
+            w: BufWriter::new(f),
+            channels,
+            rate,
+            frames: 0,
+            path: p,
+        };
         me.header(0).map_err(|e| io_err(&me.path, e))?;
         Ok(me)
     }
@@ -100,7 +106,10 @@ impl WavData {
         // Measured over the audible span: a source that lagged (CPU starvation) is zero-padded
         // at the tail on stop, and that padding is not part of the tone.
         let end = s.iter().rposition(|x| *x != 0.0).map_or(0, |i| i + 1);
-        let ups = s[..end].windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count();
+        let ups = s[..end]
+            .windows(2)
+            .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
+            .count();
         ups as f64 / (end as f64 / f64::from(self.rate.max(1))).max(1e-9)
     }
 }
@@ -108,7 +117,9 @@ impl WavData {
 pub fn read(path: &Path) -> Result<WavData> {
     let p = path.display().to_string();
     let mut b = vec![];
-    File::open(path).and_then(|mut f| f.read_to_end(&mut b)).map_err(|e| io_err(&p, e))?;
+    File::open(path)
+        .and_then(|mut f| f.read_to_end(&mut b))
+        .map_err(|e| io_err(&p, e))?;
     let bad = |m: &str| AudioError::new("invalid_wav", format!("{p}: {m}"));
     if b.len() < 44 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
         return Err(bad("not a RIFF/WAVE file"));
@@ -139,7 +150,11 @@ pub fn read(path: &Path) -> Result<WavData> {
             samples[c].push(f32::from(i16::from_le_bytes([s[0], s[1]])) / 32768.0);
         }
     }
-    Ok(WavData { channels, rate, samples })
+    Ok(WavData {
+        channels,
+        rate,
+        samples,
+    })
 }
 
 #[cfg(test)]

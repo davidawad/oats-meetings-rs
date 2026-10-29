@@ -40,7 +40,10 @@ pub fn parse_dump(json: &str) -> Result<Vec<DeviceInfo>> {
                 _ => None,
             })
     };
-    let (dsink, dsource) = (default_of("default.audio.sink"), default_of("default.audio.source"));
+    let (dsink, dsource) = (
+        default_of("default.audio.sink"),
+        default_of("default.audio.source"),
+    );
     Ok(objs
         .iter()
         .filter(|o| o["type"] == "PipeWire:Interface:Node")
@@ -49,12 +52,21 @@ pub fn parse_dump(json: &str) -> Result<Vec<DeviceInfo>> {
             let name = p["node.name"].as_str()?.to_string();
             let class = p["media.class"].as_str()?;
             let (kind, default) = match class {
-                "Audio/Sink" => (DeviceKind::Loopback, dsink.as_deref() == Some(name.as_str())),
+                "Audio/Sink" => (
+                    DeviceKind::Loopback,
+                    dsink.as_deref() == Some(name.as_str()),
+                ),
                 "Audio/Source" => (DeviceKind::Mic, dsource.as_deref() == Some(name.as_str())),
                 _ => return None,
             };
             let desc = p["node.description"].as_str().unwrap_or(&name).to_string();
-            Some(DeviceInfo { id: name, name: desc, kind, backend: "pipewire", default })
+            Some(DeviceInfo {
+                id: name,
+                name: desc,
+                kind,
+                backend: "pipewire",
+                default,
+            })
         })
         .collect())
 }
@@ -67,7 +79,10 @@ impl CaptureBackend for PipewireBackend {
     fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
         let out = Command::new("pw-dump").output().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                AudioError::new("tool_missing", "pw-dump not found on PATH (install pipewire)")
+                AudioError::new(
+                    "tool_missing",
+                    "pw-dump not found on PATH (install pipewire)",
+                )
             } else {
                 io_err("pw-dump", e)
             }
@@ -81,13 +96,29 @@ impl CaptureBackend for PipewireBackend {
         parse_dump(&String::from_utf8_lossy(&out.stdout))
     }
 
-    fn open(&self, kind: DeviceKind, device: &str, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+    fn open(
+        &self,
+        kind: DeviceKind,
+        device: &str,
+        on_samples: OnSamples,
+    ) -> Result<Box<dyn Capture>> {
         let devices = self.list_devices()?;
         let id = pulse::resolve(&devices, kind, device)?;
         // Whether the node is a sink decides monitor capture, whatever kind the caller asked for.
-        let is_sink = devices.iter().any(|d| d.id == id && d.kind == DeviceKind::Loopback);
+        let is_sink = devices
+            .iter()
+            .any(|d| d.id == id && d.kind == DeviceKind::Loopback);
         let mut cmd = Command::new("pw-record");
-        cmd.args(["--target", &id, "--rate", &SAMPLE_RATE.to_string(), "--channels", "1", "--format", "f32"]);
+        cmd.args([
+            "--target",
+            &id,
+            "--rate",
+            &SAMPLE_RATE.to_string(),
+            "--channels",
+            "1",
+            "--format",
+            "f32",
+        ]);
         if is_sink {
             cmd.args(["-P", "stream.capture.sink=true"]);
         }
@@ -114,8 +145,14 @@ mod tests {
     fn parses_nodes_and_defaults() {
         let d = parse_dump(DUMP).unwrap();
         assert_eq!(d.len(), 2);
-        assert_eq!((d[0].kind, d[0].default, d[0].name.as_str()), (DeviceKind::Loopback, true, "Oats Sink"));
-        assert_eq!((d[1].kind, d[1].default, d[1].id.as_str()), (DeviceKind::Mic, true, "usb_mic"));
+        assert_eq!(
+            (d[0].kind, d[0].default, d[0].name.as_str()),
+            (DeviceKind::Loopback, true, "Oats Sink")
+        );
+        assert_eq!(
+            (d[1].kind, d[1].default, d[1].id.as_str()),
+            (DeviceKind::Mic, true, "usb_mic")
+        );
         assert!(parse_dump("[").is_err());
         assert!(parse_dump("{}").is_err());
     }

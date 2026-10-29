@@ -23,7 +23,10 @@ impl PulseBackend {
 fn pactl(args: &[&str]) -> Result<String> {
     let out = Command::new("pactl").args(args).output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            AudioError::new("tool_missing", "pactl not found on PATH (install pulseaudio-utils or pipewire-pulse)")
+            AudioError::new(
+                "tool_missing",
+                "pactl not found on PATH (install pulseaudio-utils or pipewire-pulse)",
+            )
         } else {
             io_err("pactl", e)
         }
@@ -31,7 +34,11 @@ fn pactl(args: &[&str]) -> Result<String> {
     if !out.status.success() {
         return Err(AudioError::new(
             "backend_unavailable",
-            format!("pactl {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()),
+            format!(
+                "pactl {}: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -50,7 +57,8 @@ pub fn parse_sources(json: &str) -> Result<Vec<(String, String, bool)>> {
             let name = s["name"].as_str()?.to_string();
             let desc = s["description"].as_str().unwrap_or(&name).to_string();
             let monitor = name.ends_with(".monitor")
-                || !s["monitor_of_sink"].is_null() && s["monitor_of_sink"] != Value::String("n/a".into())
+                || !s["monitor_of_sink"].is_null()
+                    && s["monitor_of_sink"] != Value::String("n/a".into())
                 || s["properties"]["device.class"] == "monitor";
             Some((name, desc, monitor))
         })
@@ -65,19 +73,28 @@ pub fn build_devices(
 ) -> Vec<DeviceInfo> {
     let want_monitor = format!("{default_sink}.monitor");
     let first_mic = sources.iter().find(|s| !s.2).map(|s| s.0.as_str());
-    let default_mic = if !default_source.is_empty() && sources.iter().any(|s| s.0 == default_source && !s.2) {
-        Some(default_source)
-    } else {
-        first_mic
-    };
+    let default_mic =
+        if !default_source.is_empty() && sources.iter().any(|s| s.0 == default_source && !s.2) {
+            Some(default_source)
+        } else {
+            first_mic
+        };
     sources
         .iter()
         .map(|(name, desc, monitor)| DeviceInfo {
             id: name.clone(),
             name: desc.clone(),
-            kind: if *monitor { DeviceKind::Loopback } else { DeviceKind::Mic },
+            kind: if *monitor {
+                DeviceKind::Loopback
+            } else {
+                DeviceKind::Mic
+            },
             backend: "pulse",
-            default: if *monitor { *name == want_monitor } else { Some(name.as_str()) == default_mic },
+            default: if *monitor {
+                *name == want_monitor
+            } else {
+                Some(name.as_str()) == default_mic
+            },
         })
         .collect()
 }
@@ -88,7 +105,10 @@ pub(crate) fn resolve(devices: &[DeviceInfo], kind: DeviceKind, wanted: &str) ->
         let mut v: Vec<&DeviceInfo> = of_kind.collect();
         v.sort_by_key(|d| !d.default);
         return v.first().map(|d| d.id.clone()).ok_or_else(|| {
-            AudioError::new("device_not_found", format!("no {kind:?} device found (see `ctl devices list`)"))
+            AudioError::new(
+                "device_not_found",
+                format!("no {kind:?} device found (see `ctl devices list`)"),
+            )
         });
     }
     // An explicit id or name may name any source of either kind (a monitor can serve as a mic).
@@ -96,7 +116,12 @@ pub(crate) fn resolve(devices: &[DeviceInfo], kind: DeviceKind, wanted: &str) ->
         .iter()
         .find(|d| d.id == wanted || d.name == wanted)
         .map(|d| d.id.clone())
-        .ok_or_else(|| AudioError::new("device_not_found", format!("device '{wanted}' not found (see `ctl devices list`)")))
+        .ok_or_else(|| {
+            AudioError::new(
+                "device_not_found",
+                format!("device '{wanted}' not found (see `ctl devices list`)"),
+            )
+        })
 }
 
 impl CaptureBackend for PulseBackend {
@@ -111,7 +136,12 @@ impl CaptureBackend for PulseBackend {
         Ok(build_devices(&sources, &sink, &source))
     }
 
-    fn open(&self, kind: DeviceKind, device: &str, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+    fn open(
+        &self,
+        kind: DeviceKind,
+        device: &str,
+        on_samples: OnSamples,
+    ) -> Result<Box<dyn Capture>> {
         let id = resolve(&self.list_devices()?, kind, device)?;
         let mut cmd = Command::new("parec");
         cmd.arg(format!("--device={id}"))
@@ -153,18 +183,41 @@ mod tests {
     fn default_mic_skips_a_monitor_default_source() {
         let s = parse_sources(FIXTURE).unwrap();
         let d = build_devices(&s, "oats_sink", "oats_sink.monitor");
-        assert!(d.iter().find(|x| x.id == "alsa_input.usb-mic").unwrap().default);
+        assert!(
+            d.iter()
+                .find(|x| x.id == "alsa_input.usb-mic")
+                .unwrap()
+                .default
+        );
     }
 
     #[test]
     fn resolve_default_explicit_and_missing() {
         let s = parse_sources(FIXTURE).unwrap();
         let d = build_devices(&s, "oats_sink", "alsa_input.usb-mic");
-        assert_eq!(resolve(&d, DeviceKind::Loopback, "").unwrap(), "oats_sink.monitor");
-        assert_eq!(resolve(&d, DeviceKind::Mic, "").unwrap(), "alsa_input.usb-mic");
-        assert_eq!(resolve(&d, DeviceKind::Mic, "oats_sink.monitor").unwrap(), "oats_sink.monitor");
-        assert_eq!(resolve(&d, DeviceKind::Mic, "USB Mic").unwrap(), "alsa_input.usb-mic");
-        assert_eq!(resolve(&d, DeviceKind::Mic, "zzz").unwrap_err().code, "device_not_found");
-        assert_eq!(resolve(&[], DeviceKind::Loopback, "").unwrap_err().code, "device_not_found");
+        assert_eq!(
+            resolve(&d, DeviceKind::Loopback, "").unwrap(),
+            "oats_sink.monitor"
+        );
+        assert_eq!(
+            resolve(&d, DeviceKind::Mic, "").unwrap(),
+            "alsa_input.usb-mic"
+        );
+        assert_eq!(
+            resolve(&d, DeviceKind::Mic, "oats_sink.monitor").unwrap(),
+            "oats_sink.monitor"
+        );
+        assert_eq!(
+            resolve(&d, DeviceKind::Mic, "USB Mic").unwrap(),
+            "alsa_input.usb-mic"
+        );
+        assert_eq!(
+            resolve(&d, DeviceKind::Mic, "zzz").unwrap_err().code,
+            "device_not_found"
+        );
+        assert_eq!(
+            resolve(&[], DeviceKind::Loopback, "").unwrap_err().code,
+            "device_not_found"
+        );
     }
 }

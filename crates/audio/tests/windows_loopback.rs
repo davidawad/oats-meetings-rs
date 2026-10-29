@@ -12,7 +12,10 @@ use oats_audio::cpal_backend::CpalBackend;
 use oats_audio::{recorder, wav, AudioSettings, CaptureBackend, DeviceKind};
 
 fn timing() -> oats_audio::Timing {
-    oats_audio::Timing { open_timeout: Duration::from_secs(15), poll: Duration::from_millis(25) }
+    oats_audio::Timing {
+        open_timeout: Duration::from_secs(15),
+        poll: Duration::from_millis(25),
+    }
 }
 
 fn live() -> bool {
@@ -29,7 +32,11 @@ fn devices_list_has_a_loopback_source() {
         return;
     }
     let devs = CpalBackend::new(timing()).list_devices().unwrap();
-    assert!(devs.iter().any(|d| d.kind == DeviceKind::Loopback && d.default), "{devs:?}");
+    assert!(
+        devs.iter()
+            .any(|d| d.kind == DeviceKind::Loopback && d.default),
+        "{devs:?}"
+    );
 }
 
 #[test]
@@ -39,7 +46,9 @@ fn five_second_wasapi_loopback_is_non_silent() {
     }
     // Tone on the default output device.
     let host = cpal::default_host();
-    let out = host.default_output_device().expect("no default output device");
+    let out = host
+        .default_output_device()
+        .expect("no default output device");
     let cfg = out.default_output_config().unwrap();
     let (rate, channels) = (cfg.sample_rate().0 as f32, usize::from(cfg.channels()));
     let mut n = 0u64;
@@ -64,13 +73,21 @@ fn five_second_wasapi_loopback_is_non_silent() {
     std::fs::create_dir_all(&d).unwrap();
     let path = d.join("loopback.wav");
     // System audio only: a Windows VM may have no microphone.
-    let st = AudioSettings { mic_enabled: false, ..AudioSettings::new(timing()) };
+    let st = AudioSettings {
+        mic_enabled: false,
+        ..AudioSettings::new(timing())
+    };
     let rec = recorder::start(&CpalBackend::new(timing()), &st, &path, None).unwrap();
     std::thread::sleep(Duration::from_secs(5));
     let s = rec.stop().unwrap();
     drop(stream);
     let w = wav::read(&path).unwrap();
-    eprintln!("windows_loopback: {:.2}s rms {:.3} tone {:.0} Hz", w.duration_secs(), w.rms(1), w.tone_hz(1));
+    eprintln!(
+        "windows_loopback: {:.2}s rms {:.3} tone {:.0} Hz",
+        w.duration_secs(),
+        w.rms(1),
+        w.tone_hz(1)
+    );
     assert!(s.duration_ms >= 4000, "duration {}", s.duration_ms);
     assert!(w.rms(1) > 0.05, "loopback rms {}", w.rms(1));
     assert!((w.tone_hz(1) - 440.0).abs() < 20.0, "tone {}", w.tone_hz(1));

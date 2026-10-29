@@ -718,6 +718,26 @@ impl Engine {
                 self.bus.publish("session-deleted", json!({"id": session}));
                 Ok(v)
             }
+            Action::TrashList {} => self.store().trash_list(),
+            Action::TrashRestore { session } => {
+                let v = self.store().trash_restore(session)?;
+                self.session_event(session, "restore");
+                Ok(v)
+            }
+            Action::TrashEmpty { session, confirm } => {
+                if self.snapshot().config.sessions.confirm_delete && *confirm != Some(true) {
+                    return Err(ConfigError::new(
+                        "confirmation_required",
+                        "emptying the trash needs confirm=true (--confirm); sessions.confirm_delete is on",
+                    ));
+                }
+                let v = self.store().trash_empty(session.as_deref())?;
+                for id in v["purged"].as_array().into_iter().flatten() {
+                    self.bus
+                        .publish("session-deleted", json!({"id": id, "change": "purge"}));
+                }
+                Ok(v)
+            }
             Action::NotesGenerate {
                 session,
                 template,

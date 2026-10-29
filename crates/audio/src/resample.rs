@@ -9,7 +9,11 @@ pub struct Resampler {
 
 impl Resampler {
     pub fn new(from_rate: u32, to_rate: u32) -> Self {
-        Self { step: f64::from(from_rate) / f64::from(to_rate), pos: 0.0, prev: None }
+        Self {
+            step: f64::from(from_rate) / f64::from(to_rate),
+            pos: 0.0,
+            prev: None,
+        }
     }
 
     /// Push mono samples; append resampled output to `out`.
@@ -48,7 +52,11 @@ impl Decimate3 {
     pub fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
         self.carry.extend_from_slice(input);
         let whole = self.carry.len() / 3 * 3;
-        out.extend(self.carry[..whole].chunks_exact(3).map(|g| (g[0] + g[1] + g[2]) / 3.0));
+        out.extend(
+            self.carry[..whole]
+                .chunks_exact(3)
+                .map(|g| (g[0] + g[1] + g[2]) / 3.0),
+        );
         self.carry.drain(..whole);
     }
 }
@@ -80,15 +88,26 @@ mod tests {
 
     #[test]
     fn length_scales_with_rate_ratio_across_chunks() {
-        for (from, to) in [(44100u32, 48000u32), (16000, 48000), (96000, 48000), (48000, 44100)] {
+        for (from, to) in [
+            (44100u32, 48000u32),
+            (16000, 48000),
+            (96000, 48000),
+            (48000, 44100),
+        ] {
             let mut r = Resampler::new(from, to);
             let mut out = vec![];
-            let src: Vec<f32> = (0..from as usize).map(|i| (i as f32 * 0.01).sin()).collect();
+            let src: Vec<f32> = (0..from as usize)
+                .map(|i| (i as f32 * 0.01).sin())
+                .collect();
             for chunk in src.chunks(441) {
                 r.push(chunk, &mut out);
             }
             let want = to as i64;
-            assert!((out.len() as i64 - want).abs() <= 4, "{from}->{to}: {} vs {want}", out.len());
+            assert!(
+                (out.len() as i64 - want).abs() <= 4,
+                "{from}->{to}: {} vs {want}",
+                out.len()
+            );
         }
     }
 

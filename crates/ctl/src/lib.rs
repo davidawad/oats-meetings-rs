@@ -41,9 +41,10 @@ fn param_type(wire: &str, param: &str) -> &'static str {
 
 /// Parameters of type Option<bool> across all actions: `--confirm` alone means true.
 fn is_bool_flag(name: &str) -> bool {
-    SPECS
-        .iter()
-        .any(|s| s.4.iter().any(|p| p.0 == name && p.1.replace(' ', "") == "Option<bool>"))
+    SPECS.iter().any(|s| {
+        s.4.iter()
+            .any(|p| p.0 == name && p.1.replace(' ', "") == "Option<bool>")
+    })
 }
 
 /// The engine is a different process with a different cwd: send absolute paths.
@@ -58,7 +59,9 @@ fn absolutize(raw: &str) -> String {
 }
 
 fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
-    if (wire == "session-import" && param == "from") || (wire == "stt-transcribe" && param == "path") {
+    if (wire == "session-import" && param == "from")
+        || (wire == "stt-transcribe" && param == "path")
+    {
         return Value::String(absolutize(raw));
     }
     let t = param_type(wire, param).replace(' ', "");
@@ -119,7 +122,10 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         }
         i += 1;
     }
-    let Some(n) = (1..=words.len()).rev().find(|n| action::exists(&words[..*n].join("-"))) else {
+    let Some(n) = (1..=words.len())
+        .rev()
+        .find(|n| action::exists(&words[..*n].join("-")))
+    else {
         return usage("unknown or missing action");
     };
     let wire = words[..n].join("-");
@@ -131,7 +137,11 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
         }
         params.insert(k.clone(), typed_value(&wire, &k, &v));
     }
-    let free_names: Vec<&str> = names.iter().copied().filter(|p| !params.contains_key(*p)).collect();
+    let free_names: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|p| !params.contains_key(*p))
+        .collect();
     let mut free = free_names.into_iter();
     for w in &words[n..] {
         let Some(p) = free.next() else {
@@ -142,7 +152,15 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
     if !topics.is_empty() {
         params.insert("topics".into(), json!(topics));
     }
-    Ok(Parsed { json, runtime_dir, socket, count, timeout_ms, action: wire, params })
+    Ok(Parsed {
+        json,
+        runtime_dir,
+        socket,
+        count,
+        timeout_ms,
+        action: wire,
+        params,
+    })
 }
 
 pub fn run(args: &[String]) -> i32 {
@@ -159,9 +177,17 @@ fn print_envelope(p: &Parsed, v: &Value) -> i32 {
             other => println!("{other}"),
         }
     } else {
-        eprintln!("error[{}]: {}", v["error"]["code"].as_str().unwrap_or("?"), v["error"]["message"].as_str().unwrap_or(""));
+        eprintln!(
+            "error[{}]: {}",
+            v["error"]["code"].as_str().unwrap_or("?"),
+            v["error"]["message"].as_str().unwrap_or("")
+        );
     }
-    if ok { 0 } else { 1 }
+    if ok {
+        0
+    } else {
+        1
+    }
 }
 
 pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
@@ -172,7 +198,10 @@ pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
             return 2;
         }
     };
-    let dir = p.runtime_dir.clone().unwrap_or_else(|| paths::runtime_dir(env));
+    let dir = p
+        .runtime_dir
+        .clone()
+        .unwrap_or_else(|| paths::runtime_dir(env));
     let connected = match &p.socket {
         Some(s) => Client::connect_socket(s),
         None => Client::connect(&dir),
@@ -181,7 +210,10 @@ pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
         Ok(c) => c,
         Err(e) => {
             if p.json {
-                println!("{}", json!({"ok": false, "error": {"code": e.code, "message": e.message}}));
+                println!(
+                    "{}",
+                    json!({"ok": false, "error": {"code": e.code, "message": e.message}})
+                );
             } else {
                 eprintln!("{e}");
             }

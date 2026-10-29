@@ -72,7 +72,14 @@ fn ms(frames: u64) -> u64 {
     frames * 1000 / u64::from(SAMPLE_RATE)
 }
 
-fn drain_into(w: &mut WavWriter, q: &mut Queues, sys: bool, mic: bool, layout: Layout, flush_all: bool) -> Result<()> {
+fn drain_into(
+    w: &mut WavWriter,
+    q: &mut Queues,
+    sys: bool,
+    mic: bool,
+    layout: Layout,
+    flush_all: bool,
+) -> Result<()> {
     let n = match (sys, mic) {
         (true, true) if flush_all => q.system.len().max(q.mic.len()),
         (true, true) => q.system.len().min(q.mic.len()),
@@ -82,8 +89,16 @@ fn drain_into(w: &mut WavWriter, q: &mut Queues, sys: bool, mic: bool, layout: L
     };
     let mut buf = Vec::with_capacity(n * 2);
     for _ in 0..n {
-        let s = if sys { q.system.pop_front().unwrap_or(0.0) } else { 0.0 };
-        let m = if mic { q.mic.pop_front().unwrap_or(0.0) } else { 0.0 };
+        let s = if sys {
+            q.system.pop_front().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let m = if mic {
+            q.mic.pop_front().unwrap_or(0.0)
+        } else {
+            0.0
+        };
         match layout {
             // Left = mic, right = system: the same convention `stt-transcribe` reads (left "you").
             Layout::Split => {
@@ -114,9 +129,14 @@ pub fn start(
         ));
     }
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| crate::error::io_err(&dir.display().to_string(), e))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| crate::error::io_err(&dir.display().to_string(), e))?;
     }
-    let (sys, mic, layout) = (settings.system_enabled, settings.mic_enabled, settings.layout);
+    let (sys, mic, layout) = (
+        settings.system_enabled,
+        settings.mic_enabled,
+        settings.layout,
+    );
     let shared = Arc::new(Shared {
         q: Mutex::new(Queues::default()),
         frames: AtomicU64::new(0),
@@ -139,7 +159,8 @@ pub fn start(
                 let mut q = sh.q.lock().expect("queues");
                 if is_sys {
                     q.system.extend(samples);
-                    sh.system_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
+                    sh.system_in
+                        .fetch_add(samples.len() as u64, Ordering::SeqCst);
                 } else {
                     q.mic.extend(samples);
                     sh.mic_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
@@ -194,7 +215,13 @@ pub fn start(
             mic_samples: sh.mic_in.load(Ordering::SeqCst),
         })
     });
-    Ok(Recording { shared, captures, writer: Some(writer), path: path.to_path_buf(), layout })
+    Ok(Recording {
+        shared,
+        captures,
+        writer: Some(writer),
+        path: path.to_path_buf(),
+        layout,
+    })
 }
 
 impl Recording {
@@ -248,9 +275,9 @@ impl Drop for Recording {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use crate::fake::FakeBackend;
     use crate::wav;
+    use std::time::Duration;
 
     fn record(settings: &AudioSettings, secs: f64) -> (Summary, wav::WavData) {
         let d = tempfile::tempdir().unwrap();
@@ -259,7 +286,11 @@ mod tests {
         // Wait for the audio itself (not wall time): poll until `secs` have been written.
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while r.duration_ms() < (secs * 1000.0) as u64 {
-            assert!(std::time::Instant::now() < deadline, "only {} ms written", r.duration_ms());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "only {} ms written",
+                r.duration_ms()
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         let s = r.stop().unwrap();
@@ -272,14 +303,25 @@ mod tests {
         let (s, d) = record(&crate::settings::test_settings(), 1.2);
         assert_eq!((d.channels, d.rate, s.channels), (2, 48000, 2));
         assert!(d.duration_secs() >= 1.2, "{}", d.duration_secs());
-        assert!((d.tone_hz(0) - 880.0).abs() < 25.0, "left (mic) {}", d.tone_hz(0));
-        assert!((d.tone_hz(1) - 440.0).abs() < 15.0, "right (system) {}", d.tone_hz(1));
+        assert!(
+            (d.tone_hz(0) - 880.0).abs() < 25.0,
+            "left (mic) {}",
+            d.tone_hz(0)
+        );
+        assert!(
+            (d.tone_hz(1) - 440.0).abs() < 15.0,
+            "right (system) {}",
+            d.tone_hz(1)
+        );
         assert!(d.rms(0) > 0.3 && d.rms(1) > 0.3);
     }
 
     #[test]
     fn mix_layout_is_one_channel() {
-        let st = AudioSettings { layout: Layout::Mix, ..crate::settings::test_settings() };
+        let st = AudioSettings {
+            layout: Layout::Mix,
+            ..crate::settings::test_settings()
+        };
         let (_, d) = record(&st, 0.6);
         assert_eq!(d.channels, 1);
         assert!(d.rms(0) > 0.3);
@@ -287,10 +329,19 @@ mod tests {
 
     #[test]
     fn disabled_sources_are_silent_channels() {
-        let st = AudioSettings { mic_enabled: false, ..crate::settings::test_settings() };
+        let st = AudioSettings {
+            mic_enabled: false,
+            ..crate::settings::test_settings()
+        };
         let (_, d) = record(&st, 0.6);
-        assert!(d.rms(1) > 0.3 && d.rms(0) == 0.0, "system only: right channel");
-        let st = AudioSettings { system_enabled: false, ..crate::settings::test_settings() };
+        assert!(
+            d.rms(1) > 0.3 && d.rms(0) == 0.0,
+            "system only: right channel"
+        );
+        let st = AudioSettings {
+            system_enabled: false,
+            ..crate::settings::test_settings()
+        };
         let (_, d) = record(&st, 0.6);
         assert!(d.rms(1) == 0.0 && d.rms(0) > 0.3, "mic only: left channel");
     }
@@ -299,9 +350,22 @@ mod tests {
     fn nothing_enabled_and_bad_device_are_errors() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
-        let st = AudioSettings { system_enabled: false, mic_enabled: false, ..crate::settings::test_settings() };
-        assert_eq!(start(&FakeBackend::default(), &st, &p, None).err().unwrap().code, "invalid_config");
-        let st = AudioSettings { mic_device: "nope".into(), ..crate::settings::test_settings() };
+        let st = AudioSettings {
+            system_enabled: false,
+            mic_enabled: false,
+            ..crate::settings::test_settings()
+        };
+        assert_eq!(
+            start(&FakeBackend::default(), &st, &p, None)
+                .err()
+                .unwrap()
+                .code,
+            "invalid_config"
+        );
+        let st = AudioSettings {
+            mic_device: "nope".into(),
+            ..crate::settings::test_settings()
+        };
         let e = start(&FakeBackend::default(), &st, &p, None).err().unwrap();
         assert_eq!(e.code, "device_not_found");
         assert!(e.message.starts_with("microphone:"));
@@ -311,13 +375,24 @@ mod tests {
     fn pause_drops_audio_and_duration_tracks_writes() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
-        let r = start(&FakeBackend::default(), &crate::settings::test_settings(), &p, None).unwrap();
+        let r = start(
+            &FakeBackend::default(),
+            &crate::settings::test_settings(),
+            &p,
+            None,
+        )
+        .unwrap();
         std::thread::sleep(Duration::from_millis(500));
         r.set_paused(true);
         std::thread::sleep(Duration::from_millis(100));
         let at_pause = r.duration_ms();
         std::thread::sleep(Duration::from_millis(600));
-        assert!(r.duration_ms() <= at_pause + 150, "{} vs {}", r.duration_ms(), at_pause);
+        assert!(
+            r.duration_ms() <= at_pause + 150,
+            "{} vs {}",
+            r.duration_ms(),
+            at_pause
+        );
         assert!(r.paused());
         r.set_paused(false);
         let s = r.stop().unwrap();
