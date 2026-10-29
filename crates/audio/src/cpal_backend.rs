@@ -173,7 +173,30 @@ mod imp {
                     format!("no cpal device for {kind:?} '{device}' (see `ctl devices list`)"),
                 ));
             };
-            let (name, is_output) = (info.name.clone(), *is_output);
+            self.spawn(info.name.clone(), *is_output, on_samples)
+        }
+    }
+
+    impl CpalBackend {
+        /// Open the input device `name` without enumerating first: the lookup and the config
+        /// probe both run inside the bounded open. macOS lists devices from the HAL
+        /// (`coreaudio_hal`), since cpal's enumeration creates an AudioUnit per device and hangs
+        /// without a Microphone grant; here, at record start, the TCC prompt is expected.
+        #[cfg(target_os = "macos")]
+        pub fn open_input_named(
+            &self,
+            name: &str,
+            on_samples: OnSamples,
+        ) -> Result<Box<dyn Capture>> {
+            self.spawn(name.to_string(), false, on_samples)
+        }
+
+        fn spawn(
+            &self,
+            name: String,
+            is_output: bool,
+            on_samples: OnSamples,
+        ) -> Result<Box<dyn Capture>> {
             let stop = Arc::new(AtomicBool::new(false));
             let flag = Arc::clone(&stop);
             let timing = self.timing;
@@ -185,6 +208,11 @@ mod imp {
                     let found = if is_output {
                         host.output_devices()
                             .map_err(|e| err("backend_unavailable", "cpal outputs", e))?
+                            .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                    } else if cfg!(target_os = "macos") {
+                        // `devices()`, not `input_devices()`: the latter probes every device.
+                        host.devices()
+                            .map_err(|e| err("backend_unavailable", "cpal devices", e))?
                             .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
                     } else {
                         host.input_devices()

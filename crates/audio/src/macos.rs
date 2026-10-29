@@ -1,5 +1,5 @@
 //! macOS capture (dot-4uzgol.6): system audio through ScreenCaptureKit, microphone through cpal
-//! (CoreAudio).
+//! (CoreAudio). Mics are listed from CoreAudio HAL properties (`coreaudio_hal`), not cpal.
 //!
 //! Why ScreenCaptureKit and not a CoreAudio process tap: SCK has a stable public API on macOS 13+
 //! (a process tap needs 14.2+), takes one `SCContentFilter` over a display with no per-process
@@ -207,6 +207,7 @@ mod native {
     use screencapturekit::prelude::*;
 
     use super::*;
+    use crate::coreaudio_hal::{self, SystemHal};
     use crate::cpal_backend::CpalBackend;
     use crate::resample::{downmix, Resampler};
     use crate::settings::Timing;
@@ -273,19 +274,13 @@ mod native {
 
     impl Sources for NativeSources {
         fn list_mics(&self) -> Result<Vec<DeviceInfo>> {
-            let all = CpalBackend::new(self.timing).list_devices()?;
-            Ok(all
-                .into_iter()
-                .filter(|d| d.kind == DeviceKind::Mic)
-                .map(|mut d| {
-                    d.backend = NAME;
-                    d
-                })
-                .collect())
+            // HAL properties only: no AudioUnit, so no Microphone grant and no hang (dot-4uzgol.59).
+            coreaudio_hal::mics(&SystemHal, NAME)
         }
 
         fn open_mic(&self, device: &str, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
-            CpalBackend::new(self.timing).open(DeviceKind::Mic, device, on_samples)
+            let name = coreaudio_hal::resolve_mic(&self.list_mics()?, device)?;
+            CpalBackend::new(self.timing).open_input_named(&name, on_samples)
         }
 
         fn open_system(&self, on_samples: OnSamples) -> Result<Box<dyn Capture>> {

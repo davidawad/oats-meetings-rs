@@ -250,6 +250,21 @@ const TRUE_CONSTANTS: &[(&str, &str, &str)] = &[
         "PROTOCOL",
         "control wire protocol version",
     ),
+    (
+        "crates/audio/src/coreaudio_hal.rs",
+        "SYSTEM_OBJECT",
+        "CoreAudio kAudioObjectSystemObject",
+    ),
+    (
+        "crates/audio/src/coreaudio_hal.rs",
+        "ELEMENT_MAIN",
+        "CoreAudio kAudioObjectPropertyElementMain",
+    ),
+    (
+        "crates/audio/src/coreaudio_hal.rs",
+        "UTF8",
+        "CoreFoundation kCFStringEncodingUTF8",
+    ),
     ("crates/ui/src/view.rs", "BG", "colour palette"),
     ("crates/ui/src/view.rs", "PANEL", "colour palette"),
     ("crates/ui/src/view.rs", "FG", "colour palette"),

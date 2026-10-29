@@ -7,6 +7,7 @@
 //! All backends deliver mono f32 at the recorder's sample rate through a callback.
 
 pub mod backend;
+pub mod coreaudio_hal;
 pub mod cpal_backend;
 pub mod error;
 pub mod fake;
