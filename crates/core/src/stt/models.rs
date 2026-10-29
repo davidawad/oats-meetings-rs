@@ -276,7 +276,13 @@ pub fn spawn(s: &Settings, bus: Option<std::sync::Arc<Bus>>) -> Result<Value> {
 fn known(model: &str) -> Result<&'static str> {
     pin(model).ok_or_else(|| {
         let names: Vec<&str> = PINS.iter().map(|p| p.0).collect();
-        ConfigError::new("invalid_value", format!("'{model}' is not a downloadable model ({})", names.join(", ")))
+        ConfigError::new(
+            "invalid_value",
+            format!(
+                "'{model}' is not a downloadable model ({})",
+                names.join(", ")
+            ),
+        )
     })
 }
 
@@ -301,7 +307,10 @@ pub fn list(s: &Settings) -> Value {
         .iter()
         .map(|(name, _)| {
             let file = file_in(s, name);
-            let bytes = std::fs::metadata(&file).ok().filter(|m| m.is_file()).map(|m| m.len());
+            let bytes = std::fs::metadata(&file)
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| m.len());
             json!({
                 "name": name, "path": file, "present": bytes.is_some(), "bytes": bytes,
                 "selected": *name == s.model,
@@ -325,12 +334,19 @@ pub fn delete(s: &Settings, model: &str, bus: Option<&Bus>) -> Result<Value> {
     known(model)?;
     let file = file_in(s, model);
     if is_downloading(&file) {
-        return Err(ConfigError::new("model_downloading", format!("the {model} model is downloading; wait for it to finish")));
+        return Err(ConfigError::new(
+            "model_downloading",
+            format!("the {model} model is downloading; wait for it to finish"),
+        ));
     }
     if !file.is_file() {
-        return Err(ConfigError::new("model_not_found", format!("{} is not downloaded", file.display())));
+        return Err(ConfigError::new(
+            "model_not_found",
+            format!("{} is not downloaded", file.display()),
+        ));
     }
-    std::fs::remove_file(&file).map_err(|e| ConfigError::new("io_error", format!("{}: {e}", file.display())))?;
+    std::fs::remove_file(&file)
+        .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", file.display())))?;
     table().0.lock().expect("model table").remove(&file);
     let v = json!({"model": model, "path": file, "state": "deleted"});
     if let Some(b) = bus {
@@ -451,24 +467,51 @@ mod tests {
     #[test]
     fn list_reports_presence_and_delete_removes_only_a_known_idle_file() {
         let dir = tempfile::tempdir().unwrap();
-        let s = settings(dir.path(), "http://127.0.0.1:9", &[("stt.local.model", json!("tiny.en"))]);
+        let s = settings(
+            dir.path(),
+            "http://127.0.0.1:9",
+            &[("stt.local.model", json!("tiny.en"))],
+        );
         let v = list(&s);
         assert_eq!(v["selected"], "tiny.en");
         assert_eq!(v["models"].as_array().unwrap().len(), PINS.len());
-        assert!(v["models"].as_array().unwrap().iter().all(|m| m["present"] == false));
+        assert!(v["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|m| m["present"] == false));
         std::fs::write(dir.path().join("ggml-small.bin"), b"abc").unwrap();
         let v = list(&s);
-        let small = v["models"].as_array().unwrap().iter().find(|m| m["name"] == "small").unwrap().clone();
-        assert_eq!((small["present"].as_bool(), small["bytes"].as_u64(), small["selected"].as_bool()), (Some(true), Some(3), Some(false)));
+        let small = v["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["name"] == "small")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (
+                small["present"].as_bool(),
+                small["bytes"].as_u64(),
+                small["selected"].as_bool()
+            ),
+            (Some(true), Some(3), Some(false))
+        );
         assert_eq!(delete(&s, "../x", None).unwrap_err().code, "invalid_value");
-        assert_eq!(delete(&s, "base", None).unwrap_err().code, "model_not_found");
+        assert_eq!(
+            delete(&s, "base", None).unwrap_err().code,
+            "model_not_found"
+        );
         let bus = Bus::default();
         let rx = bus.subscribe(vec!["model-download".into()]);
         assert_eq!(delete(&s, "small", Some(&bus)).unwrap()["state"], "deleted");
         assert!(!dir.path().join("ggml-small.bin").exists());
         assert!(rx.try_recv().unwrap().contains("deleted"));
         let t = for_model(&s, "base").unwrap();
-        assert_eq!((t.model.as_str(), t.model_file.clone()), ("base", dir.path().join("ggml-base.bin")));
+        assert_eq!(
+            (t.model.as_str(), t.model_file.clone()),
+            ("base", dir.path().join("ggml-base.bin"))
+        );
         assert_eq!(for_model(&s, "huge").unwrap_err().code, "invalid_value");
     }
 }
