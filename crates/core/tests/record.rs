@@ -729,13 +729,24 @@ fn a_pending_recording_still_running_when_the_model_arrives_is_transcribed_at_st
     present.store(true, std::sync::atomic::Ordering::SeqCst);
     // The download-finished pass skips the session that is still recording.
     assert_eq!(r.engine.transcribe_pending()["transcribed"], json!([]));
+    let rx = r.engine.bus.subscribe(vec!["session-saved".into()]);
     stop(&r);
-    wait_until("the stopped session to be transcribed", || {
-        meta(&r, "long")["utterance_count"].as_u64().unwrap_or(0) > 0
-    });
-    assert!(meta(&r, "long")["metadata"]
-        .get("transcribePending")
-        .is_none());
+    // The transcript lines land before the pending mark is dropped, so wait for the pass's own
+    // completion event rather than a non-empty transcript.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        let line = rx
+            .recv_timeout(left)
+            .expect("timed out waiting for the stopped session to be transcribed");
+        let ev: Value = serde_json::from_str(&line).unwrap();
+        if ev["data"] == json!({"id": "long", "change": "transcribed"}) {
+            break;
+        }
+    }
+    let m = meta(&r, "long");
+    assert!(m["utterance_count"].as_u64().unwrap_or(0) > 0, "{m}");
+    assert!(m["metadata"].get("transcribePending").is_none(), "{m}");
 }
 
 #[test]
