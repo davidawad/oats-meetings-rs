@@ -248,6 +248,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "ui.drive_wait",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: 5 * MIN },
+        default: Def::D(10 * SEC),
+        doc: "How long a ui-select, ui-state or ui-invoke call waits for the window to answer before failing with timeout.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "ui.record_controls",
         kind: Kind::Bool,
         default: Def::B(true),

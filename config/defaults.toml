@@ -233,6 +233,8 @@ threads = 4
 dir = ""
 
 [ui]
+# How long a ui-select, ui-state or ui-invoke call waits for the window to answer before failing with timeout.
+drive_wait = "10s"
 # The Live view scrolls to the newest line while a recording adds lines.
 live_follow = true
 # Most lines the Live view keeps for one recording; older lines drop first.

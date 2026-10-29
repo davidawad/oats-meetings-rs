@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde_json::{json, Value};
 
@@ -51,8 +51,8 @@ type Stamp = Option<(SystemTime, u64)>;
 /// dump. Without one (headless, or the window is closed) the actions answer `no_window`.
 pub trait UiPort: Send + Sync {
     /// `req` is `{"op": "select", "tab": ..}`, `{"op": "state"}` or `{"op": "invoke", "name": ..,
-    /// "args": {..}}`.
-    fn call(&self, req: Value) -> Result<Value>;
+    /// "args": {..}}`. `wait` (the `ui.drive_wait` key) bounds how long it waits for the window.
+    fn call(&self, req: Value, wait: Duration) -> Result<Value>;
 }
 
 /// What `privacy-toggle` warns, and the UI shows, where capture hiding cannot take effect.
@@ -564,7 +564,7 @@ impl Engine {
     fn ui_call(&self, req: Value) -> Result<Value> {
         let port = self.ui.read().expect("ui").clone();
         match port {
-            Some(p) => p.call(req),
+            Some(p) => p.call(req, self.snapshot().config.ui.drive_wait.as_duration()),
             None => Err(ConfigError::new(
                 "no_window",
                 "no GUI window to drive: ui-* actions need GUI mode (not --headless)",

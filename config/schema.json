@@ -1025,6 +1025,20 @@
     "ui": {
       "additionalProperties": false,
       "properties": {
+        "drive_wait": {
+          "default": "10s",
+          "description": "How long a ui-select, ui-state or ui-invoke call waits for the window to answer before failing with timeout.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "5m",
+          "x-max-ms": 300000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "live_follow": {
           "default": true,
           "description": "The Live view scrolls to the newest line while a recording adds lines.",

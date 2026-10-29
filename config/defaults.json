@@ -137,6 +137,7 @@
     "dir": ""
   },
   "ui": {
+    "drive_wait": "10s",
     "live_follow": true,
     "live_max_lines": 2000,
     "record_controls": true,

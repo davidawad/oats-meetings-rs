@@ -19,9 +19,6 @@ use crate::state::{badge_text, Control, Controls, Rec, Tab};
 use crate::view::MainWindow;
 use crate::views::{self, calendar, models, notes::Notes, sessions, templates::Templates, trash};
 
-/// How long a `ui-*` call waits for the GPUI thread to answer.
-const WAIT: Duration = Duration::from_secs(10);
-
 /// One `ui-*` request waiting for the GPUI thread, and where its answer goes.
 pub struct Request {
     pub req: Value,
@@ -42,13 +39,13 @@ impl Port {
 }
 
 impl UiPort for Port {
-    fn call(&self, req: Value) -> Result<Value> {
+    fn call(&self, req: Value, wait: Duration) -> Result<Value> {
         let (tx, rx) = sync_channel(1);
         self.queue
             .lock()
             .expect("ui queue")
             .push(Request { req, reply: tx });
-        rx.recv_timeout(WAIT).unwrap_or_else(|_| {
+        rx.recv_timeout(wait).unwrap_or_else(|_| {
             Err(ConfigError::new(
                 "timeout",
                 "the GUI did not answer the ui-* request",
