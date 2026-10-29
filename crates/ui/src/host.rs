@@ -326,6 +326,8 @@ mod tests {
             applied_capture: None,
             want_visible: false,
             tray_gate: tray::Gate::default(),
+            tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
+            capture_supported: engine.capture_hiding_supported(),
         }));
         let mut cx = TestAppContext::single();
         let step = |action: &str, cx: &mut TestAppContext| {
