@@ -9,6 +9,7 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
 use oats_core::config::typed::DeleteMode;
 use oats_core::control::engine::Engine;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 use crate::model;
 use crate::state::{Edit, SessionRow, State};
@@ -27,6 +28,10 @@ pub struct Ui {
     pub confirm: Option<String>,
     /// A `session-transcribe` running off the UI thread.
     pub transcribing: Option<String>,
+    /// Sessions whose transcript matches the search: id -> snippet of the first matching utterance.
+    pub hits: BTreeMap<String, String>,
+    /// The query and session list `hits` were computed for; a change to either re-runs the search.
+    hits_for: Option<(String, Vec<SessionRow>)>,
 }
 
 pub(crate) fn is_ours(path: &str) -> bool {
@@ -54,9 +59,42 @@ pub fn matches(r: &SessionRow, q: &str) -> bool {
     })
 }
 
+/// A session shows when its title, id, start or tags match, or its transcript does (`hits`).
 pub fn visible(st: &State) -> Vec<&SessionRow> {
     let q = query(st);
-    st.sessions.iter().filter(|r| matches(r, q)).collect()
+    st.sessions
+        .iter()
+        .filter(|r| matches(r, q) || st.sessions_ui.hits.contains_key(&r.id))
+        .collect()
+}
+
+/// Bring `hits` up to date with the query in effect through `transcript-search` (the action `ctl
+/// transcript search` uses). Runs only when the query or the session list changed; a `#tag` query
+/// is a tag filter, so it searches no transcript.
+pub fn sync_hits(st: &mut State, engine: &Engine) {
+    let q = query(st).trim().to_string();
+    let key = (q.clone(), st.sessions.clone());
+    if st.sessions_ui.hits_for.as_ref() == Some(&key) {
+        return;
+    }
+    st.sessions_ui.hits.clear();
+    if !q.is_empty() && !q.split_whitespace().any(|w| w.starts_with('#')) {
+        if let Ok(v) = model::dispatch(
+            engine,
+            "transcript-search",
+            json!({"query": q, "limit": u32::MAX}),
+        ) {
+            for h in v["hits"].as_array().into_iter().flatten() {
+                if let (Some(id), Some(snip)) = (h["session"].as_str(), h["snippet"].as_str()) {
+                    st.sessions_ui
+                        .hits
+                        .entry(id.to_string())
+                        .or_insert_with(|| snip.to_string());
+                }
+            }
+        }
+    }
+    st.sessions_ui.hits_for = Some(key);
 }
 
 /// Enter / save on a `session:*` input. Rename and tag go through their actions; a rejection keeps
@@ -307,7 +345,7 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         w,
         SEARCH,
         &q,
-        "Search title, id, tags (#tag)",
+        "Search title, id, tags (#tag), transcript",
         q.clone(),
         cx,
     ));
@@ -352,6 +390,7 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             if !s.tags.is_empty() {
                 label.push_str(&format!("  #{}", s.tags.join(" #")));
             }
+            let snip = w.state.sessions_ui.hits.get(&s.id).cloned();
             div()
                 .id(SharedString::from(format!("session-{}", s.id)))
                 .px_2()
@@ -361,6 +400,14 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                 .bg(rgb(if sel { ACCENT } else { PANEL }))
                 .text_color(rgb(if sel { BG } else { FG }))
                 .child(label)
+                .when_some(snip, |d, snip| {
+                    d.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(if sel { BG } else { DIM }))
+                            .child(snip),
+                    )
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this
                         .state
@@ -718,6 +765,46 @@ mod tests {
             "{}",
             st.status
         );
+    }
+
+    #[test]
+    fn search_also_matches_transcript_text_with_a_snippet() {
+        let (engine, dir) = testutil::engine(&[]);
+        seed(dir.path(), "a", "x", &[]);
+        seed(dir.path(), "b", "Retro", &[]);
+        // The words of the stt fixture you.wav, as a recording of it saves them.
+        let said: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../tests/fixtures/stt/expected.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("sessions/a/transcript.final.jsonl"),
+            format!("{}\n", json!({"speaker": "you", "text": said["you.wav"]})),
+        )
+        .unwrap();
+        let mut st = State::default();
+        st.refresh(&engine);
+        let shown = |st: &State| visible(st).iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+
+        typed(&mut st, SEARCH, "quarterly");
+        sync_hits(&mut st, &engine);
+        assert_eq!(shown(&st), ["a"]);
+        assert!(st.sessions_ui.hits["a"].contains("quarterly budget"));
+        // Metadata and transcript matches combine; a #tag query searches no transcript.
+        typed(&mut st, SEARCH, "retro");
+        sync_hits(&mut st, &engine);
+        assert_eq!(shown(&st), ["b"]);
+        assert!(st.sessions_ui.hits.is_empty());
+        typed(&mut st, SEARCH, "#quarterly");
+        sync_hits(&mut st, &engine);
+        assert!(shown(&st).is_empty());
+        typed(&mut st, SEARCH, "");
+        sync_hits(&mut st, &engine);
+        assert_eq!(shown(&st).len(), 2);
     }
 
     #[test]

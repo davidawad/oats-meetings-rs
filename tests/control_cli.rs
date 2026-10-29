@@ -162,9 +162,12 @@ fn errors_use_exit_codes() {
     let e = Engine::start();
     assert_eq!(e.ctl(&["config", "get", "nope"]).0, 1);
     assert_eq!(e.ctl(&["frobnicate"]).0, 2);
-    let (code, out, _) = e.ctl(&["--json", "transcript", "search", "x"]);
+    let (code, out, _) = e.ctl(&["--json", "session", "get", "nope"]);
     assert_eq!(code, 1);
-    assert!(out.contains("not_implemented"), "{out}");
+    assert!(out.contains("not_found"), "{out}");
+    let (code, out, _) = e.ctl(&["--json", "transcript", "search", "x"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("\"hits\""), "{out}");
 }
 
 #[test]

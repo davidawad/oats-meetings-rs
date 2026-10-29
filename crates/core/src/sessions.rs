@@ -137,6 +137,66 @@ fn summary(l: &Loaded) -> Value {
     })
 }
 
+/// The words an utterance shows: the refined text when there is one, else the raw text.
+fn utterance_text(u: &Value) -> String {
+    ["refinedText", "text"]
+        .iter()
+        .filter_map(|k| u.get(*k).and_then(Value::as_str))
+        .find(|t| !t.trim().is_empty())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Seconds into the recording: `startSeconds` (or the live `start`), else the utterance timestamp
+/// less the session start; null when neither is known.
+fn utterance_offset(u: &Value, started: Option<&str>) -> Value {
+    if let Some(s) = ["startSeconds", "start"]
+        .iter()
+        .find_map(|k| u.get(*k).and_then(Value::as_f64))
+    {
+        return json!(s);
+    }
+    let parse = |v: &str| chrono::DateTime::parse_from_rfc3339(v).ok();
+    match (
+        u.get("timestamp").and_then(Value::as_str).and_then(parse),
+        started.and_then(parse),
+    ) {
+        (Some(t), Some(s)) if t >= s => json!((t - s).num_milliseconds() as f64 / 1000.0),
+        _ => Value::Null,
+    }
+}
+
+/// Lower-cased one char per char, so positions in the result are positions in the original.
+fn fold(s: &str) -> Vec<char> {
+    s.chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect()
+}
+
+fn find(hay: &[char], needle: &[char]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > hay.len() {
+        return None;
+    }
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// About 40 characters either side of the match at char `at`, `…` where it was cut.
+fn snippet(text: &str, at: usize, len: usize) -> String {
+    const CTX: usize = 40;
+    let chars: Vec<char> = text.chars().collect();
+    let from = at.saturating_sub(CTX);
+    let to = (at + len + CTX).min(chars.len());
+    let mut out: String = chars[from..to].iter().collect();
+    out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+    if from > 0 {
+        out.insert(0, '…');
+    }
+    if to < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
 fn write_meta(dir: &Path, meta: &Map<String, Value>) -> Result<()> {
     let path = dir.join("session.json");
     let tmp = dir.join(format!(".session.json.tmp{}", std::process::id()));
@@ -243,6 +303,54 @@ impl Store {
         let l = self.find(id)?;
         let (source, utterances) = transcript(&l.dir);
         Ok(json!({"id": id, "source": source, "utterances": utterances}))
+    }
+
+    /// Utterances whose text holds every whitespace-separated word of `query` (case-insensitive),
+    /// in session (directory) order then utterance order; at most `limit` hits. Each hit carries
+    /// the session id and title, the utterance (`index`, `speaker`, `timestamp`, `text`), its
+    /// `offset` in seconds into the recording (null when the utterance has no timing), the
+    /// character position of the first word in the text (`match_at`) and a short `snippet`.
+    pub fn search(&self, query: &str, limit: usize) -> Result<Value> {
+        let words: Vec<Vec<char>> = query.split_whitespace().map(fold).collect();
+        if words.is_empty() {
+            return Err(ConfigError::new("invalid_argument", "query is empty"));
+        }
+        let mut hits = vec![];
+        let mut truncated = false;
+        'sessions: for l in self.discover() {
+            let started = l.meta.get("startedAt").and_then(Value::as_str);
+            let title = l.meta.get("title").and_then(Value::as_str).unwrap_or("");
+            let (source, utterances) = transcript(&l.dir);
+            for (index, u) in utterances.iter().enumerate() {
+                let text = utterance_text(u);
+                let hay = fold(&text);
+                let Some((at, len)) = words
+                    .iter()
+                    .map(|w| find(&hay, w).map(|i| (i, w.len())))
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(|v| v.into_iter().min())
+                else {
+                    continue;
+                };
+                if hits.len() == limit {
+                    truncated = true;
+                    break 'sessions;
+                }
+                hits.push(json!({
+                    "session": id_of(&l),
+                    "title": title,
+                    "source": source,
+                    "index": index,
+                    "offset": utterance_offset(u, started),
+                    "speaker": u.get("speaker").cloned().unwrap_or(Value::Null),
+                    "timestamp": u.get("timestamp").cloned().unwrap_or(Value::Null),
+                    "text": text,
+                    "match_at": at,
+                    "snippet": snippet(&text, at, len),
+                }));
+            }
+        }
+        Ok(json!({"query": query, "count": hits.len(), "truncated": truncated, "hits": hits}))
     }
 
     pub fn rename(&self, id: &str, title: &str) -> Result<Value> {
@@ -782,6 +890,26 @@ mod tests {
         let r = s.import(&fixture_dir(), false).unwrap();
         assert_eq!(r["imported"], json!(fixture_ids()));
         assert_eq!(ids(&s.list(None, None).unwrap()), fixture_ids());
+    }
+
+    #[test]
+    fn search_reads_the_refined_text_and_times_from_the_session_start() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::new(d.path().join("store"));
+        s.import(&fixture_dir(), false).unwrap();
+        let r = s.search("Renewal ok", 50).unwrap();
+        assert_eq!(r["count"], 1, "{r}");
+        let h = &r["hits"][0];
+        assert_eq!(h["session"], "session_2026-10-20_09-00-00");
+        assert_eq!(h["text"], "The renewal is OK.");
+        assert_eq!(h["offset"], 60.0); // 13:01 in a session started at 13:00
+        assert_eq!(
+            (h["index"].as_u64(), h["match_at"].as_u64()),
+            (Some(0), Some(4))
+        );
+        assert_eq!(h["snippet"], "The renewal is OK.");
+        assert_eq!(s.search("nothing-said", 50).unwrap()["count"], 0);
+        assert_eq!(snippet(&"a ".repeat(60), 60, 1).chars().next(), Some('…'));
     }
 
     #[test]

@@ -880,6 +880,10 @@ impl Engine {
             Action::SessionTranscribe { session, overwrite } => {
                 self.session_transcribe(session, overwrite.unwrap_or(false), true)
             }
+            Action::TranscriptSearch { query, limit } => self.store().search(
+                query,
+                usize::try_from(limit.unwrap_or(50)).unwrap_or(usize::MAX),
+            ),
             Action::SessionRename { session, name } => {
                 let v = self.store().rename(session, name)?;
                 self.session_event(session, "rename");
@@ -1051,6 +1055,8 @@ impl Engine {
             | Action::IcsList {}
             | Action::IcsRefresh { .. }
             | Action::IcsEvents { .. } => crate::ics::dispatch(self, a),
+            // Every action is implemented today; a new "planned" one lands here until its handler.
+            #[allow(unreachable_patterns)]
             other => {
                 let name = serde_json::to_value(other)
                     .ok()

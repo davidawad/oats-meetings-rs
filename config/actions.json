@@ -540,7 +540,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Search transcripts.",
+      "doc": "Search session transcripts: utterances holding every word of the query (case-insensitive), with session id, utterance index and text, offset (seconds into the recording) and a snippet; at most limit hits (default 50).",
       "effect": "read",
       "name": "transcript-search",
       "params": [
@@ -548,9 +548,14 @@
           "name": "query",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "type": "Option<u64>"
         }
       ],
-      "status": "planned"
+      "status": "implemented"
     },
     {
       "doc": "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.",

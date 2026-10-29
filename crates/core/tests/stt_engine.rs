@@ -293,6 +293,65 @@ fn cloud_backend_end_to_end_writes_live_and_final_with_you_and_them() {
     assert_eq!(kinds.last().unwrap(), "session-saved");
 }
 
+/// The reference transcript of one stt fixture (tests/fixtures/stt/expected.json).
+fn expected(name: &str) -> String {
+    let v: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("expected.json")).unwrap()).unwrap();
+    v[name].as_str().unwrap().to_string()
+}
+
+#[test]
+fn transcript_search_finds_spoken_words_whatever_the_title() {
+    // The mock answers every window with the you.wav reference text, so the session holds the
+    // words spoken in the fixture ("... quarterly budget ...").
+    let said = expected("you.wav");
+    let body =
+        json!({"text": said, "segments": [{"start": 0.5, "end": 3.0, "text": said}]}).to_string();
+    let mock = Mock::start(Arc::new(move || (200, body.clone(), Duration::ZERO)));
+    let rig = Rig::cloud(&mock, "SEARCH", "");
+    let call = call_wav(rig.dir.path());
+    rig.transcribe(&call, Some("session_call"), None).unwrap();
+    rig.engine
+        .dispatch(&Action::SessionRename {
+            session: "session_call".into(),
+            name: "x".into(),
+        })
+        .unwrap();
+    let search = |q: &str, limit: Option<u64>| {
+        rig.engine.dispatch(&Action::TranscriptSearch {
+            query: q.into(),
+            limit,
+        })
+    };
+
+    let r = search("QUARTERLY budget", None).unwrap();
+    let hits = r["hits"].as_array().unwrap();
+    assert_eq!(r["count"], hits.len() as u64);
+    assert_eq!(hits.len(), 2, "{r}"); // the final transcript: you and them, both the same text
+    let h = &hits[0];
+    assert_eq!(h["session"], "session_call");
+    assert_eq!(h["title"], "x");
+    assert_eq!(h["source"], "final");
+    assert_eq!(h["index"], 0);
+    assert_eq!(h["text"], said.trim());
+    assert!(h["offset"].as_f64().unwrap() >= 0.5, "{h}");
+    assert_eq!(h["match_at"], said.trim().find("quarterly").unwrap() as u64);
+    assert!(
+        h["snippet"].as_str().unwrap().contains("quarterly budget"),
+        "{h}"
+    );
+    assert_eq!(r["hits"], search("quarterly budget", None).unwrap()["hits"]); // deterministic
+
+    // Every word must be in one utterance; limit caps and says so.
+    assert_eq!(search("budget onboarding", None).unwrap()["count"], 0);
+    let one = search("budget", Some(1)).unwrap();
+    assert_eq!(
+        (one["count"].as_u64(), one["truncated"].as_bool()),
+        (Some(1), Some(true))
+    );
+    assert_eq!(code(search("  ", None)), "invalid_argument");
+}
+
 #[test]
 fn live_and_final_switches_each_way() {
     for (live, fin) in [(true, true), (true, false), (false, true)] {

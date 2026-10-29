@@ -158,6 +158,7 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "session-get",
     "transcript-get",
     "session-transcribe",
+    "transcript-search",
     "session-rename",
     "session-tag",
     "session-delete",
@@ -199,10 +200,6 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("secret-delete", "secrets never pass through the window"),
     ("secret-has", "secrets never pass through the window"),
     ("stt-transcribe", "batch file transcription (ctl)"),
-    (
-        "transcript-search",
-        "planned in the engine; search box lands with it",
-    ),
     ("template-import", "one-shot migration verb (ctl)"),
     ("kb-search", "agent query (ctl)"),
 ];

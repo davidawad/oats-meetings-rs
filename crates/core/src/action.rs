@@ -82,7 +82,7 @@ actions! {
     TrashEmpty, "trash-empty", "Delete trashed sessions for good (one session, or all of them); needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: Option<String>, confirm: Option<bool> };
     SessionTranscribe, "session-transcribe", "Transcribe a saved session's own audio into it with the stt.* keys (a recording saved as audio only, e.g. while the model was missing; those are also transcribed automatically once it downloads). overwrite=true replaces an existing transcript.", "implemented", "write", { session: String, overwrite: Option<bool> };
     TranscriptGet, "transcript-get", "A session transcript (final, else live).", "implemented", "read", { session: String };
-    TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
+    TranscriptSearch, "transcript-search", "Search session transcripts: utterances holding every word of the query (case-insensitive), with session id, utterance index and text, offset (seconds into the recording) and a snippet; at most limit hits (default 50).", "implemented", "read", { query: String, limit: Option<u64> };
     NotesGenerate, "notes-generate", "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.", "implemented", "write", { session: String, template: String, dry_run: Option<bool> };
     NotesGet, "notes-get", "A session's notes (notes.md) and how they were made; empty text when it has none.", "implemented", "read", { session: String };
     NotesSet, "notes-set", "Replace a session's notes with edited text (marked edited; template and backend kept).", "implemented", "write", { session: String, notes: String };

@@ -513,7 +513,10 @@ impl Render for MainWindow {
         // One line per tab; each view lives in its own file under `views/`.
         let body = match self.state.tab {
             Tab::Live => self.live().into_any_element(),
-            Tab::Sessions => views::sessions::render(self, cx),
+            Tab::Sessions => {
+                views::sessions::sync_hits(&mut self.state, &self.engine);
+                views::sessions::render(self, cx)
+            }
             Tab::Notes => views::notes::render(self, cx),
             Tab::Templates => views::templates::render(self, cx),
             Tab::Calendar => views::calendar::render(self, cx),
