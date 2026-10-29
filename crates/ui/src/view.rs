@@ -58,6 +58,7 @@ impl MainWindow {
     pub fn event(&mut self, line: &str, cx: &mut Context<Self>) {
         let before = self.state.live.len();
         self.state.on_event(&self.engine, line);
+        crate::views::calendar::on_event(line, cx);
         self.after_live_change(before);
         cx.notify();
     }

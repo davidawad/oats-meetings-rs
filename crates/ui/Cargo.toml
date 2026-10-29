@@ -11,6 +11,10 @@ gpui_platform.workspace = true
 oats-core.workspace = true
 serde_json.workspace = true
 raw-window-handle = "0.6"
+chrono.workspace = true
+chrono-tz.workspace = true
+# The system zone for meeting times (ui.tz empty); already in the tree via chrono users.
+iana-time-zone = "0.1"
 
 # Native menubar / tray item. macOS / Windows use tray-icon; Linux / BSD speak StatusNotifierItem
 # over D-Bus with ksni (no gtk / libappindicator; zbus on async-io, already in the tree via GPUI),

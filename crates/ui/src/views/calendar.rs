@@ -2,15 +2,21 @@
 //! their caches, over the same actions as `ctl ics-*`. Every choice is an `ics.*` config key: the
 //! upcoming window is `ics.window_days` (`ics-events` with no bounds), and the view re-reads the
 //! feeds and events at most once per `ics.poll_interval` (the scheduler's own cadence), plus after
-//! each action. The view's own state is a gpui global so it stays inside this file.
+//! each action, and whenever the engine publishes `ics-updated` (a fetch changed a cache). Times
+//! show in `ui.tz` (empty: the system zone) with the zone's abbreviation. The view's own state is
+//! a gpui global so it stays inside this file.
 
 use std::time::Instant;
 
+use chrono::DateTime;
+use chrono_tz::Tz;
 use gpui::{
     div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, Global, KeyDownEvent,
     SharedString,
 };
 use serde_json::{json, Value};
+
+use oats_core::control::engine::Engine;
 
 use crate::model;
 use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
@@ -38,10 +44,12 @@ pub(crate) struct Meeting {
     pub feed: String,
     pub summary: String,
     pub location: String,
-    /// `YYYY-MM-DD` in the event's zone.
+    /// `YYYY-MM-DD` in the display zone (all-day events: their own date).
     pub day: String,
-    /// `HH:MM` in the event's zone, empty for all-day events.
+    /// `HH:MM` in the display zone, empty for all-day events.
     pub time: String,
+    /// The display zone's abbreviation at `time` (`EDT`, `UTC`), empty for all-day events.
+    pub zone: String,
 }
 
 #[derive(Default)]
@@ -51,6 +59,8 @@ pub(crate) struct Cal {
     pub meetings: Vec<Meeting>,
     pub from: String,
     pub to: String,
+    /// The zone the times are shown in (`ui.tz`, else the system zone).
+    pub tz: Option<Tz>,
     /// Why the feeds or events could not be read.
     pub error: Option<String>,
     pub loaded: Option<Instant>,
@@ -98,20 +108,58 @@ pub(crate) fn feed_of(v: &Value) -> FeedRow {
     }
 }
 
-pub(crate) fn meeting_of(v: &Value) -> Meeting {
+/// The zone `zone` names, else the system zone (`TZ`, then the OS setting), else UTC.
+pub(crate) fn zone_named(zone: &str) -> Tz {
+    let parse = |z: &str| {
+        // `TZ` may be `:Area/City` or a zoneinfo path.
+        let z = z.trim().trim_start_matches(':');
+        let z = z.rsplit_once("zoneinfo/").map_or(z, |(_, n)| n);
+        z.parse::<Tz>().ok()
+    };
+    parse(zone)
+        .or_else(|| std::env::var("TZ").ok().as_deref().and_then(parse))
+        .or_else(|| {
+            iana_time_zone::get_timezone()
+                .ok()
+                .as_deref()
+                .and_then(parse)
+        })
+        .unwrap_or(Tz::UTC)
+}
+
+/// The zone meeting times are shown in: `ui.tz`, empty for the system zone.
+pub(crate) fn display_zone(engine: &Engine) -> Tz {
+    zone_named(&engine.snapshot().config.ui.tz)
+}
+
+pub(crate) fn meeting_of(v: &Value, tz: Tz) -> Meeting {
     let all_day = v.get("all_day").and_then(Value::as_bool).unwrap_or(false);
-    // `local_start` is the engine's wall clock, `%Y-%m-%dT%H:%M:%S`: split on its separators.
+    // `local_start` is the event's own wall clock, `%Y-%m-%dT%H:%M:%S`: split on its separators.
     let local = s(v, "local_start");
     let (d, t) = local.split_once('T').unwrap_or((local.as_str(), ""));
-    let (day, time) = if all_day {
-        let sd = s(v, "start_date");
-        (
-            if sd.is_empty() { d.to_string() } else { sd },
-            String::new(),
-        )
-    } else {
-        let hm = t.rsplit_once(':').map_or(t, |(hm, _)| hm);
-        (d.to_string(), hm.to_string())
+    let start = DateTime::parse_from_rfc3339(&s(v, "start")).ok();
+    let (day, time, zone) = match (all_day, start) {
+        (true, _) => {
+            let sd = s(v, "start_date");
+            (
+                if sd.is_empty() { d.to_string() } else { sd },
+                String::new(),
+                String::new(),
+            )
+        }
+        // `start` is the instant: show it on the display zone's clock.
+        (false, Some(at)) => {
+            let at = at.with_timezone(&tz);
+            (
+                at.format("%Y-%m-%d").to_string(),
+                at.format("%H:%M").to_string(),
+                at.format("%Z").to_string(),
+            )
+        }
+        (false, None) => {
+            let hm = t.rsplit_once(':').map_or(t, |(hm, _)| hm);
+            (d.to_string(), hm.to_string(), s(v, "tzid"))
+        }
     };
     Meeting {
         feed: s(v, "feed"),
@@ -119,6 +167,7 @@ pub(crate) fn meeting_of(v: &Value) -> Meeting {
         location: s(v, "location"),
         day,
         time,
+        zone,
     }
 }
 
@@ -127,6 +176,8 @@ impl Cal {
     pub(crate) fn load(&mut self, w: &MainWindow) {
         self.loaded = Some(Instant::now());
         self.error = None;
+        let tz = display_zone(&w.engine);
+        self.tz = Some(tz);
         match model::dispatch(&w.engine, "ics-list", json!({})) {
             Ok(v) => {
                 self.enabled = v.get("enabled").and_then(Value::as_bool).unwrap_or(false);
@@ -146,7 +197,7 @@ impl Cal {
                 self.meetings = v
                     .get("events")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().map(meeting_of).collect())
+                    .map(|a| a.iter().map(|m| meeting_of(m, tz)).collect())
                     .unwrap_or_default();
                 self.from = s(&v, "from");
                 self.to = s(&v, "to");
@@ -183,20 +234,37 @@ impl Cal {
     }
 }
 
-/// Subscribe to the feed typed into the form (`ics-add`); the form clears on success.
-pub(crate) fn add(w: &mut MainWindow, cx: &mut App) {
+/// Subscribe to the feed typed into the form (`ics-add`); the form clears on success, and the new
+/// feed is fetched at once (off the UI thread) so its meetings show without a Refresh click.
+pub(crate) fn add(w: &mut MainWindow, cx: &mut Context<MainWindow>) {
     let cal = cx.default_global::<Cal>();
     let (name, url) = (cal.name.trim().to_string(), cal.url.trim().to_string());
-    match model::dispatch(&w.engine, "ics-add", json!({"name": name, "url": url})) {
-        Ok(_) => {
+    let added = match model::dispatch(&w.engine, "ics-add", json!({"name": name, "url": url})) {
+        Ok(v) => {
             w.state.status = format!("Added feed {name}.");
             cal.name.clear();
             cal.url.clear();
             cal.field = None;
+            v.pointer("/feed/enabled").and_then(Value::as_bool) != Some(false)
         }
-        Err(e) => w.state.status = e.to_string(),
-    }
+        Err(e) => {
+            w.state.status = e.to_string();
+            false
+        }
+    };
     cal.load(w);
+    if added && cal.enabled {
+        fetch(w, name.clone(), format!("Added feed {name}. "), cx);
+    }
+}
+
+/// An engine bus line: `ics-updated` (a fetch, the scheduler's too, changed a cache) re-reads.
+pub(crate) fn on_event(line: &str, cx: &mut App) {
+    let ics = serde_json::from_str::<Value>(line)
+        .is_ok_and(|v| v.get("event").and_then(Value::as_str) == Some("ics-updated"));
+    if ics {
+        cx.default_global::<Cal>().loaded = None;
+    }
 }
 
 /// Unsubscribe (`ics-remove`); the engine drops the feed's cache.
@@ -210,6 +278,11 @@ pub(crate) fn remove(w: &mut MainWindow, name: &str, cx: &mut App) {
 
 /// Fetch one feed, or every enabled feed when `name` is empty (`ics-refresh`), off the UI thread.
 pub(crate) fn refresh(w: &mut MainWindow, name: String, cx: &mut Context<MainWindow>) {
+    fetch(w, name, String::new(), cx);
+}
+
+/// `refresh`, with `prefix` before its summary in the status line.
+fn fetch(w: &mut MainWindow, name: String, prefix: String, cx: &mut Context<MainWindow>) {
     let cal = cx.default_global::<Cal>();
     if cal.refreshing.is_some() {
         return;
@@ -229,8 +302,8 @@ pub(crate) fn refresh(w: &mut MainWindow, name: String, cx: &mut Context<MainWin
             .await;
         let _ = this.update(cx, |w, cx| {
             w.state.status = match res {
-                Ok(v) => refresh_summary(&v),
-                Err(e) => e.to_string(),
+                Ok(v) => format!("{prefix}{}", refresh_summary(&v)),
+                Err(e) => format!("{prefix}{e}"),
             };
             let cal = cx.default_global::<Cal>();
             cal.refreshing = None;
@@ -273,7 +346,7 @@ pub(crate) fn key(
     key: &str,
     key_char: Option<&str>,
     command: bool,
-    cx: &mut App,
+    cx: &mut Context<MainWindow>,
 ) -> bool {
     let cal = cx.default_global::<Cal>();
     let Some(f) = cal.field else { return false };
@@ -494,6 +567,11 @@ fn sources(cal: &Cal, cx: &mut Context<MainWindow>) -> impl IntoElement {
         )
 }
 
+/// `HH:MM ZONE`, the zone abbreviation of the display zone at that time.
+pub(crate) fn time_label(m: &Meeting) -> String {
+    format!("{} {}", m.time, m.zone).trim_end().to_string()
+}
+
 fn upcoming(cal: &Cal) -> impl IntoElement {
     let mut col = div()
         .id("ics-upcoming")
@@ -515,7 +593,12 @@ fn upcoming(cal: &Cal) -> impl IntoElement {
                 .flex_none()
                 .text_sm()
                 .text_color(rgb(DIM))
-                .child(format!("{} to {} (ics.window_days)", cal.from, cal.to)),
+                .child(format!(
+                    "{} to {} (ics.window_days); times in {}",
+                    cal.from,
+                    cal.to,
+                    cal.tz.unwrap_or(Tz::UTC).name()
+                )),
         );
     }
     if let Some(e) = &cal.error {
@@ -561,11 +644,11 @@ fn upcoming(cal: &Cal) -> impl IntoElement {
                 .gap_2()
                 .items_start()
                 .w_full()
-                .child(div().w(px(64.)).flex_none().text_color(rgb(ACCENT)).child(
+                .child(div().w(px(96.)).flex_none().text_color(rgb(ACCENT)).child(
                     if m.time.is_empty() {
                         "all day".to_string()
                     } else {
-                        m.time.clone()
+                        time_label(m)
                     },
                 ))
                 .child(div().flex_1().min_w_0().whitespace_normal().child(what))
@@ -589,6 +672,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         meetings: cal.meetings.clone(),
         from: cal.from.clone(),
         to: cal.to.clone(),
+        tz: cal.tz,
         error: cal.error.clone(),
         loaded: cal.loaded,
         refreshing: cal.refreshing.clone(),
@@ -629,12 +713,23 @@ BEGIN:VEVENT\r\nUID:standup@test\r\nDTSTAMP:20260101T000000Z\r\nDTSTART:20260101
 DTEND:20260101T091500Z\r\nRRULE:FREQ=DAILY\r\nSUMMARY:Standup\r\nLOCATION:Room 1\r\n\
 END:VEVENT\r\nEND:VCALENDAR\r\n";
 
+    /// A weekly 15:00Z meeting since 2026-01-01 (the QA2 fixture's shape).
+    const WEEKLY: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//oats//test//EN\r\n\
+BEGIN:VEVENT\r\nUID:sync@test\r\nDTSTAMP:20260101T000000Z\r\nDTSTART:20260101T150000Z\r\n\
+DTEND:20260101T153000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Sync\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    const NY: Tz = chrono_tz::America::New_York;
+
     #[test]
     fn meeting_rows_split_local_start_and_all_day() {
-        let m = meeting_of(&json!({"feed":"w","summary":"S","local_start":"2026-10-29T09:30:00"}));
+        let m = meeting_of(
+            &json!({"feed":"w","summary":"S","local_start":"2026-10-29T09:30:00","tzid":"UTC"}),
+            Tz::UTC,
+        );
         assert_eq!((m.day.as_str(), m.time.as_str()), ("2026-10-29", "09:30"));
         let d = meeting_of(
             &json!({"all_day":true,"start_date":"2026-10-30","local_start":"2026-10-30T00:00:00"}),
+            NY,
         );
         assert_eq!((d.day.as_str(), d.time.as_str()), ("2026-10-30", ""));
         let f = feed_of(
@@ -651,8 +746,113 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
     }
 
     #[test]
+    fn times_show_in_the_display_zone_with_its_abbreviation() {
+        let ev = |start: &str| json!({"feed":"w","summary":"S","start":start,"local_start":"x","tzid":"UTC"});
+        // The QA2 case: 15:00Z is 11:00 on an EDT clock, 10:00 once DST ends (2026-11-01).
+        let m = meeting_of(&ev("2026-10-29T15:00:00Z"), NY);
+        assert_eq!(
+            (m.day.as_str(), time_label(&m).as_str()),
+            ("2026-10-29", "11:00 EDT")
+        );
+        let m = meeting_of(&ev("2026-11-02T15:00:00Z"), NY);
+        assert_eq!(time_label(&m), "10:00 EST");
+        // The day follows the display zone too.
+        let m = meeting_of(&ev("2026-10-30T02:00:00Z"), NY);
+        assert_eq!(
+            (m.day.as_str(), time_label(&m).as_str()),
+            ("2026-10-29", "22:00 EDT")
+        );
+        assert_eq!(
+            time_label(&meeting_of(&ev("2026-10-29T15:00:00Z"), Tz::UTC)),
+            "15:00 UTC"
+        );
+        // ui.tz spellings: a name, TZ's `:Name`, a zoneinfo path.
+        assert_eq!(zone_named("America/New_York"), NY);
+        assert_eq!(zone_named(":America/New_York"), NY);
+        assert_eq!(
+            zone_named("/usr/share/zoneinfo/Europe/Berlin"),
+            chrono_tz::Europe::Berlin
+        );
+    }
+
+    #[test]
+    fn add_shows_the_feeds_meetings_without_a_refresh_click_in_ui_tz() {
+        let (engine, dir) = testutil::engine(&[("ui.tz", json!("America/New_York"))]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Calendar;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let path = dir.path().join("team.ics");
+        std::fs::write(&path, WEEKLY).unwrap();
+        view.update(cx, |v, cx| {
+            let cal = cx.default_global::<Cal>();
+            cal.name = "qa2cal".into();
+            cal.url = format!("file://{}", path.display());
+            add(v, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |v, cx| {
+            let cal = cx.global::<Cal>();
+            assert_eq!(v.state.status, "Added feed qa2cal. Refreshed 1 feed(s).");
+            assert!(cal.feeds[0].fetched_at.is_some(), "{:?}", cal.feeds);
+            assert_eq!(cal.tz, Some(NY));
+            let m = cal
+                .meetings
+                .first()
+                .expect("the weekly meeting is upcoming");
+            assert_eq!(m.summary, "Sync");
+            // 15:00Z on a New York clock: EDT or EST depending on today's date.
+            let label = time_label(m);
+            assert!(label == "11:00 EDT" || label == "10:00 EST", "{label}");
+        });
+    }
+
+    #[test]
+    fn an_ics_updated_event_reloads_the_view() {
+        let (engine, dir) = testutil::engine(&[("ui.tz", json!("UTC"))]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Calendar;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let path = dir.path().join("team.ics");
+        let url = format!("file://{}", path.display());
+        // Subscribed elsewhere (ctl) before the file exists: nothing cached yet.
+        model::dispatch(&engine, "ics-add", json!({"name": "team", "url": url})).unwrap();
+        view.update(cx, |v, cx| {
+            cx.default_global::<Cal>().load(v);
+            cx.notify();
+        });
+        view.read_with(cx, |_, cx| assert!(cx.global::<Cal>().meetings.is_empty()));
+        // A fetch outside the view (the scheduler, ctl ics-refresh) publishes ics-updated.
+        let rx = engine.bus.subscribe(vec![]);
+        std::fs::write(&path, WEEKLY).unwrap();
+        model::dispatch(&engine, "ics-refresh", json!({"name": "team"})).unwrap();
+        let lines: Vec<String> = rx.try_iter().collect();
+        assert!(lines.iter().any(|l| l.contains("ics-updated")), "{lines:?}");
+        view.update(cx, |v, cx| {
+            for l in &lines {
+                v.event(l, cx);
+            }
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |_, cx| {
+            let cal = cx.global::<Cal>();
+            assert!(cal.feeds[0].fetched_at.is_some());
+            assert_eq!(cal.meetings[0].summary, "Sync");
+            assert_eq!(time_label(&cal.meetings[0]), "15:00 UTC");
+        });
+    }
+
+    #[test]
     fn calendar_view_adds_refreshes_lists_and_removes_a_feed() {
-        let (engine, dir) = testutil::engine(&[]);
+        let (engine, dir) = testutil::engine(&[("ui.tz", json!("UTC"))]);
         let path = dir.path().join("work.ics");
         std::fs::write(&path, ICS).unwrap();
         let url = format!("file://{}", path.display());
@@ -685,10 +885,12 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
         cx.run_until_parked();
         view.read_with(cx, |v, cx| {
             let cal = cx.global::<Cal>();
-            assert_eq!(v.state.status, "Added feed work.");
+            // The new feed is fetched straight away.
+            assert_eq!(v.state.status, "Added feed work. Refreshed 1 feed(s).");
             assert_eq!(cal.feeds.len(), 1);
             assert_eq!(cal.feeds[0].url, url);
-            assert!(cal.feeds[0].fetched_at.is_none());
+            assert!(cal.feeds[0].fetched_at.is_some());
+            assert_eq!(cal.meetings[0].summary, "Standup");
             assert!(cal.name.is_empty() && cal.field.is_none());
         });
 
@@ -714,7 +916,7 @@ END:VEVENT\r\nEND:VCALENDAR\r\n";
             assert!(!cal.meetings.is_empty());
             assert_eq!(cal.meetings[0].summary, "Standup");
             assert_eq!(cal.meetings[0].location, "Room 1");
-            assert_eq!(cal.meetings[0].time, "09:00");
+            assert_eq!(time_label(&cal.meetings[0]), "09:00 UTC");
         });
 
         view.update(cx, |v, cx| {

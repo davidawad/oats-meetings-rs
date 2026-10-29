@@ -141,6 +141,7 @@
     "record_controls": true,
     "show_elapsed": true,
     "speaker_width": 96,
-    "tick": "100ms"
+    "tick": "100ms",
+    "tz": ""
   }
 }

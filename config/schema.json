@@ -1068,6 +1068,13 @@
           "x-min-ms": 10,
           "x-reload": "live",
           "x-ui": false
+        },
+        "tz": {
+          "default": "",
+          "description": "IANA zone the window shows meeting times in, labelled with its abbreviation; empty is the system zone (TZ, else the OS setting).",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         }
       },
       "type": "object"

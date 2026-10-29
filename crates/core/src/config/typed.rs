@@ -189,6 +189,7 @@ pub struct Ui {
     pub show_elapsed: bool,
     pub speaker_width: u32,
     pub tick: Dur,
+    pub tz: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

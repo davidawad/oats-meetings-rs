@@ -243,3 +243,5 @@ show_elapsed = true
 speaker_width = 96
 # How often the window re-reads the engine state (window visibility, capture hiding, tray).
 tick = "100ms"
+# IANA zone the window shows meeting times in, labelled with its abbreviation; empty is the system zone (TZ, else the OS setting).
+tz = ""

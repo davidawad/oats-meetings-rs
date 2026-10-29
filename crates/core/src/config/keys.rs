@@ -288,6 +288,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "ui.tz",
+        kind: Kind::Str,
+        default: Def::S(""),
+        doc: "IANA zone the window shows meeting times in, labelled with its abbreviation; empty is the system zone (TZ, else the OS setting).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "kb.hash_dims",
         kind: Kind::Int { min: 8, max: 8_192 },
         default: Def::I(256),
