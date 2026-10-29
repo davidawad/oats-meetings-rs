@@ -31,13 +31,19 @@ fn opts(dir: &Path, cfg: &Path) -> EngineOpts {
 }
 
 fn toml_for(pairs: &[(&str, Value)]) -> String {
-    let flat = pairs.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect();
+    let flat = pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), v.clone()))
+        .collect();
     let v: toml::Value = serde_json::from_value(nest(&flat)).unwrap();
     toml::to_string(&v).unwrap()
 }
 
 fn p(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 fn events(mut sub: Client) -> mpsc::Receiver<Value> {
@@ -72,12 +78,21 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         // Both ends of the allowed range: the boundaries are the interesting values.
         Kind::Int { min, max } => vec![json!(min), json!(max)],
         Kind::Duration { min_ms, max_ms } => {
-            vec![json!(keys::format_duration_ms(min_ms)), json!(keys::format_duration_ms(max_ms))]
+            vec![
+                json!(keys::format_duration_ms(min_ms)),
+                json!(keys::format_duration_ms(max_ms)),
+            ]
         }
-        Kind::Str if k.path == "control.socket" => vec![json!(dir.join("alt.sock").to_str().unwrap()), json!("")],
-        Kind::Str if k.path == "llm.api_key_ref" => vec![json!("secret:llm/other"), json!("secret:ns/x")],
+        Kind::Str if k.path == "control.socket" => {
+            vec![json!(dir.join("alt.sock").to_str().unwrap()), json!("")]
+        }
+        Kind::Str if k.path == "llm.api_key_ref" => {
+            vec![json!("secret:llm/other"), json!("secret:ns/x")]
+        }
         Kind::Str if k.path.ends_with("base_url") => vec![json!("http://127.0.0.1:9"), json!("")],
-        Kind::Str if k.path == "sessions.root" => vec![json!(dir.join("elsewhere").to_str().unwrap()), json!("")],
+        Kind::Str if k.path == "sessions.root" => {
+            vec![json!(dir.join("elsewhere").to_str().unwrap()), json!("")]
+        }
         Kind::Str if k.path == "ics.feeds" => vec![
             json!(r#"[{"name":"a","url":"https://example.invalid/a.ics"}]"#),
             json!(r#"[{"name":"b","url":"file:///tmp/b.ics","enabled":false}]"#),
@@ -85,7 +100,9 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         Kind::Str if k.path == "ics.default_tz" => vec![json!("Europe/Paris"), json!("Asia/Tokyo")],
         // A host with an audio stack vetoes a device name it does not have, so only "" is safe here;
         // the veto itself is tested in record.rs with a fake backend.
-        Kind::Str if k.path.starts_with("audio.") && k.path.ends_with(".device") => vec![json!(""), json!("")],
+        Kind::Str if k.path.starts_with("audio.") && k.path.ends_with(".device") => {
+            vec![json!(""), json!("")]
+        }
         Kind::Str => vec![json!("sample-x"), json!("sample-y")],
     }
 }
@@ -116,14 +133,20 @@ fn every_key_reloads_to_every_value_and_the_swap_is_whole() {
             pairs.extend(companions(k.path, &v));
             std::fs::write(&cfg, toml_for(&pairs)).unwrap();
             let before = engine.snapshot();
-            let changed = engine.reload("test").unwrap_or_else(|e| panic!("{} = {v}: {e}", k.path));
+            let changed = engine
+                .reload("test")
+                .unwrap_or_else(|e| panic!("{} = {v}: {e}", k.path));
             let after = engine.snapshot();
             assert_eq!(after.resolved.flat[k.path], v, "{} = {v}", k.path);
             // Whole-config swap: every key not in the file is back at its default, and the typed
             // view is consistent with the flat view.
             for (other, dv) in defaults_flat() {
                 if pairs.iter().all(|(pk, _)| *pk != other) {
-                    assert_eq!(after.resolved.flat[&other], dv, "leak of {other} after {} = {v}", k.path);
+                    assert_eq!(
+                        after.resolved.flat[&other], dv,
+                        "leak of {other} after {} = {v}",
+                        k.path
+                    );
                 }
             }
             let typed: Config = serde_json::from_value(after.resolved.nested()).unwrap();
@@ -140,12 +163,31 @@ fn reload_publishes_setting_changed_per_changed_key_only() {
     let d = tempfile::tempdir().unwrap();
     let cfg = d.path().join("config.toml");
     let engine = Engine::new(opts(d.path(), &cfg)).unwrap();
-    let rx = engine.bus.subscribe(vec!["setting-changed".into(), "config-reloaded".into()]);
-    std::fs::write(&cfg, toml_for(&[("app.menubar", json!(true)), ("llm.backend", json!("openrouter"))])).unwrap();
+    let rx = engine
+        .bus
+        .subscribe(vec!["setting-changed".into(), "config-reloaded".into()]);
+    std::fs::write(
+        &cfg,
+        toml_for(&[
+            ("app.menubar", json!(true)),
+            ("llm.backend", json!("openrouter")),
+        ]),
+    )
+    .unwrap();
     let changed = engine.reload("test").unwrap();
-    assert_eq!(changed, vec!["app.menubar".to_string(), "llm.backend".to_string()]);
-    let evs: Vec<Value> = rx.try_iter().map(|l| serde_json::from_str(&l).unwrap()).collect();
-    let keys: Vec<&str> = evs.iter().filter(|e| e["event"] == "setting-changed").map(|e| e["data"]["key"].as_str().unwrap()).collect();
+    assert_eq!(
+        changed,
+        vec!["app.menubar".to_string(), "llm.backend".to_string()]
+    );
+    let evs: Vec<Value> = rx
+        .try_iter()
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect();
+    let keys: Vec<&str> = evs
+        .iter()
+        .filter(|e| e["event"] == "setting-changed")
+        .map(|e| e["data"]["key"].as_str().unwrap())
+        .collect();
     assert_eq!(keys, ["app.menubar", "llm.backend"]);
     assert!(evs.iter().any(|e| e["event"] == "config-reloaded"));
     // Reloading identical content changes nothing and says so.
@@ -182,7 +224,10 @@ impl Subsystem for Probe {
     fn validate(&self, new: &Config) -> oats_core::config::Result<()> {
         self.validated.fetch_add(1, Ordering::SeqCst);
         if self.fail && new.app.menubar {
-            return Err(oats_core::config::ConfigError::new("invalid_value", "probe says no"));
+            return Err(oats_core::config::ConfigError::new(
+                "invalid_value",
+                "probe says no",
+            ));
         }
         Ok(())
     }
@@ -206,7 +251,10 @@ fn subsystems_see_old_and_new_and_one_veto_rolls_everything_back() {
     let veto = Probe::new("veto", true);
     engine.register(good.clone());
     engine.register(veto.clone());
-    let rx = engine.bus.subscribe(vec!["config-reload-failed".into(), "setting-changed".into()]);
+    let rx = engine.bus.subscribe(vec![
+        "config-reload-failed".into(),
+        "setting-changed".into(),
+    ]);
 
     std::fs::write(&cfg, toml_for(&[("app.menubar", json!(true))])).unwrap();
     let e = engine.reload("test").unwrap_err();
@@ -217,13 +265,23 @@ fn subsystems_see_old_and_new_and_one_veto_rolls_everything_back() {
     assert_eq!(veto.applied.load(Ordering::SeqCst), 0);
     assert!(good.aborted.load(Ordering::SeqCst) >= 1);
     assert_eq!(engine.snapshot().resolved.flat["app.menubar"], json!(false));
-    let evs: Vec<Value> = rx.try_iter().map(|l| serde_json::from_str(&l).unwrap()).collect();
+    let evs: Vec<Value> = rx
+        .try_iter()
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect();
     assert_eq!(evs.len(), 1, "{evs:?}");
     assert_eq!(evs[0]["event"], "config-reload-failed");
     assert_eq!(evs[0]["data"]["code"], "invalid_value");
 
     // A config everyone accepts: both are applied, with old and new.
-    std::fs::write(&cfg, toml_for(&[("app.menubar", json!(false)), ("llm.backend", json!("openrouter"))])).unwrap();
+    std::fs::write(
+        &cfg,
+        toml_for(&[
+            ("app.menubar", json!(false)),
+            ("llm.backend", json!("openrouter")),
+        ]),
+    )
+    .unwrap();
     engine.reload("test").unwrap();
     assert_eq!(good.applied.load(Ordering::SeqCst), 1);
     assert_eq!(veto.applied.load(Ordering::SeqCst), 1);
@@ -238,7 +296,10 @@ fn config_set_is_vetoed_before_the_file_is_written() {
     engine.register(Probe::new("veto", true));
     let e = engine.set("app.menubar", &json!(true), "test").unwrap_err();
     assert_eq!(e.code, "invalid_value");
-    assert!(!cfg.exists(), "a vetoed set must not create or change the file");
+    assert!(
+        !cfg.exists(),
+        "a vetoed set must not create or change the file"
+    );
 }
 
 #[test]
@@ -248,7 +309,11 @@ fn sessions_root_that_is_a_file_is_rejected_by_the_sessions_subsystem() {
     let afile = d.path().join("afile");
     std::fs::write(&afile, "x").unwrap();
     let engine = Engine::new(opts(d.path(), &cfg)).unwrap();
-    std::fs::write(&cfg, toml_for(&[("sessions.root", json!(afile.to_str().unwrap()))])).unwrap();
+    std::fs::write(
+        &cfg,
+        toml_for(&[("sessions.root", json!(afile.to_str().unwrap()))]),
+    )
+    .unwrap();
     let e = engine.reload("test").unwrap_err();
     assert_eq!(e.code, "invalid_value");
     assert!(e.message.starts_with("sessions: "), "{}", e.message);
@@ -271,7 +336,13 @@ impl Rig {
         let engine = Engine::new(opts(dir.path(), &cfg)).unwrap();
         let rt = dir.path().join("rt");
         let handle = server::serve_with_poll(engine, &rt, Duration::from_millis(40)).unwrap();
-        Rig { dir: dir.path().to_path_buf(), _dir: dir, rt, cfg, handle: Some(handle) }
+        Rig {
+            dir: dir.path().to_path_buf(),
+            _dir: dir,
+            rt,
+            cfg,
+            handle: Some(handle),
+        }
     }
 
     fn client(&self) -> Client {
@@ -283,7 +354,14 @@ impl Rig {
 fn invalid_file_rolls_back_once_and_is_not_retried_until_it_changes() {
     let rig = Rig::new("[app]\nmenubar = false\n");
     let mut sub = rig.client();
-    sub.call("subscribe", p(&[("topics", json!(["config-reload-failed", "config-reloaded", "setting-changed"]))])).unwrap();
+    sub.call(
+        "subscribe",
+        p(&[(
+            "topics",
+            json!(["config-reload-failed", "config-reloaded", "setting-changed"]),
+        )]),
+    )
+    .unwrap();
     let rx = events(sub);
 
     // 1. Broken edit (unknown key): rolled back, exactly one failure event.
@@ -292,11 +370,18 @@ fn invalid_file_rolls_back_once_and_is_not_retried_until_it_changes() {
     assert_eq!(ev["data"]["code"], "unknown_key");
     assert_eq!(ev["data"]["source"], "hot-reload");
     let mut c = rig.client();
-    assert_eq!(c.call("config-get", p(&[("key", json!("app.menubar"))])).unwrap()["data"]["value"], false);
+    assert_eq!(
+        c.call("config-get", p(&[("key", json!("app.menubar"))]))
+            .unwrap()["data"]["value"],
+        false
+    );
 
     // 2. Same broken content, several polls later: still one failure, no retry spam.
     thread::sleep(Duration::from_millis(600));
-    assert!(next(&rx, "config-reload-failed", 1).is_none(), "retried an unchanged broken file");
+    assert!(
+        next(&rx, "config-reload-failed", 1).is_none(),
+        "retried an unchanged broken file"
+    );
 
     // 3. Rewriting the file with the same bytes (new mtime, same content) is still not a retry.
     std::fs::write(&rig.cfg, "[app]\nmenubar = true\n[bogus]\nx = 1\n").unwrap();
@@ -317,7 +402,11 @@ fn invalid_file_rolls_back_once_and_is_not_retried_until_it_changes() {
     std::fs::write(&rig.cfg, "[app]\nmenubar = true\n").unwrap();
     let ev = next(&rx, "setting-changed", 5).expect("recovered");
     assert_eq!(ev["data"]["key"], "app.menubar");
-    assert_eq!(c.call("config-get", p(&[("key", json!("app.menubar"))])).unwrap()["data"]["value"], true);
+    assert_eq!(
+        c.call("config-get", p(&[("key", json!("app.menubar"))]))
+            .unwrap()["data"]["value"],
+        true
+    );
 }
 
 #[test]
@@ -325,11 +414,23 @@ fn rejected_cross_key_config_is_rolled_back_as_a_whole() {
     let rig = Rig::new("");
     let mut c = rig.client();
     // Valid keys plus an invalid combination: none of it applies.
-    std::fs::write(&rig.cfg, "[app]\nmenubar = true\n[stt]\nbackend = \"cloud\"\n").unwrap();
+    std::fs::write(
+        &rig.cfg,
+        "[app]\nmenubar = true\n[stt]\nbackend = \"cloud\"\n",
+    )
+    .unwrap();
     let r = c.call("config-reload", Map::new()).unwrap();
     assert_eq!(r["error"]["code"], "invalid_combination");
-    assert_eq!(c.call("config-get", p(&[("key", json!("app.menubar"))])).unwrap()["data"]["value"], false);
-    assert_eq!(c.call("config-get", p(&[("key", json!("stt.backend"))])).unwrap()["data"]["value"], "local");
+    assert_eq!(
+        c.call("config-get", p(&[("key", json!("app.menubar"))]))
+            .unwrap()["data"]["value"],
+        false
+    );
+    assert_eq!(
+        c.call("config-get", p(&[("key", json!("stt.backend"))]))
+            .unwrap()["data"]["value"],
+        "local"
+    );
 }
 
 #[test]
@@ -337,7 +438,15 @@ fn control_socket_key_rebinds_the_running_server() {
     let rig = Rig::new("");
     let alt = rig.dir.join("alt.sock");
     let mut c = rig.client();
-    let r = c.call("config-set", p(&[("key", json!("control.socket")), ("value", json!(alt.to_str().unwrap()))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("control.socket")),
+                ("value", json!(alt.to_str().unwrap())),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["ok"], true, "{r}");
     // The new address answers; the old one no longer does.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -351,21 +460,40 @@ fn control_socket_key_rebinds_the_running_server() {
     }
     let mut moved = moved.expect("server did not move to the new socket");
     assert_eq!(moved.call("ping", Map::new()).unwrap()["ok"], true);
-    assert!(Client::connect(&rig.rt).is_err(), "old socket still answers");
+    assert!(
+        Client::connect(&rig.rt).is_err(),
+        "old socket still answers"
+    );
     // Existing connections survive the move.
     assert_eq!(c.call("ping", Map::new()).unwrap()["ok"], true);
     // And back to the default.
-    moved.call("config-set", p(&[("key", json!("control.socket")), ("value", json!(""))])).unwrap();
+    moved
+        .call(
+            "config-set",
+            p(&[("key", json!("control.socket")), ("value", json!(""))]),
+        )
+        .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while Client::connect(&rig.rt).is_err() {
-        assert!(std::time::Instant::now() < deadline, "server did not return to the default socket");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "server did not return to the default socket"
+        );
         thread::sleep(Duration::from_millis(25));
     }
     // A socket path that cannot be bound is rejected and the server stays where it is.
     // (The parent of this path is a regular file, so it can never be bound.)
     let unbindable = rig.cfg.join("x.sock");
     let mut c = rig.client();
-    let r = c.call("config-set", p(&[("key", json!("control.socket")), ("value", json!(unbindable.to_str().unwrap()))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("control.socket")),
+                ("value", json!(unbindable.to_str().unwrap())),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["ok"], false, "{r}");
     assert_eq!(c.call("ping", Map::new()).unwrap()["ok"], true);
 }
@@ -376,35 +504,82 @@ fn single_instance_key_releases_and_retakes_the_lock() {
     // A second engine in the same runtime dir (its own socket) is refused while the lock is held.
     let d2 = tempfile::tempdir().unwrap();
     let cfg2 = d2.path().join("config.toml");
-    std::fs::write(&cfg2, toml_for(&[("control.socket", json!(d2.path().join("e2.sock").to_str().unwrap()))])).unwrap();
+    std::fs::write(
+        &cfg2,
+        toml_for(&[(
+            "control.socket",
+            json!(d2.path().join("e2.sock").to_str().unwrap()),
+        )]),
+    )
+    .unwrap();
     let e2 = Engine::new(opts(d2.path(), &cfg2)).unwrap();
-    assert_eq!(server::serve(e2.clone(), &rig.rt).err().unwrap().code, "already_running");
+    assert_eq!(
+        server::serve(e2.clone(), &rig.rt).err().unwrap().code,
+        "already_running"
+    );
 
     // Turn the key off at runtime: the lock is released, the second engine can start.
     let mut c = rig.client();
-    assert_eq!(c.call("config-set", p(&[("key", json!("app.single_instance")), ("value", json!(false))])).unwrap()["ok"], true);
+    assert_eq!(
+        c.call(
+            "config-set",
+            p(&[
+                ("key", json!("app.single_instance")),
+                ("value", json!(false))
+            ])
+        )
+        .unwrap()["ok"],
+        true
+    );
     let h2 = server::serve(e2, &rig.rt).expect("lock should be free after single_instance=false");
 
     // Turning it back on while the other engine holds the lock is refused and rolled back.
     let rx = {
         let mut sub = rig.client();
-        sub.call("subscribe", p(&[("topics", json!(["config-reload-failed"]))])).unwrap();
+        sub.call(
+            "subscribe",
+            p(&[("topics", json!(["config-reload-failed"]))]),
+        )
+        .unwrap();
         events(sub)
     };
-    let r = c.call("config-set", p(&[("key", json!("app.single_instance")), ("value", json!(true))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("app.single_instance")),
+                ("value", json!(true)),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["error"]["code"], "already_running", "{r}");
-    assert_eq!(c.call("config-get", p(&[("key", json!("app.single_instance"))])).unwrap()["data"]["value"], false);
+    assert_eq!(
+        c.call("config-get", p(&[("key", json!("app.single_instance"))]))
+            .unwrap()["data"]["value"],
+        false
+    );
     let _ = rx;
     // Once the other engine stops, it succeeds.
     h2.shutdown();
     // Shutdown frees the lock asynchronously; under load retry until it is free (30 s deadline).
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let r = c.call("config-set", p(&[("key", json!("app.single_instance")), ("value", json!(true))])).unwrap();
+        let r = c
+            .call(
+                "config-set",
+                p(&[
+                    ("key", json!("app.single_instance")),
+                    ("value", json!(true)),
+                ]),
+            )
+            .unwrap();
         if r["ok"] == true {
             break;
         }
-        assert!(r["error"]["code"] == "already_running" && std::time::Instant::now() < deadline, "{r}");
+        assert!(
+            r["error"]["code"] == "already_running" && std::time::Instant::now() < deadline,
+            "{r}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     drop(rig);
@@ -413,7 +588,11 @@ fn single_instance_key_releases_and_retakes_the_lock() {
 #[test]
 fn cli_config_reload_verb_talks_to_the_running_engine() {
     let rig = Rig::new("[config]\nhot_reload = false\n");
-    std::fs::write(&rig.cfg, "[config]\nhot_reload = false\n[app]\nmenubar = true\n").unwrap();
+    std::fs::write(
+        &rig.cfg,
+        "[config]\nhot_reload = false\n[app]\nmenubar = true\n",
+    )
+    .unwrap();
     let rt = rig.rt.to_str().unwrap().to_string();
     let env = move |k: &str| (k == "OATS_RUNTIME_DIR").then(|| rt.clone());
     let out = oats_core::config::cli::run(&["reload".to_string(), "--json".to_string()], &env);
@@ -442,9 +621,15 @@ fn fixture() -> String {
 fn delete_mode_remove_deletes_for_good() {
     let rig = Rig::new("[sessions]\ndelete_mode = \"remove\"\n");
     let mut c = rig.client();
-    c.call("session-import", p(&[("from", json!(fixture()))])).unwrap();
+    c.call("session-import", p(&[("from", json!(fixture()))]))
+        .unwrap();
     let id = "session_2026-10-20_09-00-00";
-    let r = c.call("session-delete", p(&[("session", json!(id)), ("confirm", json!(true))])).unwrap();
+    let r = c
+        .call(
+            "session-delete",
+            p(&[("session", json!(id)), ("confirm", json!(true))]),
+        )
+        .unwrap();
     assert_eq!(r["data"]["mode"], "remove", "{r}");
     assert!(!rig.dir.join("sessions").join(id).exists());
 }
@@ -461,14 +646,26 @@ fn delete_mode_trash_moves_to_the_os_trash_and_is_reloadable() {
     let rt = base.path().join("rt");
     let _h = server::serve_with_poll(engine, &rt, Duration::from_millis(40)).unwrap();
     let mut c = Client::connect(&rt).unwrap();
-    c.call("session-import", p(&[("from", json!(fixture()))])).unwrap();
+    c.call("session-import", p(&[("from", json!(fixture()))]))
+        .unwrap();
     // Switch mode at runtime (whole-config reload), then delete.
     std::fs::write(&cfg, "[sessions]\ndelete_mode = \"trash\"\n").unwrap();
-    assert_eq!(c.call("config-reload", Map::new()).unwrap()["data"]["changed"], json!(["sessions.delete_mode"]));
+    assert_eq!(
+        c.call("config-reload", Map::new()).unwrap()["data"]["changed"],
+        json!(["sessions.delete_mode"])
+    );
     let id = "session_2026-10-20_09-00-00";
-    let r = c.call("session-delete", p(&[("session", json!(id)), ("confirm", json!(true))])).unwrap();
+    let r = c
+        .call(
+            "session-delete",
+            p(&[("session", json!(id)), ("confirm", json!(true))]),
+        )
+        .unwrap();
     assert_eq!(r["data"]["mode"], "trash", "{r}");
-    assert!(!base.path().join("sessions").join(id).exists(), "still in the store");
+    assert!(
+        !base.path().join("sessions").join(id).exists(),
+        "still in the store"
+    );
     #[cfg(target_os = "linux")]
     {
         let found = std::fs::read_dir(base.path().join("xdg/Trash/files"))
@@ -477,5 +674,8 @@ fn delete_mode_trash_moves_to_the_os_trash_and_is_reloadable() {
         assert!(found, "session not found in the XDG trash");
     }
     // The other session is untouched.
-    assert!(base.path().join("sessions/session_2026-10-21_15-00-00/session.json").is_file());
+    assert!(base
+        .path()
+        .join("sessions/session_2026-10-21_15-00-00/session.json")
+        .is_file());
 }

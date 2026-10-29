@@ -36,17 +36,27 @@ fn io(p: &Path, e: impl std::fmt::Display) -> ConfigError {
 pub fn parse(text: &str, origin: &str) -> Result<Template> {
     let t: Template = toml::from_str(text).map_err(|e| {
         let m = e.to_string();
-        let code = if m.contains("unknown field") { "unknown_key" } else { "parse_error" };
+        let code = if m.contains("unknown field") {
+            "unknown_key"
+        } else {
+            "parse_error"
+        };
         ConfigError::new(code, format!("template {origin}: {m}"))
     })?;
     if t.schema_version != SCHEMA_VERSION {
         return Err(ConfigError::new(
             "unsupported_version",
-            format!("template {origin}: schema_version {} (this build reads {SCHEMA_VERSION})", t.schema_version),
+            format!(
+                "template {origin}: schema_version {} (this build reads {SCHEMA_VERSION})",
+                t.schema_version
+            ),
         ));
     }
     if t.name.trim().is_empty() || t.system_prompt.trim().is_empty() {
-        return Err(ConfigError::new("invalid_value", format!("template {origin}: name and system_prompt must not be empty")));
+        return Err(ConfigError::new(
+            "invalid_value",
+            format!("template {origin}: name and system_prompt must not be empty"),
+        ));
     }
     Ok(t)
 }
@@ -76,7 +86,12 @@ pub fn find(dir: &Path, name: &str) -> Result<Template> {
     load_all(dir)?
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| ConfigError::new("not_found", format!("no template named {name:?} in {}", dir.display())))
+        .ok_or_else(|| {
+            ConfigError::new(
+                "not_found",
+                format!("no template named {name:?} in {}", dir.display()),
+            )
+        })
 }
 
 pub fn slug(name: &str) -> String {
@@ -89,7 +104,11 @@ pub fn slug(name: &str) -> String {
         }
     }
     let t = out.trim_matches('-').to_string();
-    if t.is_empty() { "template".into() } else { t }
+    if t.is_empty() {
+        "template".into()
+    } else {
+        t
+    }
 }
 
 /// The `## Heading` lines a template's prompt demands of the output.
@@ -120,16 +139,25 @@ pub fn import_openoats(from: &Path, dir: &Path, overwrite: bool) -> Result<Value
     let v: Value = serde_json::from_str(&text)
         .map_err(|e| ConfigError::new("parse_error", format!("{}: {e}", from.display())))?;
     if v["version"] != json!(1) {
-        return Err(ConfigError::new("unsupported_version", format!("{}: expected \"version\": 1", from.display())));
+        return Err(ConfigError::new(
+            "unsupported_version",
+            format!("{}: expected \"version\": 1", from.display()),
+        ));
     }
-    let items = v["templates"]
-        .as_array()
-        .ok_or_else(|| ConfigError::new("parse_error", format!("{}: no \"templates\" array", from.display())))?;
+    let items = v["templates"].as_array().ok_or_else(|| {
+        ConfigError::new(
+            "parse_error",
+            format!("{}: no \"templates\" array", from.display()),
+        )
+    })?;
     let mut planned: Vec<Template> = vec![];
     for it in items {
         let s = |k: &str| it.get(k).and_then(Value::as_str).map(str::to_string);
         let (Some(name), Some(prompt)) = (s("name"), s("systemPrompt")) else {
-            return Err(ConfigError::new("parse_error", format!("{}: a template lacks name or systemPrompt", from.display())));
+            return Err(ConfigError::new(
+                "parse_error",
+                format!("{}: a template lacks name or systemPrompt", from.display()),
+            ));
         };
         planned.push(Template {
             schema_version: SCHEMA_VERSION,
@@ -142,7 +170,10 @@ pub fn import_openoats(from: &Path, dir: &Path, overwrite: bool) -> Result<Value
     let mut seen = std::collections::BTreeSet::new();
     for t in &planned {
         if !seen.insert(slug(&t.name)) {
-            return Err(ConfigError::new("conflict", format!("two templates map to the file {}.toml", slug(&t.name))));
+            return Err(ConfigError::new(
+                "conflict",
+                format!("two templates map to the file {}.toml", slug(&t.name)),
+            ));
         }
     }
     let existing = load_all(dir)?;
@@ -157,7 +188,10 @@ pub fn import_openoats(from: &Path, dir: &Path, overwrite: bool) -> Result<Value
     if !conflicts.is_empty() {
         return Err(ConfigError::new(
             "conflict",
-            format!("templates already present with different content: {}; use overwrite", conflicts.join(", ")),
+            format!(
+                "templates already present with different content: {}; use overwrite",
+                conflicts.join(", ")
+            ),
         ));
     }
     let (mut imported, mut skipped) = (vec![], vec![]);
@@ -216,7 +250,10 @@ mod tests {
     #[test]
     fn headings_are_the_exact_h2_lines() {
         let t = "intro\n## CRM\nContact\n### not this\n## Summary  \n#NotAHeading\n";
-        assert_eq!(required_headings(t), vec!["## CRM".to_string(), "## Summary".to_string()]);
+        assert_eq!(
+            required_headings(t),
+            vec!["## CRM".to_string(), "## Summary".to_string()]
+        );
     }
 
     #[test]
@@ -239,11 +276,19 @@ mod tests {
         assert_eq!(r["skipped"].as_array().unwrap().len(), 3);
         // A hand edit conflicts until overwrite.
         let p = dir.join("stand-up.toml");
-        let edited = std::fs::read_to_string(&p).unwrap().replace("Blockers", "Obstacles");
+        let edited = std::fs::read_to_string(&p)
+            .unwrap()
+            .replace("Blockers", "Obstacles");
         std::fs::write(&p, edited).unwrap();
-        assert_eq!(import_openoats(&src, &dir, false).unwrap_err().code, "conflict");
+        assert_eq!(
+            import_openoats(&src, &dir, false).unwrap_err().code,
+            "conflict"
+        );
         import_openoats(&src, &dir, true).unwrap();
-        assert!(find(&dir, "Stand-Up").unwrap().system_prompt.contains("Blockers"));
+        assert!(find(&dir, "Stand-Up")
+            .unwrap()
+            .system_prompt
+            .contains("Blockers"));
     }
 
     #[test]
@@ -254,8 +299,14 @@ mod tests {
         assert_eq!(e.code, "unknown_key");
         let e = parse(&ok.replace("= 1", "= 2"), "t").unwrap_err();
         assert_eq!(e.code, "unsupported_version");
-        assert_eq!(parse("name = \"A\"\n", "t").unwrap_err().code, "parse_error");
-        assert_eq!(parse(&ok.replace("\"A\"", "\"\""), "t").unwrap_err().code, "invalid_value");
+        assert_eq!(
+            parse("name = \"A\"\n", "t").unwrap_err().code,
+            "parse_error"
+        );
+        assert_eq!(
+            parse(&ok.replace("\"A\"", "\"\""), "t").unwrap_err().code,
+            "invalid_value"
+        );
     }
 
     #[test]
@@ -267,11 +318,25 @@ mod tests {
             (r#"{"version":2,"templates":[]}"#, "unsupported_version"),
             (r#"{"version":1}"#, "parse_error"),
             (r#"{"version":1,"templates":[{"name":"x"}]}"#, "parse_error"),
-            (r#"{"version":1,"templates":[{"name":"A b","systemPrompt":"p"},{"name":"a-b","systemPrompt":"q"}]}"#, "conflict"),
+            (
+                r#"{"version":1,"templates":[{"name":"A b","systemPrompt":"p"},{"name":"a-b","systemPrompt":"q"}]}"#,
+                "conflict",
+            ),
         ] {
             std::fs::write(&f, body).unwrap();
-            assert_eq!(import_openoats(&f, &d.path().join("o"), false).unwrap_err().code, code, "{body}");
+            assert_eq!(
+                import_openoats(&f, &d.path().join("o"), false)
+                    .unwrap_err()
+                    .code,
+                code,
+                "{body}"
+            );
         }
-        assert_eq!(import_openoats(&d.path().join("absent.json"), &d.path().join("o"), false).unwrap_err().code, "io_error");
+        assert_eq!(
+            import_openoats(&d.path().join("absent.json"), &d.path().join("o"), false)
+                .unwrap_err()
+                .code,
+            "io_error"
+        );
     }
 }

@@ -28,13 +28,21 @@ impl WhisperAsr {
             _ => {
                 let c = Arc::new(
                     WhisperContext::new_with_params(path, WhisperContextParameters::default())
-                        .map_err(|e| ConfigError::new("model_load_failed", format!("{}: {e}", path.display())))?,
+                        .map_err(|e| {
+                            ConfigError::new(
+                                "model_load_failed",
+                                format!("{}: {e}", path.display()),
+                            )
+                        })?,
                 );
                 *cache = Some((path.to_path_buf(), Arc::clone(&c)));
                 c
             }
         };
-        Ok(WhisperAsr { ctx, threads: i32::try_from(threads.max(1)).unwrap_or(4) })
+        Ok(WhisperAsr {
+            ctx,
+            threads: i32::try_from(threads.max(1)).unwrap_or(4),
+        })
     }
 }
 

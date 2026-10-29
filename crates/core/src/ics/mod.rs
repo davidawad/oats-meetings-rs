@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Config, Ics, Secrets, IcsAllDay, IcsCancelled, IcsOnBadEvent, IcsUnknownTz, IcsWebcalScheme};
+use crate::config::typed::{
+    Config, Ics, IcsAllDay, IcsCancelled, IcsOnBadEvent, IcsUnknownTz, IcsWebcalScheme, Secrets,
+};
 use crate::config::{ConfigError, Result};
 use crate::control::engine::Engine;
 use crate::control::subsystem::Subsystem;
@@ -75,11 +77,12 @@ fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
 
 impl Settings {
     pub fn from_config(c: &Ics) -> Result<Settings> {
-        let default_tz = c
-            .default_tz
-            .trim()
-            .parse::<Tz>()
-            .map_err(|_| invalid("default_tz", format!("'{}' is not an IANA zone", c.default_tz)))?;
+        let default_tz = c.default_tz.trim().parse::<Tz>().map_err(|_| {
+            invalid(
+                "default_tz",
+                format!("'{}' is not an IANA zone", c.default_tz),
+            )
+        })?;
         Ok(Settings {
             enabled: c.enabled,
             default_refresh: c.default_refresh.secs(),
@@ -87,7 +90,9 @@ impl Settings {
             poll_interval: c.poll_interval.as_duration(),
             max_bytes: c.max_bytes,
             max_occ: u16::try_from(c.max_occurrences).unwrap_or(u16::MAX),
-            cache_dir: Some(c.cache_dir.trim()).filter(|s| !s.is_empty()).map(PathBuf::from),
+            cache_dir: Some(c.cache_dir.trim())
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from),
             default_tz,
             allow_file: c.allow_file,
             webcal_https: c.webcal_scheme == IcsWebcalScheme::Https,
@@ -109,7 +114,9 @@ pub fn validate_settings(c: &Ics) -> Result<()> {
     Settings::from_config(c)?;
     for f in parse_feeds(&c.feeds, c.max_name_len as usize)? {
         if let Some(h) = &f.header {
-            header_secret(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+            header_secret(h).map_err(|e| {
+                ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message))
+            })?;
         }
     }
     Ok(())
@@ -119,7 +126,8 @@ pub fn valid_name(n: &str, max_len: usize) -> bool {
     !n.is_empty()
         && n.len() <= max_len
         && !n.starts_with('.')
-        && n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        && n.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 fn header_pair(h: &str) -> Result<(String, String)> {
@@ -140,22 +148,29 @@ pub fn header_secret(h: &str) -> Result<(String, String)> {
 }
 
 pub fn parse_feeds(text: &str, max_name: usize) -> Result<Vec<Feed>> {
-    let feeds: Vec<Feed> = serde_json::from_str(if text.trim().is_empty() { "[]" } else { text })
-        .map_err(|e| invalid("feeds", format!("not a JSON array of feeds: {e}")))?;
+    let feeds: Vec<Feed> =
+        serde_json::from_str(if text.trim().is_empty() { "[]" } else { text })
+            .map_err(|e| invalid("feeds", format!("not a JSON array of feeds: {e}")))?;
     let mut seen = std::collections::BTreeSet::new();
     for f in &feeds {
         if !valid_name(&f.name, max_name) {
             return Err(invalid("feeds", format!("invalid feed name '{}'", f.name)));
         }
         if !seen.insert(f.name.clone()) {
-            return Err(invalid("feeds", format!("duplicate feed name '{}'", f.name)));
+            return Err(invalid(
+                "feeds",
+                format!("duplicate feed name '{}'", f.name),
+            ));
         }
     }
     Ok(feeds)
 }
 
 fn now_secs() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn stamp(secs: i64) -> String {
@@ -207,10 +222,13 @@ impl Cache {
         std::fs::read_to_string(self.ics(name)).ok()
     }
     fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
-        let io = |e: std::io::Error| ConfigError::new("io_error", format!("{}: {e}", path.display()));
+        let io =
+            |e: std::io::Error| ConfigError::new("io_error", format!("{}: {e}", path.display()));
         std::fs::create_dir_all(&self.dir).map_err(io)?;
         let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-        std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path)).map_err(io)
+        std::fs::write(&tmp, bytes)
+            .and_then(|_| std::fs::rename(&tmp, path))
+            .map_err(io)
     }
     fn write_meta(&self, name: &str, m: &Meta) -> Result<()> {
         let text = serde_json::to_vec_pretty(m).expect("meta serializes");
@@ -242,7 +260,13 @@ fn ctx(engine: &Engine) -> Result<Ctx> {
     let typed = engine.resolved().typed()?;
     let settings = Settings::from_config(&typed.ics)?;
     let dir = cache_dir(&settings, engine.default_sessions_dir());
-    Ok(Ctx { network_allow: typed.network.allow, secrets: typed.secrets, cfg: typed.ics, settings, cache: Cache { dir } })
+    Ok(Ctx {
+        network_allow: typed.network.allow,
+        secrets: typed.secrets,
+        cfg: typed.ics,
+        settings,
+        cache: Cache { dir },
+    })
 }
 
 fn cache_dir(s: &Settings, sessions: &Path) -> PathBuf {
@@ -271,29 +295,40 @@ impl Subsystem for IcsSubsystem {
     fn validate(&self, new: &Config) -> Result<()> {
         let s = Settings::from_config(&new.ics)?;
         for f in parse_feeds(&new.ics.feeds, new.ics.max_name_len as usize)? {
-            fetch::classify(&f.url, s.webcal_https)
-                .map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+            fetch::classify(&f.url, s.webcal_https).map_err(|e| {
+                ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message))
+            })?;
             if let Some(h) = &f.header {
-                header_secret(h).map_err(|e| ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message)))?;
+                header_secret(h).map_err(|e| {
+                    ConfigError::new(e.code, format!("feed '{}': {}", f.name, e.message))
+                })?;
             }
         }
         Ok(())
     }
 
     fn apply(&self, old: &Config, new: &Config) {
-        let Some(engine) = self.engine.upgrade() else { return };
-        let (Ok(os), Ok(old_feeds), Ok(new_feeds)) =
-            (Settings::from_config(&old.ics), parse_feeds(&old.ics.feeds, old.ics.max_name_len as usize), parse_feeds(&new.ics.feeds, new.ics.max_name_len as usize))
-        else {
+        let Some(engine) = self.engine.upgrade() else {
             return;
         };
-        let cache = Cache { dir: cache_dir(&os, engine.default_sessions_dir()) };
+        let (Ok(os), Ok(old_feeds), Ok(new_feeds)) = (
+            Settings::from_config(&old.ics),
+            parse_feeds(&old.ics.feeds, old.ics.max_name_len as usize),
+            parse_feeds(&new.ics.feeds, new.ics.max_name_len as usize),
+        ) else {
+            return;
+        };
+        let cache = Cache {
+            dir: cache_dir(&os, engine.default_sessions_dir()),
+        };
         for f in &old_feeds {
             let same = new_feeds.iter().any(|n| n.name == f.name && n.url == f.url);
             if !same {
                 cache.discard(&f.name);
                 let gone = !new_feeds.iter().any(|n| n.name == f.name);
-                engine.bus.publish("ics-updated", json!({"feed": f.name, "removed": gone}));
+                engine
+                    .bus
+                    .publish("ics-updated", json!({"feed": f.name, "removed": gone}));
             }
         }
     }
@@ -305,7 +340,9 @@ fn load_feeds(c: &Ctx) -> Result<Vec<Feed>> {
 
 fn save_feeds(engine: &Engine, feeds: &[Feed], source: &str) -> Result<()> {
     let text = serde_json::to_string(feeds).expect("feeds serialize");
-    engine.set("ics.feeds", &Value::String(text), source).map(|_| ())
+    engine
+        .set("ics.feeds", &Value::String(text), source)
+        .map(|_| ())
 }
 
 fn find<'a>(feeds: &'a [Feed], name: &str) -> Result<&'a Feed> {
@@ -324,13 +361,26 @@ fn public(f: &Feed) -> Value {
 
 pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
     match a {
-        Action::IcsAdd { name, url, enabled, refresh_secs, header } => {
-            add(engine, name, url, *enabled, *refresh_secs, header.as_deref())
-        }
+        Action::IcsAdd {
+            name,
+            url,
+            enabled,
+            refresh_secs,
+            header,
+        } => add(
+            engine,
+            name,
+            url,
+            *enabled,
+            *refresh_secs,
+            header.as_deref(),
+        ),
         Action::IcsRemove { name } => remove(engine, name),
         Action::IcsList {} => list(engine),
         Action::IcsRefresh { name } => refresh(engine, name.as_deref()),
-        Action::IcsEvents { from, to, feed } => events(engine, from.as_deref(), to.as_deref(), feed.as_deref()),
+        Action::IcsEvents { from, to, feed } => {
+            events(engine, from.as_deref(), to.as_deref(), feed.as_deref())
+        }
         _ => Err(ConfigError::new("bad_request", "not an ics action")),
     }
 }
@@ -358,7 +408,10 @@ fn add(
     let _g = FEED_LIST_LOCK.lock().expect("feed list lock");
     let mut feeds = load_feeds(&c)?;
     if feeds.iter().any(|f| f.name == name) {
-        return Err(ConfigError::new("feed_exists", format!("a feed named '{name}' already exists")));
+        return Err(ConfigError::new(
+            "feed_exists",
+            format!("a feed named '{name}' already exists"),
+        ));
     }
     let feed = Feed {
         name: name.to_string(),
@@ -452,7 +505,10 @@ fn refresh(engine: &Engine, name: Option<&str>) -> Result<Value> {
 /// Fetch one feed into the cache. Policy errors come back before anything is touched.
 fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
     if !f.enabled {
-        return Err(ConfigError::new("feed_disabled", format!("feed '{}' is disabled", f.name)));
+        return Err(ConfigError::new(
+            "feed_disabled",
+            format!("feed '{}' is disabled", f.name),
+        ));
     }
     let src = fetch::classify(&f.url, c.settings.webcal_https)?;
     match &src {
@@ -474,7 +530,11 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
         Some(h) => {
             let (name, key) = header_secret(h)?;
             let store = crate::secrets::store_for(&c.secrets);
-            let value = crate::secrets::resolve(&*store, &format!("{}{key}", crate::secrets::REF_PREFIX), c.secrets.max_key_len as usize)?;
+            let value = crate::secrets::resolve(
+                &*store,
+                &format!("{}{key}", crate::secrets::REF_PREFIX),
+                c.secrets.max_key_len as usize,
+            )?;
             Some((name, value))
         }
         None => None,
@@ -486,21 +546,36 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
         max_bytes: c.settings.max_bytes,
         header,
         etag: if have_body { prior.etag.clone() } else { None },
-        last_modified: if have_body { prior.last_modified.clone() } else { None },
+        last_modified: if have_body {
+            prior.last_modified.clone()
+        } else {
+            None
+        },
     };
     let outcome = fetch::fetch(&src, &opts).and_then(|got| match got {
         Fetched::NotModified => Ok(None),
-        Fetched::Body { text, etag, last_modified } => {
+        Fetched::Body {
+            text,
+            etag,
+            last_modified,
+        } => {
             let parsed = parse::parse_feed(&text, &c.settings.parse)?;
             Ok(Some((text, etag, last_modified, parsed)))
         }
     });
     match outcome {
         Ok(None) => {
-            let m = Meta { fetched_at: Some(now), attempted_at: Some(now), error: None, ..prior };
+            let m = Meta {
+                fetched_at: Some(now),
+                attempted_at: Some(now),
+                error: None,
+                ..prior
+            };
             c.cache.write_meta(&f.name, &m)?;
-            Ok(json!({"name": f.name, "ok": true, "changed": false, "not_modified": true,
-                      "events": m.events, "fetched_at": stamp(now)}))
+            Ok(
+                json!({"name": f.name, "ok": true, "changed": false, "not_modified": true,
+                      "events": m.events, "fetched_at": stamp(now)}),
+            )
         }
         Ok(Some((text, etag, last_modified, parsed))) => {
             let changed = c.cache.read_body(&f.name).as_deref() != Some(text.as_str());
@@ -524,15 +599,23 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
                            "fetched_at": stamp(now)}),
                 );
             }
-            Ok(json!({"name": f.name, "ok": true, "changed": changed, "not_modified": false,
-                      "events": parsed.events.len(), "skipped": parsed.skipped, "fetched_at": stamp(now)}))
+            Ok(
+                json!({"name": f.name, "ok": true, "changed": changed, "not_modified": false,
+                      "events": parsed.events.len(), "skipped": parsed.skipped, "fetched_at": stamp(now)}),
+            )
         }
         Err(e) => {
-            let m = Meta { attempted_at: Some(now), error: Some(err_json(&e)), ..prior };
+            let m = Meta {
+                attempted_at: Some(now),
+                error: Some(err_json(&e)),
+                ..prior
+            };
             c.cache.write_meta(&f.name, &m)?;
             if c.settings.stale_on_error && have_body {
-                Ok(json!({"name": f.name, "ok": true, "stale": true, "changed": false,
-                          "error": err_json(&e), "events": m.events}))
+                Ok(
+                    json!({"name": f.name, "ok": true, "stale": true, "changed": false,
+                          "error": err_json(&e), "events": m.events}),
+                )
             } else {
                 Err(e)
             }
@@ -541,15 +624,28 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
 }
 
 fn parse_instant(label: &str, v: &str, tz: Tz) -> Result<DateTime<Utc>> {
-    let bad = || ConfigError::new("invalid_argument", format!("{label} '{v}' is not RFC 3339 or YYYY-MM-DD"));
+    let bad = || {
+        ConfigError::new(
+            "invalid_argument",
+            format!("{label} '{v}' is not RFC 3339 or YYYY-MM-DD"),
+        )
+    };
     if let Ok(d) = DateTime::parse_from_rfc3339(v) {
         return Ok(d.with_timezone(&Utc));
     }
     let d = NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(|_| bad())?;
-    Ok(parse::resolve(tz, d.and_hms_opt(0, 0, 0).expect("midnight exists")))
+    Ok(parse::resolve(
+        tz,
+        d.and_hms_opt(0, 0, 0).expect("midnight exists"),
+    ))
 }
 
-fn events(engine: &Engine, from: Option<&str>, to: Option<&str>, feed: Option<&str>) -> Result<Value> {
+fn events(
+    engine: &Engine,
+    from: Option<&str>,
+    to: Option<&str>,
+    feed: Option<&str>,
+) -> Result<Value> {
     let c = ctx(engine)?;
     let tz = c.settings.default_tz;
     let from = match from {
@@ -561,7 +657,10 @@ fn events(engine: &Engine, from: Option<&str>, to: Option<&str>, feed: Option<&s
         None => from + chrono::Duration::days(c.settings.window_days),
     };
     if to < from {
-        return Err(ConfigError::new("invalid_argument", "'to' is before 'from'"));
+        return Err(ConfigError::new(
+            "invalid_argument",
+            "'to' is before 'from'",
+        ));
     }
     let feeds = load_feeds(&c)?;
     let chosen: Vec<&Feed> = match feed {
@@ -576,8 +675,9 @@ fn events(engine: &Engine, from: Option<&str>, to: Option<&str>, feed: Option<&s
             info.push(json!({"name": f.name, "cached": false}));
             continue;
         };
-        let result = parse::parse_feed(&body, &c.settings.parse)
-            .and_then(|p| parse::expand(&f.name, &p, &c.settings.parse, c.settings.max_occ, from, to));
+        let result = parse::parse_feed(&body, &c.settings.parse).and_then(|p| {
+            parse::expand(&f.name, &p, &c.settings.parse, c.settings.max_occ, from, to)
+        });
         match result {
             Ok(mut evs) => {
                 info.push(json!({"name": f.name, "cached": true, "events": evs.len()}));
@@ -588,7 +688,10 @@ fn events(engine: &Engine, from: Option<&str>, to: Option<&str>, feed: Option<&s
         }
     }
     all.sort_by(|a, b| {
-        a["start"].as_str().cmp(&b["start"].as_str()).then_with(|| a["uid"].as_str().cmp(&b["uid"].as_str()))
+        a["start"]
+            .as_str()
+            .cmp(&b["start"].as_str())
+            .then_with(|| a["uid"].as_str().cmp(&b["uid"].as_str()))
     });
     Ok(json!({
         "from": from.to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -606,7 +709,9 @@ pub fn tick(engine: &Engine, now: i64) -> Vec<String> {
     if !c.settings.enabled {
         return vec![];
     }
-    let Ok(feeds) = load_feeds(&c) else { return vec![] };
+    let Ok(feeds) = load_feeds(&c) else {
+        return vec![];
+    };
     let mut done = Vec::new();
     for f in feeds.iter().filter(|f| f.enabled) {
         let interval = effective_interval(f, &c.settings);
@@ -614,7 +719,9 @@ pub fn tick(engine: &Engine, now: i64) -> Vec<String> {
         if interval == 0 || last.map_or(false, |t| now - t < interval as i64) {
             continue;
         }
-        if refresh_one(engine, &c, f, now).is_ok() || c.cache.read_meta(&f.name).attempted_at == Some(now) {
+        if refresh_one(engine, &c, f, now).is_ok()
+            || c.cache.read_meta(&f.name).attempted_at == Some(now)
+        {
             done.push(f.name.clone());
         }
     }
@@ -624,21 +731,23 @@ pub fn tick(engine: &Engine, now: i64) -> Vec<String> {
 /// A detached thread that calls `tick` every `ics.poll_interval` (read live) until the engine
 /// shuts down; it sleeps in `config.poll_interval` slices so shutdown stays prompt.
 pub fn spawn_scheduler(engine: Arc<Engine>) {
-    let _ = thread::Builder::new().name("oats-ics".into()).spawn(move || {
-        while !engine.is_shutdown() {
-            let cfg = engine.snapshot();
-            let every = cfg.config.ics.poll_interval.as_duration();
-            let slice = every.min(cfg.config.config.poll_interval.as_duration());
-            let start = std::time::Instant::now();
-            while start.elapsed() < every {
-                if engine.is_shutdown() {
-                    return;
+    let _ = thread::Builder::new()
+        .name("oats-ics".into())
+        .spawn(move || {
+            while !engine.is_shutdown() {
+                let cfg = engine.snapshot();
+                let every = cfg.config.ics.poll_interval.as_duration();
+                let slice = every.min(cfg.config.config.poll_interval.as_duration());
+                let start = std::time::Instant::now();
+                while start.elapsed() < every {
+                    if engine.is_shutdown() {
+                        return;
+                    }
+                    thread::sleep(slice.min(every.saturating_sub(start.elapsed())));
                 }
-                thread::sleep(slice.min(every.saturating_sub(start.elapsed())));
+                let _ = tick(&engine, now_secs());
             }
-            let _ = tick(&engine, now_secs());
-        }
-    });
+        });
 }
 
 #[cfg(test)]
@@ -653,17 +762,33 @@ mod tests {
         assert_eq!(parse_feeds("", 64).unwrap().len(), 0);
         assert_eq!(parse_feeds("nope", 64).unwrap_err().code, "invalid_value");
         assert_eq!(
-            parse_feeds(r#"[{"name":"a","url":"u"},{"name":"a","url":"v"}]"#, 64).unwrap_err().code,
+            parse_feeds(r#"[{"name":"a","url":"u"},{"name":"a","url":"v"}]"#, 64)
+                .unwrap_err()
+                .code,
             "invalid_value"
         );
-        assert_eq!(parse_feeds(r#"[{"name":"../x","url":"u"}]"#, 64).unwrap_err().code, "invalid_value");
+        assert_eq!(
+            parse_feeds(r#"[{"name":"../x","url":"u"}]"#, 64)
+                .unwrap_err()
+                .code,
+            "invalid_value"
+        );
     }
 
     #[test]
     fn header_pairs() {
-        assert_eq!(header_pair("Authorization: Bearer t").unwrap(), ("Authorization".into(), "Bearer t".into()));
-        assert_eq!(header_secret("Authorization: secret:ics/work").unwrap(), ("Authorization".into(), "ics/work".into()));
-        assert_eq!(header_secret("Authorization: Bearer t").unwrap_err().code, "secret_plaintext");
+        assert_eq!(
+            header_pair("Authorization: Bearer t").unwrap(),
+            ("Authorization".into(), "Bearer t".into())
+        );
+        assert_eq!(
+            header_secret("Authorization: secret:ics/work").unwrap(),
+            ("Authorization".into(), "ics/work".into())
+        );
+        assert_eq!(
+            header_secret("Authorization: Bearer t").unwrap_err().code,
+            "secret_plaintext"
+        );
         assert!(header_pair("nocolon").is_err());
         assert!(header_pair("bad name: v").is_err());
     }
@@ -686,7 +811,11 @@ mod tests {
             let at = "n".repeat(max);
             let feed = |n: &str| format!(r#"[{{"name":"{n}","url":"file:///x.ics"}}]"#);
             assert_eq!(parse_feeds(&feed(&at), max).unwrap().len(), 1, "{max}");
-            assert_eq!(parse_feeds(&feed(&format!("{at}n")), max).unwrap_err().code, "invalid_value", "{max}+1");
+            assert_eq!(
+                parse_feeds(&feed(&format!("{at}n")), max).unwrap_err().code,
+                "invalid_value",
+                "{max}+1"
+            );
         }
     }
 }

@@ -134,11 +134,21 @@ impl Settings {
         }
         let (you, them) = (c.speaker_you.trim(), c.speaker_them.trim());
         if you.is_empty() || them.is_empty() || you == them {
-            return Err(invalid("speaker_you", "speaker_you and speaker_them must be non-empty and different"));
+            return Err(invalid(
+                "speaker_you",
+                "speaker_you and speaker_them must be non-empty and different",
+            ));
         }
         let model = c.local.model.trim();
-        if model.is_empty() || !model.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')) {
-            return Err(invalid("local.model", format!("'{model}' is not a model name (letters, digits, '.', '_', '-')")));
+        if model.is_empty()
+            || !model
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        {
+            return Err(invalid(
+                "local.model",
+                format!("'{model}' is not a model name (letters, digits, '.', '_', '-')"),
+            ));
         }
         let models_dir = if c.local.models_dir.trim().is_empty() {
             sessions_dir.parent().unwrap_or(sessions_dir).join("models")
@@ -183,11 +193,17 @@ impl Settings {
     /// Extra checks that only matter when the cloud backend is selected.
     pub fn check_cloud(&self) -> Result<()> {
         if self.adapter == SttAdapter::None {
-            return Err(ConfigError::new("invalid_combination", "stt.backend = \"cloud\" needs stt.cloud.adapter other than \"none\""));
+            return Err(ConfigError::new(
+                "invalid_combination",
+                "stt.backend = \"cloud\" needs stt.cloud.adapter other than \"none\"",
+            ));
         }
         let u = self.cloud_url.to_ascii_lowercase();
         if !(u.starts_with("http://") || u.starts_with("https://")) || u.len() < 9 {
-            return Err(invalid("cloud.url", format!("'{}' is not an http(s) URL", self.cloud_url)));
+            return Err(invalid(
+                "cloud.url",
+                format!("'{}' is not an http(s) URL", self.cloud_url),
+            ));
         }
         if self.cloud_model.is_empty() {
             return Err(invalid("cloud.model", "must not be empty"));
@@ -212,18 +228,29 @@ impl Settings {
 
 /// Build the recogniser `settings` selects. `network_allow` and the secrets config come from the
 /// resolved config.
-pub fn make_asr(s: &Settings, network_allow: bool, secrets: &dyn crate::secrets::SecretStore) -> Result<Arc<dyn Asr>> {
+pub fn make_asr(
+    s: &Settings,
+    network_allow: bool,
+    secrets: &dyn crate::secrets::SecretStore,
+) -> Result<Arc<dyn Asr>> {
     match s.backend {
         SttBackend::Local => local_asr(s),
         SttBackend::Cloud => {
             s.check_cloud()?;
             if !network_allow {
-                return Err(ConfigError::new("network_denied", "the cloud STT backend needs network.allow = true"));
+                return Err(ConfigError::new(
+                    "network_denied",
+                    "the cloud STT backend needs network.allow = true",
+                ));
             }
             let key = if s.cloud_key.is_empty() {
                 None
             } else {
-                Some(crate::secrets::resolve(secrets, &s.cloud_key, s.max_key_len)?)
+                Some(crate::secrets::resolve(
+                    secrets,
+                    &s.cloud_key,
+                    s.max_key_len,
+                )?)
             };
             Ok(Arc::new(cloud::OpenAiAsr {
                 url: s.cloud_url.clone(),
@@ -252,10 +279,16 @@ fn parakeet_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     if !s.model_file.is_dir() {
         return Err(ConfigError::new(
             "model_not_found",
-            format!("{} not found; fetch it with ci/fetch-models.sh or set stt.local.model_path", s.model_file.display()),
+            format!(
+                "{} not found; fetch it with ci/fetch-models.sh or set stt.local.model_path",
+                s.model_file.display()
+            ),
         ));
     }
-    Ok(Arc::new(parakeet::ParakeetAsr::load(&s.model_file, s.threads)?))
+    Ok(Arc::new(parakeet::ParakeetAsr::load(
+        &s.model_file,
+        s.threads,
+    )?))
 }
 
 #[cfg(not(feature = "parakeet"))]
@@ -294,7 +327,9 @@ fn whisper_asr(_s: &Settings) -> Result<Arc<dyn Asr>> {
 /// Whisper marks non-speech as `[BLANK_AUDIO]`, `(music)`, `*sighs*`: not words.
 fn clean(text: &str) -> Option<String> {
     let t = text.trim();
-    let tagged = (t.starts_with('[') && t.ends_with(']')) || (t.starts_with('(') && t.ends_with(')')) || (t.starts_with('*') && t.ends_with('*') && t.len() > 1);
+    let tagged = (t.starts_with('[') && t.ends_with(']'))
+        || (t.starts_with('(') && t.ends_with(')'))
+        || (t.starts_with('*') && t.ends_with('*') && t.len() > 1);
     (!t.is_empty() && !tagged).then(|| t.to_string())
 }
 
@@ -310,18 +345,33 @@ fn speech_bounds(x: &[f32], t: &Tuning) -> Option<(usize, usize)> {
     let loud = |c: &[f32]| peak(c) >= t.speech_peak;
     let first = x.chunks(frame).position(loud)?;
     let last = x.chunks(frame).rposition(loud)?;
-    Some(((first * frame).saturating_sub(t.pad_samples), ((last + 1) * frame + t.pad_samples).min(x.len())))
+    Some((
+        (first * frame).saturating_sub(t.pad_samples),
+        ((last + 1) * frame + t.pad_samples).min(x.len()),
+    ))
 }
 
 fn utts(segs: Vec<Segment>, offset: f64, speaker: &str) -> Vec<Utt> {
     segs.into_iter()
         .filter_map(|s| {
-            clean(&s.text).map(|text| Utt { speaker: speaker.to_string(), text, start: offset + s.start, end: offset + s.end })
+            clean(&s.text).map(|text| Utt {
+                speaker: speaker.to_string(),
+                text,
+                start: offset + s.start,
+                end: offset + s.end,
+            })
         })
         .collect()
 }
 
-fn run_asr(asr: &dyn Asr, pcm: &[f32], offset: f64, speaker: &str, language: &str, t: &Tuning) -> Result<Vec<Utt>> {
+fn run_asr(
+    asr: &dyn Asr,
+    pcm: &[f32],
+    offset: f64,
+    speaker: &str,
+    language: &str,
+    t: &Tuning,
+) -> Result<Vec<Utt>> {
     let Some((from, to)) = speech_bounds(pcm, t) else {
         return Ok(vec![]);
     };
@@ -366,7 +416,14 @@ fn quiet_cut(x: &[f32], window: usize) -> usize {
 }
 
 impl Live {
-    pub fn new(asr: Arc<dyn Asr>, language: &str, chunk_secs: f64, tuning: Tuning, you: &str, them: &str) -> Live {
+    pub fn new(
+        asr: Arc<dyn Asr>,
+        language: &str,
+        chunk_secs: f64,
+        tuning: Tuning,
+        you: &str,
+        them: &str,
+    ) -> Live {
         Live {
             asr,
             language: language.to_string(),
@@ -387,7 +444,14 @@ impl Live {
             let chunk: Vec<f32> = self.bufs[ch].pcm.drain(..cut).collect();
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += cut;
-            out.extend(run_asr(&*self.asr, &chunk, offset, &self.names[ch], &self.language, &self.tuning)?);
+            out.extend(run_asr(
+                &*self.asr,
+                &chunk,
+                offset,
+                &self.names[ch],
+                &self.language,
+                &self.tuning,
+            )?);
         }
         Ok(out)
     }
@@ -399,7 +463,14 @@ impl Live {
             let chunk = std::mem::take(&mut self.bufs[ch].pcm);
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += chunk.len();
-            out.extend(run_asr(&*self.asr, &chunk, offset, &self.names[ch], &self.language, &self.tuning)?);
+            out.extend(run_asr(
+                &*self.asr,
+                &chunk,
+                offset,
+                &self.names[ch],
+                &self.language,
+                &self.tuning,
+            )?);
         }
         Ok(out)
     }
@@ -408,11 +479,24 @@ impl Live {
 // ---- final ---------------------------------------------------------------------------------
 
 /// The final pass sends `stt.final_piece` at a time (cloud uploads are size-limited).
-fn final_channel(asr: &dyn Asr, pcm: &[f32], speaker: &str, language: &str, t: &Tuning) -> Result<Vec<Utt>> {
+fn final_channel(
+    asr: &dyn Asr,
+    pcm: &[f32],
+    speaker: &str,
+    language: &str,
+    t: &Tuning,
+) -> Result<Vec<Utt>> {
     let piece = t.final_piece_samples;
     let mut out = Vec::new();
     for (i, chunk) in pcm.chunks(piece).enumerate() {
-        out.extend(run_asr(asr, chunk, (i * piece) as f64 / f64::from(SAMPLE_RATE), speaker, language, t)?);
+        out.extend(run_asr(
+            asr,
+            chunk,
+            (i * piece) as f64 / f64::from(SAMPLE_RATE),
+            speaker,
+            language,
+            t,
+        )?);
     }
     Ok(out)
 }
@@ -424,7 +508,8 @@ fn by_time(mut v: Vec<Utt>) -> Vec<Utt> {
 }
 
 fn stamp(started: DateTime<Utc>, secs: f64) -> String {
-    (started + Duration::milliseconds((secs * 1000.0).round() as i64)).to_rfc3339_opts(SecondsFormat::Secs, true)
+    (started + Duration::milliseconds((secs * 1000.0).round() as i64))
+        .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 /// The OpenOats utterance object, plus our start/end offsets (ignored by the OpenOats reader).
@@ -449,11 +534,19 @@ pub fn run(
     now: DateTime<Utc>,
 ) -> Result<Value> {
     if !s.live_enabled && !s.final_enabled {
-        return Err(ConfigError::new("nothing_enabled", "stt.live.enabled and stt.final.enabled are both off"));
+        return Err(ConfigError::new(
+            "nothing_enabled",
+            "stt.live.enabled and stt.final.enabled are both off",
+        ));
     }
     let duration = chans.seconds();
     let started = now - Duration::milliseconds((duration * 1000.0) as i64);
-    let dir = store.create(id, &started.to_rfc3339_opts(SecondsFormat::Secs, true), "", &s.engine_label())?;
+    let dir = store.create(
+        id,
+        &started.to_rfc3339_opts(SecondsFormat::Secs, true),
+        "",
+        &s.engine_label(),
+    )?;
     let emit = |kind: &str, u: &Utt| {
         if let Some(b) = bus {
             b.publish(
@@ -465,7 +558,14 @@ pub fn run(
     let (mut live_n, mut final_n) = (0usize, 0usize);
     let result = (|| -> Result<()> {
         if s.live_enabled {
-            let mut live = Live::new(Arc::clone(&asr), &s.language, s.chunk_secs, s.tuning, &s.speaker_you, &s.speaker_them);
+            let mut live = Live::new(
+                Arc::clone(&asr),
+                &s.language,
+                s.chunk_secs,
+                s.tuning,
+                &s.speaker_you,
+                &s.speaker_them,
+            );
             let step = s.tuning.feed_samples;
             let total = chans.you.len().max(chans.them.len());
             let mut pos = 0;
@@ -490,7 +590,13 @@ pub fn run(
         }
         if s.final_enabled {
             let mut all = final_channel(&*asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
-            all.extend(final_channel(&*asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?);
+            all.extend(final_channel(
+                &*asr,
+                &chans.them,
+                &s.speaker_them,
+                &s.language,
+                &s.tuning,
+            )?);
             let all = by_time(all);
             let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
             store.write_transcript(id, "final", &lines)?;
@@ -524,19 +630,41 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
     let cfg = engine.resolved().typed()?;
     let s = settings_of(engine, &cfg)?;
     match a {
-        Action::SttTranscribe { path, session, speaker } => {
+        Action::SttTranscribe {
+            path,
+            session,
+            speaker,
+        } => {
             let mut chans = wav::read(Path::new(path))?;
             match speaker.as_deref() {
                 None | Some("you") => {}
-                Some("them") => chans = Channels { you: vec![], them: std::mem::take(&mut chans.you) },
+                Some("them") => {
+                    chans = Channels {
+                        you: vec![],
+                        them: std::mem::take(&mut chans.you),
+                    }
+                }
                 Some(other) => {
-                    return Err(ConfigError::new("invalid_argument", format!("speaker must be 'you' or 'them', got {other:?}")))
+                    return Err(ConfigError::new(
+                        "invalid_argument",
+                        format!("speaker must be 'you' or 'them', got {other:?}"),
+                    ))
                 }
             }
             let asr = make_asr(&s, cfg.network.allow, &*engine.secret_store(&cfg))?;
             let now = Utc::now();
-            let id = session.clone().unwrap_or_else(|| format!("session_{}", now.format("%Y-%m-%d_%H-%M-%S")));
-            run(&engine.store(), Some(&*engine.bus), asr, &s, &chans, &id, now)
+            let id = session
+                .clone()
+                .unwrap_or_else(|| format!("session_{}", now.format("%Y-%m-%d_%H-%M-%S")));
+            run(
+                &engine.store(),
+                Some(&*engine.bus),
+                asr,
+                &s,
+                &chans,
+                &id,
+                now,
+            )
         }
         Action::SttModelFetch { wait } => {
             let wait = wait.unwrap_or(false);
@@ -562,7 +690,11 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             let key = if s.cloud_key.is_empty() {
                 "none"
             } else {
-                match crate::secrets::resolve(&*engine.secret_store(&cfg), &s.cloud_key, cfg.secrets.max_key_len as usize) {
+                match crate::secrets::resolve(
+                    &*engine.secret_store(&cfg),
+                    &s.cloud_key,
+                    cfg.secrets.max_key_len as usize,
+                ) {
                     Ok(_) => "set",
                     Err(e) if e.code == "secret_not_found" => "missing",
                     Err(e) => e.code,
@@ -594,17 +726,25 @@ fn problem(s: &Settings) -> Value {
     if s.backend != SttBackend::Local {
         return Value::Null;
     }
-    if s.engine == SttEngine::Whisper && !cfg!(feature = "whisper") || s.engine == SttEngine::Parakeet && !cfg!(feature = "parakeet") {
+    if s.engine == SttEngine::Whisper && !cfg!(feature = "whisper")
+        || s.engine == SttEngine::Parakeet && !cfg!(feature = "parakeet")
+    {
         return json!({"code": "backend_unavailable", "message": "This build has no local transcription engine, so recordings are saved as audio only. Use a build with local ASR or set stt.backend to cloud.", "fix": null});
     }
-    let present = if s.engine == SttEngine::Whisper { s.model_file.is_file() } else { s.model_file.is_dir() };
+    let present = if s.engine == SttEngine::Whisper {
+        s.model_file.is_file()
+    } else {
+        s.model_file.is_dir()
+    };
     if present {
         return Value::Null;
     }
     let fetchable = models::check(s).is_ok();
     match models::progress(&s.model_file) {
         Some(p) if p.state == "downloading" => {
-            let pct = p.to_json()["percent"].as_u64().map_or(String::new(), |x| format!(" {x}%"));
+            let pct = p.to_json()["percent"]
+                .as_u64()
+                .map_or(String::new(), |x| format!(" {x}%"));
             json!({"code": "model_downloading", "message": format!("Downloading the {} model{pct}. Recordings made until it finishes are saved as audio only.", s.model), "fix": null})
         }
         Some(p) if p.state == "failed" => {
@@ -679,14 +819,24 @@ mod tests {
             self.calls.lock().unwrap().push(pcm.len());
             let secs = pcm.len() as f64 / f64::from(SAMPLE_RATE);
             Ok(vec![
-                Segment { start: 0.0, end: secs, text: format!("heard {}", secs.round() as u64) },
-                Segment { start: 0.0, end: 0.1, text: "[BLANK_AUDIO]".into() },
+                Segment {
+                    start: 0.0,
+                    end: secs,
+                    text: format!("heard {}", secs.round() as u64),
+                },
+                Segment {
+                    start: 0.0,
+                    end: 0.1,
+                    text: "[BLANK_AUDIO]".into(),
+                },
             ])
         }
     }
 
     fn tone(secs: f64) -> Vec<f32> {
-        (0..(secs * f64::from(SAMPLE_RATE)) as usize).map(|i| (i as f32 * 0.05).sin() * 0.3).collect()
+        (0..(secs * f64::from(SAMPLE_RATE)) as usize)
+            .map(|i| (i as f32 * 0.05).sin() * 0.3)
+            .collect()
     }
 
     fn settings(live: bool, fin: bool) -> Settings {
@@ -708,8 +858,17 @@ mod tests {
 
     #[test]
     fn live_windows_offsets_and_flush() {
-        let asr = Arc::new(Fake { calls: Mutex::new(vec![]) });
-        let mut live = Live::new(asr.clone(), "en", 4.0, settings(true, true).tuning, "you", "remote_1");
+        let asr = Arc::new(Fake {
+            calls: Mutex::new(vec![]),
+        });
+        let mut live = Live::new(
+            asr.clone(),
+            "en",
+            4.0,
+            settings(true, true).tuning,
+            "you",
+            "remote_1",
+        );
         assert!(live.push(0, &tone(3.0)).unwrap().is_empty());
         let a = live.push(0, &tone(3.0)).unwrap(); // 6 s buffered: one 4 s window
         assert_eq!(a.len(), 1);
@@ -720,12 +879,17 @@ mod tests {
         assert_eq!(rest.len(), 2); // you: ~2 s left, them: 1 s
         let you = rest.iter().find(|u| u.speaker == "you").unwrap();
         assert!(you.start >= 3.2 && you.start <= 4.0, "{}", you.start); // second window starts at the cut
-        assert_eq!(rest.iter().find(|u| u.speaker == "remote_1").unwrap().start, 0.0);
+        assert_eq!(
+            rest.iter().find(|u| u.speaker == "remote_1").unwrap().start,
+            0.0
+        );
     }
 
     #[test]
     fn leading_silence_is_cut_and_added_back_as_offset() {
-        let asr = Arc::new(Fake { calls: Mutex::new(vec![]) });
+        let asr = Arc::new(Fake {
+            calls: Mutex::new(vec![]),
+        });
         let mut pcm = vec![0.0f32; 16_000 * 2];
         pcm.extend(tone(1.0));
         pcm.extend(vec![0.0f32; 16_000 * 3]);
@@ -738,8 +902,17 @@ mod tests {
 
     #[test]
     fn silence_is_not_sent_to_the_recogniser() {
-        let asr = Arc::new(Fake { calls: Mutex::new(vec![]) });
-        let mut live = Live::new(asr.clone(), "en", 2.0, settings(true, true).tuning, "you", "remote_1");
+        let asr = Arc::new(Fake {
+            calls: Mutex::new(vec![]),
+        });
+        let mut live = Live::new(
+            asr.clone(),
+            "en",
+            2.0,
+            settings(true, true).tuning,
+            "you",
+            "remote_1",
+        );
         assert!(live.push(0, &vec![0.0; 16_000 * 5]).unwrap().is_empty());
         assert!(live.flush().unwrap().is_empty());
         assert!(asr.calls.lock().unwrap().is_empty());
@@ -747,24 +920,57 @@ mod tests {
 
     #[test]
     fn run_writes_openoats_layout_for_every_live_final_combination() {
-        let chans = Channels { you: tone(5.0), them: tone(3.0) };
+        let chans = Channels {
+            you: tone(5.0),
+            them: tone(3.0),
+        };
         for (live, fin) in [(true, true), (true, false), (false, true)] {
             let dir = tempfile::tempdir().unwrap();
             let store = Store::new(dir.path());
             let bus = Bus::default();
             let rx = bus.subscribe(vec!["segment".into()]);
-            let now = DateTime::parse_from_rfc3339("2026-10-28T12:00:10Z").unwrap().with_timezone(&Utc);
-            let r = run(&store, Some(&bus), Arc::new(Fake { calls: Mutex::new(vec![]) }), &settings(live, fin), &chans, "session_t", now).unwrap();
-            assert_eq!(r["live_utterances"].as_u64().unwrap() > 0, live, "{live}/{fin}");
-            assert_eq!(r["final_utterances"].as_u64().unwrap() > 0, fin, "{live}/{fin}");
+            let now = DateTime::parse_from_rfc3339("2026-10-28T12:00:10Z")
+                .unwrap()
+                .with_timezone(&Utc);
+            let r = run(
+                &store,
+                Some(&bus),
+                Arc::new(Fake {
+                    calls: Mutex::new(vec![]),
+                }),
+                &settings(live, fin),
+                &chans,
+                "session_t",
+                now,
+            )
+            .unwrap();
+            assert_eq!(
+                r["live_utterances"].as_u64().unwrap() > 0,
+                live,
+                "{live}/{fin}"
+            );
+            assert_eq!(
+                r["final_utterances"].as_u64().unwrap() > 0,
+                fin,
+                "{live}/{fin}"
+            );
             let t = store.transcript("session_t").unwrap();
             let us = t["utterances"].as_array().unwrap();
             assert!(!us.is_empty());
             assert_eq!(t["source"], if fin { "final" } else { "live" });
-            let speakers: std::collections::BTreeSet<&str> = us.iter().map(|u| u["speaker"].as_str().unwrap()).collect();
-            assert_eq!(speakers, ["remote_1", "you"].into_iter().collect::<std::collections::BTreeSet<&str>>());
+            let speakers: std::collections::BTreeSet<&str> =
+                us.iter().map(|u| u["speaker"].as_str().unwrap()).collect();
+            assert_eq!(
+                speakers,
+                ["remote_1", "you"]
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<&str>>()
+            );
             // Timestamps: recording started 5 s before `now`, utterances are offsets from it.
-            assert!(us.iter().all(|u| u["timestamp"].as_str().unwrap().starts_with("2026-10-28T12:00:")));
+            assert!(us.iter().all(|u| u["timestamp"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-10-28T12:00:")));
             assert_eq!(us[0]["timestamp"], "2026-10-28T12:00:05Z");
             let g = store.get("session_t").unwrap();
             assert_eq!(g["utterance_count"], us.len());
@@ -777,12 +983,48 @@ mod tests {
     fn nothing_enabled_and_duplicate_ids() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
-        let chans = Channels { you: tone(1.0), them: vec![] };
+        let chans = Channels {
+            you: tone(1.0),
+            them: vec![],
+        };
         let now = Utc::now();
-        let e = run(&store, None, Arc::new(Fake { calls: Mutex::new(vec![]) }), &settings(false, false), &chans, "s1", now).unwrap_err();
+        let e = run(
+            &store,
+            None,
+            Arc::new(Fake {
+                calls: Mutex::new(vec![]),
+            }),
+            &settings(false, false),
+            &chans,
+            "s1",
+            now,
+        )
+        .unwrap_err();
         assert_eq!(e.code, "nothing_enabled");
-        run(&store, None, Arc::new(Fake { calls: Mutex::new(vec![]) }), &settings(true, true), &chans, "s1", now).unwrap();
-        let e = run(&store, None, Arc::new(Fake { calls: Mutex::new(vec![]) }), &settings(true, true), &chans, "s1", now).unwrap_err();
+        run(
+            &store,
+            None,
+            Arc::new(Fake {
+                calls: Mutex::new(vec![]),
+            }),
+            &settings(true, true),
+            &chans,
+            "s1",
+            now,
+        )
+        .unwrap();
+        let e = run(
+            &store,
+            None,
+            Arc::new(Fake {
+                calls: Mutex::new(vec![]),
+            }),
+            &settings(true, true),
+            &chans,
+            "s1",
+            now,
+        )
+        .unwrap_err();
         assert_eq!(e.code, "exists");
     }
 
@@ -797,9 +1039,14 @@ mod tests {
         };
         for (k, v) in [
             ("stt.local.model", "../evil"),
-            ("stt.language", " "), ("stt.speaker_you", "remote_1"),
+            ("stt.language", " "),
+            ("stt.speaker_you", "remote_1"),
         ] {
-            assert_eq!(check(k, json!(v)).unwrap_err().code, "invalid_value", "{k}={v}");
+            assert_eq!(
+                check(k, json!(v)).unwrap_err().code,
+                "invalid_value",
+                "{k}={v}"
+            );
         }
         check("stt.live.chunk", json!("10s")).unwrap();
     }
@@ -837,7 +1084,10 @@ mod tests {
 
     #[test]
     fn final_piece_and_feed_convert_to_samples() {
-        let t = tuning_with(&[("stt.final_piece", json!("10s")), ("stt.feed", json!("50ms"))]);
+        let t = tuning_with(&[
+            ("stt.final_piece", json!("10s")),
+            ("stt.feed", json!("50ms")),
+        ]);
         assert_eq!(t.final_piece_samples, 10 * SAMPLE_RATE as usize);
         assert_eq!(t.feed_samples, SAMPLE_RATE as usize / 20);
         let t = tuning_with(&[("stt.final_piece", json!("1h")), ("stt.feed", json!("10s"))]);

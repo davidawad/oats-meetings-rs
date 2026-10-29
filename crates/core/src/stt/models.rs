@@ -19,12 +19,30 @@ use crate::control::bus::Bus;
 
 /// (model name, SHA-256 of ggml-<name>.bin). Keep in sync with ci/fetch-models.sh.
 pub const PINS: &[(&str, &str)] = &[
-    ("tiny.en", "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f"),
-    ("tiny", "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"),
-    ("base.en", "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"),
-    ("base", "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe"),
-    ("small.en", "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d"),
-    ("small", "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"),
+    (
+        "tiny.en",
+        "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+    ),
+    (
+        "tiny",
+        "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+    ),
+    (
+        "base.en",
+        "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+    ),
+    (
+        "base",
+        "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+    ),
+    (
+        "small.en",
+        "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+    ),
+    (
+        "small",
+        "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+    ),
 ];
 
 pub fn pin(model: &str) -> Option<&'static str> {
@@ -44,11 +62,20 @@ pub struct Progress {
 
 impl Progress {
     fn new(model: &str, state: &'static str, done: u64, total: Option<u64>) -> Progress {
-        Progress { model: model.to_string(), state, done, total, error: None }
+        Progress {
+            model: model.to_string(),
+            state,
+            done,
+            total,
+            error: None,
+        }
     }
 
     pub fn to_json(&self) -> Value {
-        let pct = self.total.filter(|t| *t > 0).map(|t| (self.done * 100 / t).min(100));
+        let pct = self
+            .total
+            .filter(|t| *t > 0)
+            .map(|t| (self.done * 100 / t).min(100));
         let mut v = json!({"model": self.model, "state": self.state, "bytes": self.done, "total": self.total, "percent": pct});
         if let Some((code, msg)) = &self.error {
             v["error"] = json!({"code": code, "message": msg});
@@ -81,7 +108,11 @@ pub fn is_downloading(file: &Path) -> bool {
 }
 
 fn record(file: &Path, p: Progress) {
-    table().0.lock().expect("model table").insert(file.to_path_buf(), p);
+    table()
+        .0
+        .lock()
+        .expect("model table")
+        .insert(file.to_path_buf(), p);
     table().1.notify_all();
 }
 
@@ -103,7 +134,12 @@ pub fn check(s: &Settings) -> Result<&'static str> {
             "stt.local.model_path is set: put the model file there yourself; nothing is downloaded for an explicit path",
         ));
     }
-    pin(&s.model).ok_or_else(|| ConfigError::new("invalid_value", format!("stt.local.model '{}' has no pinned checksum", s.model)))
+    pin(&s.model).ok_or_else(|| {
+        ConfigError::new(
+            "invalid_value",
+            format!("stt.local.model '{}' has no pinned checksum", s.model),
+        )
+    })
 }
 
 fn hex(b: &[u8]) -> String {
@@ -112,14 +148,23 @@ fn hex(b: &[u8]) -> String {
 
 fn stream(url: &str, part: &Path, sha: &str, mut tick: impl FnMut(u64, Option<u64>)) -> Result<()> {
     let io = |e: std::io::Error| ConfigError::new("io_error", format!("{}: {e}", part.display()));
-    let net = |e: &dyn std::fmt::Display| ConfigError::new("model_download_failed", format!("{url}: {e}"));
-    let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+    let net = |e: &dyn std::fmt::Display| {
+        ConfigError::new("model_download_failed", format!("{url}: {e}"))
+    };
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
     let mut resp = agent.get(url).call().map_err(|e| net(&e))?;
     let status = resp.status().as_u16();
     if status != 200 {
         return Err(net(&format!("HTTP {status}")));
     }
-    let total = resp.headers().get("content-length").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+    let total = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
     let mut body = resp.body_mut().with_config().limit(u64::MAX).reader();
     let mut out = std::fs::File::create(part).map_err(io)?;
     let (mut hash, mut done, mut buf) = (Sha256::new(), 0u64, vec![0u8; 1 << 16]);
@@ -136,7 +181,10 @@ fn stream(url: &str, part: &Path, sha: &str, mut tick: impl FnMut(u64, Option<u6
     out.sync_all().map_err(io)?;
     let got = hex(&hash.finalize());
     if got != sha {
-        return Err(ConfigError::new("model_checksum_mismatch", format!("{url}: sha256 {got}, expected {sha}; the file was discarded")));
+        return Err(ConfigError::new(
+            "model_checksum_mismatch",
+            format!("{url}: sha256 {got}, expected {sha}; the file was discarded"),
+        ));
     }
     Ok(())
 }
@@ -158,27 +206,35 @@ fn run_pinned(s: &Settings, bus: Option<&Bus>, sha: &str) -> Result<Value> {
     record(&file, start.clone());
     publish(&start);
     if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| ConfigError::new("io_error", format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", dir.display())))?;
     }
     let part = file.with_extension("bin.part");
     let mut last_pct = u64::MAX;
     let r = stream(&url, &part, sha, |done, total| {
         let p = Progress::new(&s.model, "downloading", done, total);
-        let pct = total.filter(|t| *t > 0).map_or(done >> 22, |t| done * 100 / t);
+        let pct = total
+            .filter(|t| *t > 0)
+            .map_or(done >> 22, |t| done * 100 / t);
         record(&file, p.clone());
         if pct != last_pct {
             last_pct = pct;
             publish(&p);
         }
     })
-    .and_then(|()| std::fs::rename(&part, &file).map_err(|e| ConfigError::new("io_error", format!("{}: {e}", file.display()))));
+    .and_then(|()| {
+        std::fs::rename(&part, &file)
+            .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", file.display())))
+    });
     match r {
         Ok(()) => {
             let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
             let done = Progress::new(&s.model, "done", size, Some(size));
             record(&file, done.clone());
             publish(&done);
-            Ok(json!({"model": s.model, "path": file, "bytes": size, "sha256": sha, "state": "done"}))
+            Ok(
+                json!({"model": s.model, "path": file, "bytes": size, "sha256": sha, "state": "done"}),
+            )
         }
         Err(e) => {
             let _ = std::fs::remove_file(&part);
@@ -199,7 +255,9 @@ pub fn spawn(s: &Settings, bus: Option<std::sync::Arc<Bus>>) -> Result<Value> {
         return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
     }
     if is_downloading(&s.model_file) {
-        return Ok(progress(&s.model_file).map(|p| p.to_json()).unwrap_or(Value::Null));
+        return Ok(progress(&s.model_file)
+            .map(|p| p.to_json())
+            .unwrap_or(Value::Null));
     }
     let start = Progress::new(&s.model, "downloading", 0, None);
     record(&s.model_file, start.clone());
@@ -209,7 +267,9 @@ pub fn spawn(s: &Settings, bus: Option<std::sync::Arc<Bus>>) -> Result<Value> {
         .spawn(move || {
             let _ = run(&s2, bus.as_deref());
         })
-        .map_err(|e| ConfigError::new("io_error", format!("cannot start the download thread: {e}")))?;
+        .map_err(|e| {
+            ConfigError::new("io_error", format!("cannot start the download thread: {e}"))
+        })?;
     Ok(start.to_json())
 }
 
@@ -236,7 +296,8 @@ mod tests {
         for (k, v) in over {
             c.insert((*k).into(), v.clone());
         }
-        let cfg: crate::config::typed::Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
+        let cfg: crate::config::typed::Config =
+            serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
         Settings::from_config(&cfg, &dir.join("sessions")).unwrap()
     }
 
@@ -254,7 +315,9 @@ mod tests {
         assert_eq!(r["state"], "done");
         assert_eq!(std::fs::read(&s.model_file).unwrap(), body);
         assert!(!s.model_file.with_extension("bin.part").exists());
-        let events: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok()).map(|l| serde_json::from_str::<Value>(&l).unwrap()["data"].clone()).collect();
+        let events: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|l| serde_json::from_str::<Value>(&l).unwrap()["data"].clone())
+            .collect();
         assert_eq!(events.first().unwrap()["state"], "downloading");
         assert_eq!(events.last().unwrap()["state"], "done");
         assert_eq!(progress(&s.model_file).unwrap().state, "done");
@@ -270,7 +333,10 @@ mod tests {
         assert_eq!(e.code, "model_checksum_mismatch");
         assert!(!s.model_file.exists() && !s.model_file.with_extension("bin.part").exists());
         let p = progress(&s.model_file).unwrap();
-        assert_eq!((p.state, p.error.unwrap().0.as_str()), ("failed", "model_checksum_mismatch"));
+        assert_eq!(
+            (p.state, p.error.unwrap().0.as_str()),
+            ("failed", "model_checksum_mismatch")
+        );
     }
 
     #[test]
@@ -281,9 +347,25 @@ mod tests {
         h.join().unwrap();
         assert_eq!(e.code, "model_download_failed");
         assert!(e.message.contains("404"), "{}", e.message);
-        let e = run(&settings(dir.path(), "http://127.0.0.1:9", &[("stt.local.model_path", json!("/x/m.bin"))]), None).unwrap_err();
+        let e = run(
+            &settings(
+                dir.path(),
+                "http://127.0.0.1:9",
+                &[("stt.local.model_path", json!("/x/m.bin"))],
+            ),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(e.code, "unsupported_engine");
-        let e = run(&settings(dir.path(), "http://127.0.0.1:9", &[("stt.local.engine", json!("parakeet"))]), None).unwrap_err();
+        let e = run(
+            &settings(
+                dir.path(),
+                "http://127.0.0.1:9",
+                &[("stt.local.engine", json!("parakeet"))],
+            ),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(e.code, "unsupported_engine");
     }
 
@@ -293,7 +375,10 @@ mod tests {
         assert_eq!(names, crate::config::keys::STT_LOCAL_MODELS);
         let script = include_str!("../../../../ci/fetch-models.sh");
         for (n, sha) in PINS {
-            assert!(script.contains(&format!("[{n}]={sha}")), "ci/fetch-models.sh pin for {n}");
+            assert!(
+                script.contains(&format!("[{n}]={sha}")),
+                "ci/fetch-models.sh pin for {n}"
+            );
         }
     }
 }

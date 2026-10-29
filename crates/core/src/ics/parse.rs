@@ -10,7 +10,9 @@
 //! is read with the offset from before the gap; an ambiguous one (fall-back) takes its first
 //! occurrence, as RFC 5545 section 3.3.5 says.
 
-use chrono::{DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{
+    DateTime, Duration, LocalResult, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone, Utc,
+};
 use chrono_tz::Tz;
 use icalendar::parser::{Parameter, Property};
 use serde_json::{json, Value};
@@ -108,7 +110,12 @@ fn when_from(val: &str, params: &[Parameter<'_>], o: &ParseOpts) -> Result<When>
         match id.parse::<Tz>() {
             Ok(t) => t,
             Err(_) if o.tz_fallback => o.default_tz,
-            Err(_) => return Err(ConfigError::new("ics_bad_tz", format!("unknown TZID '{id}'"))),
+            Err(_) => {
+                return Err(ConfigError::new(
+                    "ics_bad_tz",
+                    format!("unknown TZID '{id}'"),
+                ))
+            }
         }
     } else {
         o.default_tz
@@ -229,20 +236,30 @@ fn rule_text(ev: &RawEvent) -> std::result::Result<String, String> {
 }
 
 fn rule_set(ev: &RawEvent) -> Result<rrule::RRuleSet> {
-    let text = rule_text(ev).map_err(|e| ConfigError::new("ics_bad_rrule", format!("{}: {e}", ev.uid)))?;
+    let text =
+        rule_text(ev).map_err(|e| ConfigError::new("ics_bad_rrule", format!("{}: {e}", ev.uid)))?;
     text.parse::<rrule::RRuleSet>()
         .map_err(|e| ConfigError::new("ics_bad_rrule", format!("{}: {e}", ev.uid)))
 }
 
-fn build_event(comp: &icalendar::parser::Component<'_>, idx: usize, o: &ParseOpts) -> Result<RawEvent> {
-    let find = |n: &str| comp.properties.iter().find(|p| p.name.as_str().eq_ignore_ascii_case(n));
+fn build_event(
+    comp: &icalendar::parser::Component<'_>,
+    idx: usize,
+    o: &ParseOpts,
+) -> Result<RawEvent> {
+    let find = |n: &str| {
+        comp.properties
+            .iter()
+            .find(|p| p.name.as_str().eq_ignore_ascii_case(n))
+    };
     let text = |n: &str| find(n).map(|p| p.val.clone().unescape_text().as_str().to_string());
     let uid = find("UID")
         .map(|p| p.val.as_str().trim().to_string())
         .filter(|u| !u.is_empty())
         .unwrap_or_else(|| format!("no-uid-{idx}"));
     let dt = find("DTSTART").ok_or_else(|| bad_event(format!("{uid}: VEVENT without DTSTART")))?;
-    let start = when_from(dt.val.as_str(), &dt.params, o).map_err(|e| ConfigError::new(e.code, format!("{uid}: {}", e.message)))?;
+    let start = when_from(dt.val.as_str(), &dt.params, o)
+        .map_err(|e| ConfigError::new(e.code, format!("{uid}: {}", e.message)))?;
     let end = match find("DTEND") {
         Some(p) => Some(
             when_from(p.val.as_str(), &p.params, o)
@@ -250,13 +267,13 @@ fn build_event(comp: &icalendar::parser::Component<'_>, idx: usize, o: &ParseOpt
         ),
         None => None,
     };
-    let duration = match find("DURATION") {
-        Some(p) => Some(
-            parse_duration(p.val.as_str())
-                .ok_or_else(|| bad_event(format!("{uid}: invalid DURATION '{}'", p.val.as_str())))?,
-        ),
-        None => None,
-    };
+    let duration =
+        match find("DURATION") {
+            Some(p) => Some(parse_duration(p.val.as_str()).ok_or_else(|| {
+                bad_event(format!("{uid}: invalid DURATION '{}'", p.val.as_str()))
+            })?),
+            None => None,
+        };
     let mut rdates = Vec::new();
     let mut exdates = Vec::new();
     for p in &comp.properties {
@@ -280,7 +297,9 @@ fn build_event(comp: &icalendar::parser::Component<'_>, idx: usize, o: &ParseOpt
         summary: text("SUMMARY").unwrap_or_default(),
         location: text("LOCATION").filter(|s| !s.is_empty()),
         description: text("DESCRIPTION").filter(|s| !s.is_empty()),
-        status: find("STATUS").map(|p| p.val.as_str().trim().to_ascii_uppercase()).unwrap_or_default(),
+        status: find("STATUS")
+            .map(|p| p.val.as_str().trim().to_ascii_uppercase())
+            .unwrap_or_default(),
         start,
         end,
         duration,
@@ -302,7 +321,10 @@ pub fn parse_feed(text: &str, o: &ParseOpts) -> Result<Parsed> {
         .get(..15)
         .map_or(false, |h| h.eq_ignore_ascii_case("BEGIN:VCALENDAR"));
     if !head_ok {
-        return Err(ConfigError::new("ics_not_calendar", "the body does not start with BEGIN:VCALENDAR"));
+        return Err(ConfigError::new(
+            "ics_not_calendar",
+            "the body does not start with BEGIN:VCALENDAR",
+        ));
     }
     let unfolded = icalendar::parser::unfold(text);
     let cal = icalendar::parser::read_calendar(&unfolded)
@@ -346,7 +368,10 @@ pub fn expand(
     // Occurrences replaced by a RECURRENCE-ID override.
     let overridden = |uid: &str, at: DateTime<Utc>| {
         p.events.iter().any(|e| {
-            e.uid == uid && e.recurrence_id.as_ref().map_or(false, |r| instant_of(r, o) == at)
+            e.uid == uid
+                && e.recurrence_id
+                    .as_ref()
+                    .map_or(false, |r| instant_of(r, o) == at)
         })
     };
     let mut out: Vec<(DateTime<Utc>, Value)> = Vec::new();
@@ -358,7 +383,11 @@ pub fn expand(
         if all_day && !o.include_all_day {
             continue;
         }
-        let tz = if all_day { o.default_tz } else { zone_of(&ev.start) };
+        let tz = if all_day {
+            o.default_tz
+        } else {
+            zone_of(&ev.start)
+        };
         let start0 = instant_of(&ev.start, o);
         let span = if all_day {
             let days = match (&ev.end, ev.duration) {
@@ -386,12 +415,18 @@ pub fn expand(
         let walls: Vec<NaiveDateTime> = if ev.rrule.is_some() {
             let set = rule_set(ev)?;
             let wtz = zone_of(&ev.start);
-            let lo = (from - span.1 - Duration::days(2)).with_timezone(&wtz).naive_local();
+            let lo = (from - span.1 - Duration::days(2))
+                .with_timezone(&wtz)
+                .naive_local();
             let hi = (to + Duration::days(2)).with_timezone(&wtz).naive_local();
             let set = set
                 .after(rrule::Tz::UTC.from_utc_datetime(&lo))
                 .before(rrule::Tz::UTC.from_utc_datetime(&hi));
-            set.all(max_occ).dates.iter().map(|d| d.naive_local()).collect()
+            set.all(max_occ)
+                .dates
+                .iter()
+                .map(|d| d.naive_local())
+                .collect()
         } else {
             let wtz = zone_of(&ev.start);
             let mut v = vec![wall_in(&ev.start, wtz)];
@@ -405,7 +440,11 @@ pub fn expand(
         let recurring = ev.rrule.is_some() || !ev.rdates.is_empty();
         let wtz = zone_of(&ev.start);
         for wall in walls {
-            let s = if all_day { resolve(o.default_tz, wall) } else { resolve(wtz, wall) };
+            let s = if all_day {
+                resolve(o.default_tz, wall)
+            } else {
+                resolve(wtz, wall)
+            };
             if recurring && overridden(&ev.uid, s) {
                 continue;
             }

@@ -21,7 +21,9 @@ impl<'de> Deserialize<'de> for Dur {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s = String::deserialize(d)?;
         parse_duration_ms(&s).map(Dur).ok_or_else(|| {
-            serde::de::Error::custom(format!("'{s}' is not a duration like \"15s\" (units ms, s, m, h, d)"))
+            serde::de::Error::custom(format!(
+                "'{s}' is not a duration like \"15s\" (units ms, s, m, h, d)"
+            ))
         })
     }
 }

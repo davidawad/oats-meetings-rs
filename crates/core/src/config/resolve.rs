@@ -223,7 +223,10 @@ impl Resolved {
         if cfg.kb.min_chunk > cfg.kb.max_chunk {
             return Err(ConfigError::new(
                 "invalid_combination",
-                format!("kb.min_chunk ({}) must not exceed kb.max_chunk ({})", cfg.kb.min_chunk, cfg.kb.max_chunk),
+                format!(
+                    "kb.min_chunk ({}) must not exceed kb.max_chunk ({})",
+                    cfg.kb.min_chunk, cfg.kb.max_chunk
+                ),
             ));
         }
         Ok(cfg)
@@ -241,7 +244,11 @@ pub fn resolve(inp: &Inputs) -> Result<Resolved> {
         }
     };
     for (axis, val) in [("os", inp.os), ("arch", inp.arch), ("machine", inp.machine)] {
-        apply(axis_flat(axis, val)?, format!("axis:{axis}={val}"), &mut flat);
+        apply(
+            axis_flat(axis, val)?,
+            format!("axis:{axis}={val}"),
+            &mut flat,
+        );
     }
     if let Some(p) = inp.pack {
         apply(pack_flat(p)?, format!("pack:{p}"), &mut flat);
@@ -308,7 +315,9 @@ mod tests {
             "type_mismatch"
         );
         assert_eq!(
-            with_user("[stt]\nbackend = \"quantum\"\n").unwrap_err().code,
+            with_user("[stt]\nbackend = \"quantum\"\n")
+                .unwrap_err()
+                .code,
             "invalid_value"
         );
         assert_eq!(with_user("[app\n").unwrap_err().code, "parse_error");
@@ -365,10 +374,13 @@ mod tests {
     fn every_int_key_accepts_its_bounds_and_vetoes_everything_else() {
         let mut seen = 0;
         for k in KEYS {
-            let Kind::Int { min, max } = k.kind else { continue };
+            let Kind::Int { min, max } = k.kind else {
+                continue;
+            };
             seen += 1;
             for v in [min, max] {
-                let r = with_user(&lit_for(k.path, &v.to_string())).unwrap_or_else(|e| panic!("{}={v}: {e}", k.path));
+                let r = with_user(&lit_for(k.path, &v.to_string()))
+                    .unwrap_or_else(|e| panic!("{}={v}: {e}", k.path));
                 assert_eq!(r.flat[k.path], Value::from(v), "{}", k.path);
                 r.typed().unwrap_or_else(|e| panic!("{}={v}: {e}", k.path));
             }
@@ -378,9 +390,18 @@ mod tests {
             }
             for lit in ["\"7\"", "1.5", "true"] {
                 let e = with_user(&lit_for(k.path, lit)).unwrap_err();
-                assert!(matches!(e.code, "type_mismatch" | "invalid_value"), "{}={lit}: {}", k.path, e.code);
+                assert!(
+                    matches!(e.code, "type_mismatch" | "invalid_value"),
+                    "{}={lit}: {}",
+                    k.path,
+                    e.code
+                );
             }
-            assert!(matches!(k.default, keys::Def::I(d) if (min..=max).contains(&d)), "{} default in range", k.path);
+            assert!(
+                matches!(k.default, keys::Def::I(d) if (min..=max).contains(&d)),
+                "{} default in range",
+                k.path
+            );
         }
         assert!(seen >= 6, "int keys present");
     }
@@ -391,36 +412,71 @@ mod tests {
     fn every_duration_key_accepts_its_bounds_and_vetoes_everything_else() {
         let mut seen = 0;
         for k in KEYS {
-            let Kind::Duration { min_ms, max_ms } = k.kind else { continue };
+            let Kind::Duration { min_ms, max_ms } = k.kind else {
+                continue;
+            };
             seen += 1;
             for ms in [min_ms, max_ms] {
                 let text = keys::format_duration_ms(ms);
-                let r = with_user(&lit_for(k.path, &format!("\"{text}\""))).unwrap_or_else(|e| panic!("{}={text}: {e}", k.path));
+                let r = with_user(&lit_for(k.path, &format!("\"{text}\"")))
+                    .unwrap_or_else(|e| panic!("{}={text}: {e}", k.path));
                 assert_eq!(r.flat[k.path], Value::String(text.clone()), "{}", k.path);
-                r.typed().unwrap_or_else(|e| panic!("{}={text}: {e}", k.path));
+                r.typed()
+                    .unwrap_or_else(|e| panic!("{}={text}: {e}", k.path));
             }
             let mut outside = vec![format!("{}ms", max_ms + 1)];
             if min_ms > 0 {
                 outside.push(format!("{}ms", min_ms - 1));
             }
-            for text in outside.into_iter().chain(["15", "15x", "1.5s", "-1s", "", "s", "1 s"].map(String::from)) {
+            for text in outside
+                .into_iter()
+                .chain(["15", "15x", "1.5s", "-1s", "", "s", "1 s"].map(String::from))
+            {
                 let e = with_user(&lit_for(k.path, &format!("\"{text}\""))).unwrap_err();
                 assert_eq!(e.code, "invalid_value", "{}={text:?}", k.path);
             }
             let e = with_user(&lit_for(k.path, "15")).unwrap_err();
             assert_eq!(e.code, "type_mismatch", "{}", k.path);
-            assert!(matches!(k.default, keys::Def::D(d) if (min_ms..=max_ms).contains(&d)), "{} default in range", k.path);
+            assert!(
+                matches!(k.default, keys::Def::D(d) if (min_ms..=max_ms).contains(&d)),
+                "{} default in range",
+                k.path
+            );
         }
         assert!(seen >= 8, "duration keys present");
     }
 
     #[test]
     fn duration_text_round_trips_and_units_are_exact() {
-        for (t, ms) in [("0s", 0), ("1ms", 1), ("999ms", 999), ("1s", 1000), ("90s", 90_000), ("2m", 120_000), ("1h", 3_600_000), ("30d", 2_592_000_000)] {
+        for (t, ms) in [
+            ("0s", 0),
+            ("1ms", 1),
+            ("999ms", 999),
+            ("1s", 1000),
+            ("90s", 90_000),
+            ("2m", 120_000),
+            ("1h", 3_600_000),
+            ("30d", 2_592_000_000),
+        ] {
             assert_eq!(keys::parse_duration_ms(t), Some(ms), "{t}");
         }
-        for ms in [0, 1, 999, 1000, 1500, 60_000, 90_000, 3_600_000, 86_400_000, 2_592_000_000] {
-            assert_eq!(keys::parse_duration_ms(&keys::format_duration_ms(ms)), Some(ms), "{ms}");
+        for ms in [
+            0,
+            1,
+            999,
+            1000,
+            1500,
+            60_000,
+            90_000,
+            3_600_000,
+            86_400_000,
+            2_592_000_000,
+        ] {
+            assert_eq!(
+                keys::parse_duration_ms(&keys::format_duration_ms(ms)),
+                Some(ms),
+                "{ms}"
+            );
         }
         assert_eq!(keys::format_duration_ms(120_000), "2m");
         assert_eq!(keys::format_duration_ms(1500), "1500ms");
@@ -429,8 +485,14 @@ mod tests {
 
     #[test]
     fn equal_durations_written_differently_are_the_same_typed_config() {
-        let a = with_user("[ics]\ntimeout = \"60s\"\n").unwrap().typed().unwrap();
-        let b = with_user("[ics]\ntimeout = \"1m\"\n").unwrap().typed().unwrap();
+        let a = with_user("[ics]\ntimeout = \"60s\"\n")
+            .unwrap()
+            .typed()
+            .unwrap();
+        let b = with_user("[ics]\ntimeout = \"1m\"\n")
+            .unwrap()
+            .typed()
+            .unwrap();
         assert_eq!(a, b);
     }
 
@@ -471,8 +533,16 @@ mod tests {
             let keys: BTreeSet<String> = pack_flat(n).unwrap().into_keys().collect();
             assert_eq!(keys, managed, "pack {n} must set all managed keys");
         }
-        let a = resolve(&Inputs { pack: Some("cloud"), ..base() }).unwrap();
-        let b = resolve(&Inputs { pack: Some("local-only"), ..base() }).unwrap();
+        let a = resolve(&Inputs {
+            pack: Some("cloud"),
+            ..base()
+        })
+        .unwrap();
+        let b = resolve(&Inputs {
+            pack: Some("local-only"),
+            ..base()
+        })
+        .unwrap();
         let d = resolve(&base()).unwrap();
         assert_ne!(a.flat, b.flat);
         // local-only equals defaults: no stale flag from a previous pack.
@@ -489,7 +559,11 @@ mod tests {
 
     #[test]
     fn unknown_pack() {
-        let e = resolve(&Inputs { pack: Some("nope"), ..base() }).unwrap_err();
+        let e = resolve(&Inputs {
+            pack: Some("nope"),
+            ..base()
+        })
+        .unwrap_err();
         assert_eq!(e.code, "unknown_pack");
     }
 
@@ -501,7 +575,11 @@ mod tests {
             ("linux", "none"),
         ] {
             let r = resolve(&Inputs { os, ..base() }).unwrap();
-            assert_eq!(r.flat["privacy.hide_method"], Value::String(want.into()), "{os}");
+            assert_eq!(
+                r.flat["privacy.hide_method"],
+                Value::String(want.into()),
+                "{os}"
+            );
         }
         let r = resolve(&Inputs {
             os: "macos",

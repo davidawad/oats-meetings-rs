@@ -25,7 +25,10 @@ impl ParakeetAsr {
             if p.is_file() {
                 Ok(p.display().to_string())
             } else {
-                Err(ConfigError::new("model_not_found", format!("{} not found", p.display())))
+                Err(ConfigError::new(
+                    "model_not_found",
+                    format!("{} not found", p.display()),
+                ))
             }
         };
         let mut cfg = OfflineRecognizerConfig::default();
@@ -37,9 +40,15 @@ impl ParakeetAsr {
         cfg.model_config.tokens = Some(file("tokens.txt")?);
         cfg.model_config.provider = Some("cpu".into());
         cfg.model_config.num_threads = i32::try_from(threads.max(1)).unwrap_or(4);
-        let recognizer = OfflineRecognizer::create(&cfg)
-            .ok_or_else(|| ConfigError::new("model_load_failed", format!("{}: sherpa-onnx could not load the model", dir.display())))?;
-        Ok(ParakeetAsr { recognizer: Mutex::new(recognizer) })
+        let recognizer = OfflineRecognizer::create(&cfg).ok_or_else(|| {
+            ConfigError::new(
+                "model_load_failed",
+                format!("{}: sherpa-onnx could not load the model", dir.display()),
+            )
+        })?;
+        Ok(ParakeetAsr {
+            recognizer: Mutex::new(recognizer),
+        })
     }
 }
 
@@ -57,6 +66,14 @@ impl Asr for ParakeetAsr {
         r.decode(&stream);
         let text = stream.get_result().map(|x| x.text).unwrap_or_default();
         let text = text.trim().to_string();
-        Ok(if text.is_empty() { vec![] } else { vec![Segment { start: 0.0, end: pcm.len() as f64 / 16_000.0, text }] })
+        Ok(if text.is_empty() {
+            vec![]
+        } else {
+            vec![Segment {
+                start: 0.0,
+                end: pcm.len() as f64 / 16_000.0,
+                text,
+            }]
+        })
     }
 }

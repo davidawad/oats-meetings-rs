@@ -173,7 +173,10 @@ fn clear_stale(_path: &Path) -> Result<()> {
 
 fn bind(path: &Path) -> Result<Listener> {
     clear_stale(path)?;
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty() && cfg!(unix)) {
+    if let Some(dir) = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty() && cfg!(unix))
+    {
         std::fs::create_dir_all(dir).map_err(|e| io_err(&dir.display().to_string(), e))?;
     }
     let name = path
@@ -226,12 +229,21 @@ pub fn serve(engine: Arc<Engine>, runtime_dir: &Path) -> Result<ServerHandle> {
 }
 
 /// `poll` is how often the watcher checks the user config file for hot reload.
-pub fn serve_with_poll(engine: Arc<Engine>, runtime_dir: &Path, poll: Duration) -> Result<ServerHandle> {
+pub fn serve_with_poll(
+    engine: Arc<Engine>,
+    runtime_dir: &Path,
+    poll: Duration,
+) -> Result<ServerHandle> {
     serve_inner(engine, runtime_dir, Some(poll))
 }
 
-fn serve_inner(engine: Arc<Engine>, runtime_dir: &Path, poll: Option<Duration>) -> Result<ServerHandle> {
-    std::fs::create_dir_all(runtime_dir).map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
+fn serve_inner(
+    engine: Arc<Engine>,
+    runtime_dir: &Path,
+    poll: Option<Duration>,
+) -> Result<ServerHandle> {
+    std::fs::create_dir_all(runtime_dir)
+        .map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
     let cfg = engine.snapshot();
     let held = if cfg.config.app.single_instance {
         Some(acquire_lock(&paths::lock_path(runtime_dir))?)
@@ -286,7 +298,9 @@ fn serve_inner(engine: Arc<Engine>, runtime_dir: &Path, poll: Option<Duration>) 
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(eng.snapshot().config.control.accept_poll.as_duration());
                     }
-                    Err(_) => thread::sleep(eng.snapshot().config.control.accept_backoff.as_duration()),
+                    Err(_) => {
+                        thread::sleep(eng.snapshot().config.control.accept_backoff.as_duration())
+                    }
                 }
             }
             #[cfg(unix)]
@@ -295,19 +309,22 @@ fn serve_inner(engine: Arc<Engine>, runtime_dir: &Path, poll: Option<Duration>) 
         .map_err(|e| io_err("spawn accept", e))?;
 
     let eng = Arc::clone(&engine);
-    let watcher = thread::Builder::new()
-        .name("oats-watch".into())
-        .spawn(move || {
-            while !eng.is_shutdown() {
-                thread::sleep(poll.unwrap_or_else(|| eng.snapshot().config.config.poll_interval.as_duration()));
-                // config.hot_reload is read live: turning it off stops file-driven reloads. A
-                // file that was rejected is not retried until its content changes.
-                if eng.hot_reload_enabled() && eng.file_needs_reload() {
-                    let _ = eng.reload("hot-reload");
+    let watcher =
+        thread::Builder::new()
+            .name("oats-watch".into())
+            .spawn(move || {
+                while !eng.is_shutdown() {
+                    thread::sleep(poll.unwrap_or_else(|| {
+                        eng.snapshot().config.config.poll_interval.as_duration()
+                    }));
+                    // config.hot_reload is read live: turning it off stops file-driven reloads. A
+                    // file that was rejected is not retried until its content changes.
+                    if eng.hot_reload_enabled() && eng.file_needs_reload() {
+                        let _ = eng.reload("hot-reload");
+                    }
                 }
-            }
-        })
-        .map_err(|e| io_err("spawn watcher", e))?;
+            })
+            .map_err(|e| io_err("spawn watcher", e))?;
 
     // Detached: ends on its own when the engine shuts down.
     crate::ics::spawn_scheduler(Arc::clone(&engine));
@@ -366,7 +383,11 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
         buf.clear();
         // control.max_line is read per request, so a reload applies to open connections.
         let max_line = engine.snapshot().config.control.max_line;
-        let n = match reader.by_ref().take(max_line + 1).read_until(b'\n', &mut buf) {
+        let n = match reader
+            .by_ref()
+            .take(max_line + 1)
+            .read_until(b'\n', &mut buf)
+        {
             Ok(0) | Err(_) => return,
             Ok(n) => n,
         };
@@ -386,7 +407,11 @@ fn handle(engine: Arc<Engine>, stream: Stream) {
             return;
         }
         let reply = match std::str::from_utf8(&buf) {
-            Err(_) => Some(err_envelope(&Value::Null, "bad_request", "request is not valid UTF-8")),
+            Err(_) => Some(err_envelope(
+                &Value::Null,
+                "bad_request",
+                "request is not valid UTF-8",
+            )),
             Ok(text) if text.trim().is_empty() => None,
             Ok(text) => process(&engine, &conn, text.trim()),
         };
@@ -419,10 +444,20 @@ fn drain_line<R: BufRead>(reader: &mut R, chunk: u64, max: u64) -> bool {
 fn process(engine: &Arc<Engine>, conn: &Arc<Conn>, line: &str) -> Option<Value> {
     let parsed: Value = match serde_json::from_str(line) {
         Ok(v) => v,
-        Err(e) => return Some(err_envelope(&Value::Null, "bad_request", &format!("invalid JSON: {e}"))),
+        Err(e) => {
+            return Some(err_envelope(
+                &Value::Null,
+                "bad_request",
+                &format!("invalid JSON: {e}"),
+            ))
+        }
     };
     let Value::Object(mut obj) = parsed else {
-        return Some(err_envelope(&Value::Null, "bad_request", "request must be a JSON object"));
+        return Some(err_envelope(
+            &Value::Null,
+            "bad_request",
+            "request must be a JSON object",
+        ));
     };
     let id = obj.remove("id").unwrap_or(Value::Null);
     if let Some(v) = obj.remove("v") {
@@ -434,11 +469,23 @@ fn process(engine: &Arc<Engine>, conn: &Arc<Conn>, line: &str) -> Option<Value> 
             ));
         }
     }
-    let Some(name) = obj.get("action").and_then(Value::as_str).map(str::to_string) else {
-        return Some(err_envelope(&id, "bad_request", "missing string field 'action'"));
+    let Some(name) = obj
+        .get("action")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return Some(err_envelope(
+            &id,
+            "bad_request",
+            "missing string field 'action'",
+        ));
     };
     if !action::exists(&name) {
-        return Some(err_envelope(&id, "unknown_action", &format!("unknown action '{name}'")));
+        return Some(err_envelope(
+            &id,
+            "unknown_action",
+            &format!("unknown action '{name}'"),
+        ));
     }
     let act: Action = match serde_json::from_value(Value::Object(obj)) {
         Ok(a) => a,
@@ -455,7 +502,12 @@ fn process(engine: &Arc<Engine>, conn: &Arc<Conn>, line: &str) -> Option<Value> 
 
 /// Sends the ack itself (so queued events can never precede it) and returns None, or returns the
 /// error envelope.
-fn subscribe(engine: &Arc<Engine>, conn: &Arc<Conn>, id: &Value, topics: Vec<String>) -> Option<Value> {
+fn subscribe(
+    engine: &Arc<Engine>,
+    conn: &Arc<Conn>,
+    id: &Value,
+    topics: Vec<String>,
+) -> Option<Value> {
     if let Some(bad) = topics.iter().find(|t| !EVENTS.contains(&t.as_str())) {
         return Some(err_envelope(
             id,
@@ -463,22 +515,34 @@ fn subscribe(engine: &Arc<Engine>, conn: &Arc<Conn>, id: &Value, topics: Vec<Str
             &format!("unknown topic '{bad}'; known: {}", EVENTS.join(", ")),
         ));
     }
-    let rx = engine.bus.subscribe_with(topics.clone(), engine.snapshot().config.control.event_queue as usize);
-    let subscribed = if topics.is_empty() { json!(EVENTS) } else { json!(topics) };
-    if conn.send(&ok_envelope(id, json!({"subscribed": subscribed}))).is_err() {
+    let rx = engine.bus.subscribe_with(
+        topics.clone(),
+        engine.snapshot().config.control.event_queue as usize,
+    );
+    let subscribed = if topics.is_empty() {
+        json!(EVENTS)
+    } else {
+        json!(topics)
+    };
+    if conn
+        .send(&ok_envelope(id, json!({"subscribed": subscribed})))
+        .is_err()
+    {
         return None;
     }
     let c = Arc::clone(conn);
-    let _ = thread::Builder::new().name("oats-sub".into()).spawn(move || {
-        while let Ok(line) = rx.recv() {
-            let mut l = line;
-            l.push('\n');
-            let mut tx = c.tx.lock().expect("conn writer");
-            if tx.write_all(l.as_bytes()).and_then(|_| tx.flush()).is_err() {
-                break;
+    let _ = thread::Builder::new()
+        .name("oats-sub".into())
+        .spawn(move || {
+            while let Ok(line) = rx.recv() {
+                let mut l = line;
+                l.push('\n');
+                let mut tx = c.tx.lock().expect("conn writer");
+                if tx.write_all(l.as_bytes()).and_then(|_| tx.flush()).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
     None
 }
 
@@ -491,12 +555,21 @@ mod drain_tests {
     #[test]
     fn drain_stops_at_the_newline_or_the_cap() {
         for chunk in [1024u64, 4096, 65_536] {
-            for (len, max, want) in [(1_000usize, 2_000u64, true), (1_999, 2_000, true), (2_000, 2_000, false), (5_000, 2_000, false)] {
+            for (len, max, want) in [
+                (1_000usize, 2_000u64, true),
+                (1_999, 2_000, true),
+                (2_000, 2_000, false),
+                (5_000, 2_000, false),
+            ] {
                 let mut data = vec![b'x'; len];
                 data.push(b'\n');
                 data.extend_from_slice(b"rest");
                 let mut r = std::io::BufReader::new(&data[..]);
-                assert_eq!(drain_line(&mut r, chunk, max), want, "chunk {chunk} len {len} max {max}");
+                assert_eq!(
+                    drain_line(&mut r, chunk, max),
+                    want,
+                    "chunk {chunk} len {len} max {max}"
+                );
             }
         }
         // EOF before a newline is not a resync.

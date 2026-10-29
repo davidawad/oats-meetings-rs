@@ -104,14 +104,19 @@ pub struct Engine {
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
-    std::fs::metadata(path).ok().map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()))
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| (m.modified().unwrap_or(SystemTime::UNIX_EPOCH), m.len()))
 }
 
 fn read_user(path: &std::path::Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(Some(s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(ConfigError::new("io_error", format!("{}: {e}", path.display()))),
+        Err(e) => Err(ConfigError::new(
+            "io_error",
+            format!("{}: {e}", path.display()),
+        )),
     }
 }
 
@@ -151,7 +156,10 @@ fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Res
         Value::String(s) => s.as_str().into(),
         Value::Number(n) if n.is_i64() => n.as_i64().unwrap_or_default().into(),
         other => {
-            return Err(ConfigError::new("type_mismatch", format!("cannot store {other} in TOML")))
+            return Err(ConfigError::new(
+                "type_mismatch",
+                format!("cannot store {other} in TOML"),
+            ))
         }
     };
     let parts: Vec<&str> = key.split('.').collect();
@@ -166,7 +174,12 @@ fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Res
         cur = cur
             .get_mut(part)
             .and_then(Item::as_table_like_mut)
-            .ok_or_else(|| ConfigError::new("type_mismatch", format!("'{part}' in user config is not a table")))?;
+            .ok_or_else(|| {
+                ConfigError::new(
+                    "type_mismatch",
+                    format!("'{part}' in user config is not a table"),
+                )
+            })?;
     }
     match cur.get_mut(leaf) {
         Some(Item::Value(old)) => {
@@ -194,7 +207,11 @@ impl Engine {
 
     fn templates_dir(&self, cfg: &Config) -> PathBuf {
         if cfg.templates.dir.is_empty() {
-            self.opts.user_config.parent().unwrap_or_else(|| Path::new(".")).join("templates")
+            self.opts
+                .user_config
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("templates")
         } else {
             PathBuf::from(&cfg.templates.dir)
         }
@@ -202,7 +219,11 @@ impl Engine {
 
     fn kb_dir(&self, cfg: &Config) -> PathBuf {
         if cfg.kb.dir.is_empty() {
-            self.opts.sessions_dir.parent().unwrap_or_else(|| Path::new(".")).join("kb")
+            self.opts
+                .sessions_dir
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("kb")
         } else {
             PathBuf::from(&cfg.kb.dir)
         }
@@ -216,7 +237,8 @@ impl Engine {
     }
 
     fn session_event(&self, id: &str, change: &str) {
-        self.bus.publish("session-saved", json!({"id": id, "change": change}));
+        self.bus
+            .publish("session-saved", json!({"id": id, "change": change}));
     }
 
     /// Where the sessions live by default; the ICS cache defaults to a sibling directory.
@@ -246,9 +268,16 @@ impl Engine {
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
-        engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(&engine))));
-        engine.register(Arc::new(crate::stt::SttSubsystem::new(Arc::downgrade(&engine))));
-        engine.register(Arc::new(AudioSubsystem { recorder: Arc::clone(&engine.recorder), bus: Arc::clone(&engine.bus) }));
+        engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(
+            &engine,
+        ))));
+        engine.register(Arc::new(crate::stt::SttSubsystem::new(Arc::downgrade(
+            &engine,
+        ))));
+        engine.register(Arc::new(AudioSubsystem {
+            recorder: Arc::clone(&engine.recorder),
+            bus: Arc::clone(&engine.bus),
+        }));
         Ok(engine)
     }
 
@@ -297,23 +326,35 @@ impl Engine {
     fn transcribe_plan(&self, cfg: &Config) -> Result<(Option<crate::stt::capture::Plan>, Value)> {
         use crate::config::typed::AudioTranscribe;
         if cfg.audio.transcribe == AudioTranscribe::Off {
-            return Ok((None, json!({"state": "off", "reason": "audio.transcribe = off"})));
+            return Ok((
+                None,
+                json!({"state": "off", "reason": "audio.transcribe = off"}),
+            ));
         }
         let mut note = None;
         let built = (|| -> Result<crate::stt::capture::Plan> {
             let settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
             if !settings.live_enabled && !settings.final_enabled {
-                return Err(ConfigError::new("nothing_enabled", "stt.live.enabled and stt.final.enabled are both off"));
+                return Err(ConfigError::new(
+                    "nothing_enabled",
+                    "stt.live.enabled and stt.final.enabled are both off",
+                ));
             }
             let secrets = self.secret_store(cfg);
-            let asr = match self.recorder.make_asr(&settings, &|s| crate::stt::make_asr(s, cfg.network.allow, &*secrets)) {
+            let asr = match self.recorder.make_asr(&settings, &|s| {
+                crate::stt::make_asr(s, cfg.network.allow, &*secrets)
+            }) {
                 Ok(a) => a,
                 Err(e) => {
                     note = self.first_run_model(&settings, &e);
                     return Err(e);
                 }
             };
-            Ok(crate::stt::capture::Plan { asr, settings, bus: Arc::clone(&self.bus) })
+            Ok(crate::stt::capture::Plan {
+                asr,
+                settings,
+                bus: Arc::clone(&self.bus),
+            })
         })();
         match built {
             Ok(p) => Ok((Some(p), Value::Null)),
@@ -350,7 +391,10 @@ impl Engine {
     }
 
     pub fn unregister(&self, name: &str) {
-        self.subsystems.write().expect("subsystems").retain(|s| s.name() != name);
+        self.subsystems
+            .write()
+            .expect("subsystems")
+            .retain(|s| s.name() != name);
     }
 
     pub fn is_shutdown(&self) -> bool {
@@ -409,14 +453,20 @@ impl Engine {
         for s in &subs {
             if let Err(e) = s.validate(&config) {
                 subs.iter().for_each(|t| t.abort());
-                return Err(ConfigError::new(e.code, format!("{}: {}", s.name(), e.message)));
+                return Err(ConfigError::new(
+                    e.code,
+                    format!("{}: {}", s.name(), e.message),
+                ));
             }
         }
         if let Err(e) = persist() {
             subs.iter().for_each(|t| t.abort());
             return Err(e);
         }
-        let new = Arc::new(Snapshot { resolved: candidate, config });
+        let new = Arc::new(Snapshot {
+            resolved: candidate,
+            config,
+        });
         let old = {
             let mut st = self.state.write().expect("state");
             std::mem::replace(&mut st.snap, Arc::clone(&new))
@@ -467,7 +517,10 @@ impl Engine {
         match result {
             Ok(changed) => {
                 self.record(true, &text);
-                self.bus.publish("config-reloaded", json!({"source": source, "changed": changed}));
+                self.bus.publish(
+                    "config-reloaded",
+                    json!({"source": source, "changed": changed}),
+                );
                 Ok(changed)
             }
             Err(e) => {
@@ -528,7 +581,9 @@ impl Engine {
                 .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", path.display())))
         })?;
         self.record(true, &Some(new_text));
-        Ok(json!({"key": key, "value": value, "changed": !changed.is_empty(), "path": self.opts.user_config}))
+        Ok(
+            json!({"key": key, "value": value, "changed": !changed.is_empty(), "path": self.opts.user_config}),
+        )
     }
 
     fn get(&self, key: &str) -> Result<Value> {
@@ -541,13 +596,15 @@ impl Engine {
     }
 
     fn session_saved(&self, id: &Value) {
-        self.bus.publish("session-saved", json!({"id": id, "change": "record"}));
+        self.bus
+            .publish("session-saved", json!({"id": id, "change": "record"}));
     }
 
     fn set_window(&self, visible: bool) -> Value {
         let was = self.window_visible.swap(visible, Ordering::SeqCst);
         if was != visible {
-            self.bus.publish("window-changed", json!({"visible": visible}));
+            self.bus
+                .publish("window-changed", json!({"visible": visible}));
         }
         json!({"visible": visible})
     }
@@ -595,13 +652,24 @@ impl Engine {
             }
             Action::PrivacyToggle {} => {
                 let cur = matches!(self.get("privacy.hide_from_capture")?, Value::Bool(true));
-                self.set("privacy.hide_from_capture", &Value::Bool(!cur), "privacy-toggle")
+                self.set(
+                    "privacy.hide_from_capture",
+                    &Value::Bool(!cur),
+                    "privacy-toggle",
+                )
             }
             Action::DevicesList {} => self.recorder.devices(&self.audio_settings()?),
             Action::RecordStart { session, title } => {
                 let cfg = self.snapshot().config.clone();
                 let (plan, why) = self.transcribe_plan(&cfg)?;
-                let v = self.recorder.start(&self.audio_settings()?, &self.store(), session.as_deref(), title.as_deref(), plan, why)?;
+                let v = self.recorder.start(
+                    &self.audio_settings()?,
+                    &self.store(),
+                    session.as_deref(),
+                    title.as_deref(),
+                    plan,
+                    why,
+                )?;
                 self.bus.publish("recording-started", v.clone());
                 Ok(v)
             }
@@ -628,7 +696,11 @@ impl Engine {
                 self.session_event(session, "rename");
                 Ok(v)
             }
-            Action::SessionTag { session, tag, remove } => {
+            Action::SessionTag {
+                session,
+                tag,
+                remove,
+            } => {
                 let v = self.store().tag(session, tag, remove.unwrap_or(false))?;
                 self.session_event(session, "tag");
                 Ok(v)
@@ -640,16 +712,31 @@ impl Engine {
                         "deleting a session needs confirm=true (--confirm); sessions.confirm_delete is on",
                     ));
                 }
-                let v = self.store().delete(session, self.snapshot().config.sessions.delete_mode)?;
+                let v = self
+                    .store()
+                    .delete(session, self.snapshot().config.sessions.delete_mode)?;
                 self.bus.publish("session-deleted", json!({"id": session}));
                 Ok(v)
             }
-            Action::NotesGenerate { session, template, dry_run } => {
+            Action::NotesGenerate {
+                session,
+                template,
+                dry_run,
+            } => {
                 let snap = self.snapshot();
-                let (store, secrets, tdir) = (self.store(), self.secret_store(&snap.config), self.templates_dir(&snap.config));
+                let (store, secrets, tdir) = (
+                    self.store(),
+                    self.secret_store(&snap.config),
+                    self.templates_dir(&snap.config),
+                );
                 let dry = dry_run.unwrap_or(false);
                 let v = notes::generate(
-                    &notes::Ctx { cfg: &snap.config, store: &store, templates_dir: &tdir, secrets: &*secrets },
+                    &notes::Ctx {
+                        cfg: &snap.config,
+                        store: &store,
+                        templates_dir: &tdir,
+                        secrets: &*secrets,
+                    },
                     session,
                     template,
                     dry,
@@ -676,7 +763,8 @@ impl Engine {
             }
             Action::TemplateGet { name } => {
                 let t = templates::find(&self.templates_dir(&self.snapshot().config), name)?;
-                let mut v = serde_json::to_value(&t).map_err(|e| ConfigError::new("parse_error", e.to_string()))?;
+                let mut v = serde_json::to_value(&t)
+                    .map_err(|e| ConfigError::new("parse_error", e.to_string()))?;
                 v["headings"] = json!(templates::required_headings(&t.system_prompt));
                 Ok(v)
             }
@@ -687,22 +775,43 @@ impl Engine {
             Action::KbReindex {} => {
                 let snap = self.snapshot();
                 let secrets = self.secret_store(&snap.config);
-                kb::reindex(&kb::Ctx { cfg: &snap.config, dir: self.kb_dir(&snap.config), secrets: &*secrets })
+                kb::reindex(&kb::Ctx {
+                    cfg: &snap.config,
+                    dir: self.kb_dir(&snap.config),
+                    secrets: &*secrets,
+                })
             }
             Action::KbSearch { query, limit } => {
                 let snap = self.snapshot();
                 let secrets = self.secret_store(&snap.config);
                 let n = usize::try_from(limit.unwrap_or(5)).unwrap_or(5);
-                kb::search(&kb::Ctx { cfg: &snap.config, dir: self.kb_dir(&snap.config), secrets: &*secrets }, query, n)
+                kb::search(
+                    &kb::Ctx {
+                        cfg: &snap.config,
+                        dir: self.kb_dir(&snap.config),
+                        secrets: &*secrets,
+                    },
+                    query,
+                    n,
+                )
             }
             Action::SessionImport { from, overwrite } => {
-                let v = self.store().import(std::path::Path::new(from), overwrite.unwrap_or(false))?;
-                for id in v["imported"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                let v = self
+                    .store()
+                    .import(std::path::Path::new(from), overwrite.unwrap_or(false))?;
+                for id in v["imported"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
                     self.session_event(id, "import");
                 }
                 Ok(v)
             }
-            Action::SttTranscribe { .. } | Action::SttModelFetch { .. } | Action::SttStatus {} => crate::stt::dispatch(self, a),
+            Action::SttTranscribe { .. } | Action::SttModelFetch { .. } | Action::SttStatus {} => {
+                crate::stt::dispatch(self, a)
+            }
             Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
                 crate::secrets::dispatch(self, a)
             }

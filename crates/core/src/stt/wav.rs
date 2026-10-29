@@ -28,11 +28,13 @@ fn bad(msg: impl std::fmt::Display) -> ConfigError {
 pub fn read(path: &Path) -> Result<Channels> {
     let bytes = std::fs::read(path)
         .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", path.display())))?;
-    decode(&bytes).map_err(|e| ConfigError::new(e.code, format!("{}: {}", path.display(), e.message)))
+    decode(&bytes)
+        .map_err(|e| ConfigError::new(e.code, format!("{}: {}", path.display(), e.message)))
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Channels> {
-    let mut r = hound::WavReader::new(Cursor::new(bytes)).map_err(|e| bad(format!("not a WAV file: {e}")))?;
+    let mut r = hound::WavReader::new(Cursor::new(bytes))
+        .map_err(|e| bad(format!("not a WAV file: {e}")))?;
     let spec = r.spec();
     let n = usize::from(spec.channels.max(1));
     let interleaved: Vec<f32> = match spec.sample_format {
@@ -58,7 +60,10 @@ pub fn decode(bytes: &[u8]) -> Result<Channels> {
         }
     }
     let mut it = chans.into_iter().map(|c| resample(&c, spec.sample_rate));
-    Ok(Channels { you: it.next().unwrap_or_default(), them: it.next().unwrap_or_default() })
+    Ok(Channels {
+        you: it.next().unwrap_or_default(),
+        them: it.next().unwrap_or_default(),
+    })
 }
 
 /// Linear resampling to 16 kHz; identity at 16 kHz.
@@ -115,7 +120,12 @@ mod tests {
 
     #[test]
     fn stereo_splits_and_resamples() {
-        let spec = hound::WavSpec { channels: 2, sample_rate: 32_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 32_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
         let mut buf = Cursor::new(Vec::new());
         {
             let mut w = hound::WavWriter::new(&mut buf, spec).unwrap();

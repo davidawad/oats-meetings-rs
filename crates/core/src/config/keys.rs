@@ -9,10 +9,16 @@ pub enum Kind {
     Str,
     Enum(&'static [&'static str]),
     /// Whole number in `min..=max` (inclusive). Out of range vetoes the reload.
-    Int { min: i64, max: i64 },
+    Int {
+        min: i64,
+        max: i64,
+    },
     /// Duration written as `<digits><unit>` with unit ms, s, m, h or d (`"15s"`, `"250ms"`),
     /// stored in milliseconds within `min_ms..=max_ms`. Out of range vetoes the reload.
-    Duration { min_ms: u64, max_ms: u64 },
+    Duration {
+        min_ms: u64,
+        max_ms: u64,
+    },
 }
 
 pub const MS: u64 = 1;

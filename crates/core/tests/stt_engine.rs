@@ -50,7 +50,8 @@ impl Mock {
                                     Ok(n) => buf.extend_from_slice(&tmp[..n]),
                                 }
                                 if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                                    let head = String::from_utf8_lossy(&buf[..i]).to_ascii_lowercase();
+                                    let head =
+                                        String::from_utf8_lossy(&buf[..i]).to_ascii_lowercase();
                                     let len = head
                                         .lines()
                                         .find_map(|l| l.strip_prefix("content-length:"))
@@ -109,21 +110,36 @@ impl Drop for Mock {
 // ---- rig ------------------------------------------------------------------------------------
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/stt").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/stt")
+        .join(name)
 }
 
 /// you.wav on the left, them.wav on the right starting one second after "you" ends.
 fn call_wav(dir: &Path) -> PathBuf {
-    let you = wav::decode(&std::fs::read(fixture("you.wav")).unwrap()).unwrap().you;
-    let them = wav::decode(&std::fs::read(fixture("them.wav")).unwrap()).unwrap().you;
+    let you = wav::decode(&std::fs::read(fixture("you.wav")).unwrap())
+        .unwrap()
+        .you;
+    let them = wav::decode(&std::fs::read(fixture("them.wav")).unwrap())
+        .unwrap()
+        .you;
     let gap = 16_000;
     let total = you.len() + gap + them.len();
     let path = dir.join("call.wav");
-    let spec = hound::WavSpec { channels: 2, sample_rate: 16_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
     let mut w = hound::WavWriter::create(&path, spec).unwrap();
     for i in 0..total {
         let l = you.get(i).copied().unwrap_or(0.0);
-        let r = if i >= you.len() + gap { them[i - you.len() - gap] } else { 0.0 };
+        let r = if i >= you.len() + gap {
+            them[i - you.len() - gap]
+        } else {
+            0.0
+        };
         w.write_sample((l * 32767.0) as i16).unwrap();
         w.write_sample((r * 32767.0) as i16).unwrap();
     }
@@ -165,7 +181,12 @@ impl Rig {
         ))
     }
 
-    fn transcribe(&self, path: &Path, session: Option<&str>, speaker: Option<&str>) -> Result<Value, ConfigError> {
+    fn transcribe(
+        &self,
+        path: &Path,
+        session: Option<&str>,
+        speaker: Option<&str>,
+    ) -> Result<Value, ConfigError> {
         self.engine.dispatch(&Action::SttTranscribe {
             path: path.display().to_string(),
             session: session.map(str::to_string),
@@ -188,39 +209,76 @@ fn code<T: std::fmt::Debug>(r: Result<T, ConfigError>) -> &'static str {
 fn cloud_backend_end_to_end_writes_live_and_final_with_you_and_them() {
     let mock = Mock::ok();
     let rig = Rig::cloud(&mock, "E2E", "");
-    let rx = rig.engine.bus.subscribe(vec!["segment".into(), "session-saved".into()]);
+    let rx = rig
+        .engine
+        .bus
+        .subscribe(vec!["segment".into(), "session-saved".into()]);
     let call = call_wav(rig.dir.path());
     let r = rig.transcribe(&call, Some("session_call"), None).unwrap();
     assert_eq!(r["backend"], "openai-compatible");
-    assert!(r["live_utterances"].as_u64().unwrap() >= 2 && r["final_utterances"].as_u64().unwrap() == 2, "{r}");
+    assert!(
+        r["live_utterances"].as_u64().unwrap() >= 2 && r["final_utterances"].as_u64().unwrap() == 2,
+        "{r}"
+    );
 
-    let t = rig.engine.dispatch(&Action::TranscriptGet { session: "session_call".into() }).unwrap();
+    let t = rig
+        .engine
+        .dispatch(&Action::TranscriptGet {
+            session: "session_call".into(),
+        })
+        .unwrap();
     assert_eq!(t["source"], "final");
     let us = t["utterances"].as_array().unwrap();
     assert_eq!(us.len(), 2);
     let speakers: Vec<&str> = us.iter().map(|u| u["speaker"].as_str().unwrap()).collect();
     assert_eq!(speakers, ["you", "remote_1"]); // you speaks first, them after the gap
-    assert!(us.iter().all(|u| u["text"] == "hello from the mock" && u["timestamp"].as_str().unwrap().ends_with('Z')));
-    for f in ["transcript.live.jsonl", "transcript.final.jsonl", "session.json"] {
+    assert!(us
+        .iter()
+        .all(|u| u["text"] == "hello from the mock"
+            && u["timestamp"].as_str().unwrap().ends_with('Z')));
+    for f in [
+        "transcript.live.jsonl",
+        "transcript.final.jsonl",
+        "session.json",
+    ] {
         assert!(rig.session_dir("session_call").join(f).is_file(), "{f}");
     }
-    let meta: Value = serde_json::from_str(&std::fs::read_to_string(rig.session_dir("session_call").join("session.json")).unwrap()).unwrap();
+    let meta: Value = serde_json::from_str(
+        &std::fs::read_to_string(rig.session_dir("session_call").join("session.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(meta["engine"], "openai-compatible:whisper-1");
     assert_eq!(meta["utteranceCount"], 2);
     assert!(meta["endedAt"].is_string() && meta["startedAt"].is_string());
     // The session store reads it back through the normal actions.
-    let got = rig.engine.dispatch(&Action::SessionGet { session: "session_call".into() }).unwrap();
+    let got = rig
+        .engine
+        .dispatch(&Action::SessionGet {
+            session: "session_call".into(),
+        })
+        .unwrap();
     assert_eq!(got["utterance_count"], 2);
 
     // Request shape: bearer from the secret, multipart WAV, model and language fields.
     let req = mock.request(0);
-    let head = String::from_utf8_lossy(&req[..req.windows(4).position(|w| w == b"\r\n\r\n").unwrap()]).to_ascii_lowercase();
+    let head =
+        String::from_utf8_lossy(&req[..req.windows(4).position(|w| w == b"\r\n\r\n").unwrap()])
+            .to_ascii_lowercase();
     assert!(head.starts_with("post /v1/audio/transcriptions "), "{head}");
     assert!(head.contains("authorization: bearer tok-123"), "{head}");
-    assert!(head.contains("content-type: multipart/form-data; boundary="), "{head}");
+    assert!(
+        head.contains("content-type: multipart/form-data; boundary="),
+        "{head}"
+    );
     let body = String::from_utf8_lossy(&req).to_string();
-    assert!(body.contains("name=\"model\"\r\n\r\nwhisper-1"), "model field");
-    assert!(body.contains("name=\"language\"\r\n\r\nen") && body.contains("name=\"response_format\"\r\n\r\nverbose_json"));
+    assert!(
+        body.contains("name=\"model\"\r\n\r\nwhisper-1"),
+        "model field"
+    );
+    assert!(
+        body.contains("name=\"language\"\r\n\r\nen")
+            && body.contains("name=\"response_format\"\r\n\r\nverbose_json")
+    );
     assert!(req.windows(4).any(|w| w == b"RIFF"));
 
     let mut kinds = Vec::new();
@@ -228,7 +286,10 @@ fn cloud_backend_end_to_end_writes_live_and_final_with_you_and_them() {
         let v: Value = serde_json::from_str(&l).unwrap();
         kinds.push(v["event"].as_str().unwrap().to_string());
     }
-    assert!(kinds.iter().filter(|k| *k == "segment").count() >= 4, "live + final segments: {kinds:?}");
+    assert!(
+        kinds.iter().filter(|k| *k == "segment").count() >= 4,
+        "live + final segments: {kinds:?}"
+    );
     assert_eq!(kinds.last().unwrap(), "session-saved");
 }
 
@@ -236,18 +297,33 @@ fn cloud_backend_end_to_end_writes_live_and_final_with_you_and_them() {
 fn live_and_final_switches_each_way() {
     for (live, fin) in [(true, true), (true, false), (false, true)] {
         let mock = Mock::ok();
-        let rig = Rig::cloud(&mock, "SW", &format!("[stt.live]\nenabled = {live}\n[stt.final]\nenabled = {fin}\n"));
+        let rig = Rig::cloud(
+            &mock,
+            "SW",
+            &format!("[stt.live]\nenabled = {live}\n[stt.final]\nenabled = {fin}\n"),
+        );
         let call = call_wav(rig.dir.path());
         rig.transcribe(&call, Some("s"), None).unwrap();
         let d = rig.session_dir("s");
-        let non_empty = |f: &str| std::fs::read_to_string(d.join(f)).map(|t| !t.trim().is_empty()).unwrap_or(false);
+        let non_empty = |f: &str| {
+            std::fs::read_to_string(d.join(f))
+                .map(|t| !t.trim().is_empty())
+                .unwrap_or(false)
+        };
         assert_eq!(non_empty("transcript.live.jsonl"), live, "{live}/{fin}");
         assert_eq!(non_empty("transcript.final.jsonl"), fin, "{live}/{fin}");
     }
     let mock = Mock::ok();
-    let rig = Rig::cloud(&mock, "SW2", "[stt.live]\nenabled = false\n[stt.final]\nenabled = false\n");
+    let rig = Rig::cloud(
+        &mock,
+        "SW2",
+        "[stt.live]\nenabled = false\n[stt.final]\nenabled = false\n",
+    );
     let call = call_wav(rig.dir.path());
-    assert_eq!(code(rig.transcribe(&call, Some("s"), None)), "nothing_enabled");
+    assert_eq!(
+        code(rig.transcribe(&call, Some("s"), None)),
+        "nothing_enabled"
+    );
     assert_eq!(mock.hits(), 0);
 }
 
@@ -255,28 +331,61 @@ fn live_and_final_switches_each_way() {
 fn mono_input_takes_the_speaker_flag() {
     let mock = Mock::ok();
     let rig = Rig::cloud(&mock, "MONO", "[stt.live]\nenabled = false\n");
-    for (flag, want) in [(None, "you"), (Some("you"), "you"), (Some("them"), "remote_1")] {
+    for (flag, want) in [
+        (None, "you"),
+        (Some("you"), "you"),
+        (Some("them"), "remote_1"),
+    ] {
         let id = format!("m_{}", flag.unwrap_or("default"));
-        rig.transcribe(&fixture("them.wav"), Some(&id), flag).unwrap();
-        let t = rig.engine.dispatch(&Action::TranscriptGet { session: id }).unwrap();
+        rig.transcribe(&fixture("them.wav"), Some(&id), flag)
+            .unwrap();
+        let t = rig
+            .engine
+            .dispatch(&Action::TranscriptGet { session: id })
+            .unwrap();
         assert_eq!(t["utterances"][0]["speaker"], want);
     }
-    assert_eq!(code(rig.transcribe(&fixture("them.wav"), Some("bad"), Some("nobody"))), "invalid_argument");
-    assert_eq!(code(rig.transcribe(&fixture("them.wav"), Some("m_default"), None)), "exists");
-    assert_eq!(code(rig.transcribe(Path::new("/nonexistent/x.wav"), None, None)), "io_error");
+    assert_eq!(
+        code(rig.transcribe(&fixture("them.wav"), Some("bad"), Some("nobody"))),
+        "invalid_argument"
+    );
+    assert_eq!(
+        code(rig.transcribe(&fixture("them.wav"), Some("m_default"), None)),
+        "exists"
+    );
+    assert_eq!(
+        code(rig.transcribe(Path::new("/nonexistent/x.wav"), None, None)),
+        "io_error"
+    );
 }
 
 #[test]
 fn speaker_names_are_config_keys() {
     let mock = Mock::ok();
     let rig = Rig::cloud(&mock, "SPK", "");
-    rig.engine.set("stt.speaker_you", &json!("me"), "test").unwrap();
-    rig.engine.set("stt.speaker_them", &json!("caller"), "test").unwrap();
-    rig.engine.set("stt.live.enabled", &json!(false), "test").unwrap();
+    rig.engine
+        .set("stt.speaker_you", &json!("me"), "test")
+        .unwrap();
+    rig.engine
+        .set("stt.speaker_them", &json!("caller"), "test")
+        .unwrap();
+    rig.engine
+        .set("stt.live.enabled", &json!(false), "test")
+        .unwrap();
     let call = call_wav(rig.dir.path());
     rig.transcribe(&call, Some("s"), None).unwrap();
-    let t = rig.engine.dispatch(&Action::TranscriptGet { session: "s".into() }).unwrap();
-    let speakers: Vec<&str> = t["utterances"].as_array().unwrap().iter().map(|u| u["speaker"].as_str().unwrap()).collect();
+    let t = rig
+        .engine
+        .dispatch(&Action::TranscriptGet {
+            session: "s".into(),
+        })
+        .unwrap();
+    let speakers: Vec<&str> = t["utterances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["speaker"].as_str().unwrap())
+        .collect();
     assert_eq!(speakers, ["me", "caller"]);
 }
 
@@ -289,10 +398,18 @@ fn cloud_is_denied_without_network_allow_and_before_any_request() {
         mock.url()
     ));
     let call = call_wav(rig.dir.path());
-    assert_eq!(code(rig.transcribe(&call, Some("s"), None)), "network_denied");
+    assert_eq!(
+        code(rig.transcribe(&call, Some("s"), None)),
+        "network_denied"
+    );
     assert_eq!(mock.hits(), 0);
-    assert!(!rig.session_dir("s").exists(), "nothing is created when the backend is refused");
-    rig.engine.set("network.allow", &json!(true), "test").unwrap();
+    assert!(
+        !rig.session_dir("s").exists(),
+        "nothing is created when the backend is refused"
+    );
+    rig.engine
+        .set("network.allow", &json!(true), "test")
+        .unwrap();
     rig.transcribe(&call, Some("s"), None).unwrap();
     assert!(mock.hits() > 0);
 }
@@ -305,9 +422,15 @@ fn a_missing_key_fails_before_any_request_and_plaintext_is_vetoed() {
         mock.url()
     ));
     let call = call_wav(rig.dir.path());
-    assert_eq!(code(rig.transcribe(&call, Some("s"), None)), "secret_not_found");
+    assert_eq!(
+        code(rig.transcribe(&call, Some("s"), None)),
+        "secret_not_found"
+    );
     assert_eq!(mock.hits(), 0);
-    let e = rig.engine.set("stt.cloud.key", &json!("sk-live-plaintext"), "test").unwrap_err();
+    let e = rig
+        .engine
+        .set("stt.cloud.key", &json!("sk-live-plaintext"), "test")
+        .unwrap_err();
     assert_eq!(e.code, "secret_plaintext");
     assert!(!e.message.contains("sk-live-plaintext"));
     // An empty reference means no Authorization header (a local OpenAI-compatible server).
@@ -320,24 +443,40 @@ fn a_missing_key_fails_before_any_request_and_plaintext_is_vetoed() {
 #[test]
 fn cloud_failures_have_stable_codes() {
     for (status, body, delay, want) in [
-        (401, r#"{"error":"bad key"}"#, Duration::ZERO, "stt_http_status"),
+        (
+            401,
+            r#"{"error":"bad key"}"#,
+            Duration::ZERO,
+            "stt_http_status",
+        ),
         (500, "oops", Duration::ZERO, "stt_http_status"),
         (200, "not json", Duration::ZERO, "stt_bad_response"),
         (200, "{}", Duration::ZERO, "stt_bad_response"),
-        (200, r#"{"text":"late"}"#, Duration::from_secs(4), "stt_timeout"),
+        (
+            200,
+            r#"{"text":"late"}"#,
+            Duration::from_secs(4),
+            "stt_timeout",
+        ),
     ] {
         let b = body.to_string();
         let mock = Mock::start(Arc::new(move || (status, b.clone(), delay)));
         let rig = Rig::cloud(&mock, "FAIL", "");
         rig.set_timeout_one();
         let call = call_wav(rig.dir.path());
-        assert_eq!(code(rig.transcribe(&call, Some("s"), None)), want, "{status} {body}");
+        assert_eq!(
+            code(rig.transcribe(&call, Some("s"), None)),
+            want,
+            "{status} {body}"
+        );
     }
 }
 
 impl Rig {
     fn set_timeout_one(&self) {
-        self.engine.set("stt.cloud.timeout", &json!("1s"), "test").unwrap();
+        self.engine
+            .set("stt.cloud.timeout", &json!("1s"), "test")
+            .unwrap();
     }
 }
 
@@ -367,19 +506,24 @@ fn status_never_leaks_the_key() {
     assert_eq!(s["cloud"]["key"], "set");
     assert_eq!(s["cloud"]["network_allow"], true);
     assert!(!s.to_string().contains("tok-123"));
-    rig.engine.set("stt.cloud.key", &json!("secret:stt/nope-0002"), "test").unwrap();
-    assert_eq!(rig.engine.dispatch(&Action::SttStatus {}).unwrap()["cloud"]["key"], "missing");
+    rig.engine
+        .set("stt.cloud.key", &json!("secret:stt/nope-0002"), "test")
+        .unwrap();
+    assert_eq!(
+        rig.engine.dispatch(&Action::SttStatus {}).unwrap()["cloud"]["key"],
+        "missing"
+    );
     rig.engine.set("stt.cloud.key", &json!(""), "test").unwrap();
-    assert_eq!(rig.engine.dispatch(&Action::SttStatus {}).unwrap()["cloud"]["key"], "none");
+    assert_eq!(
+        rig.engine.dispatch(&Action::SttStatus {}).unwrap()["cloud"]["key"],
+        "none"
+    );
 }
 
 #[test]
 fn the_subsystem_vetoes_bad_stt_values_and_keeps_the_running_config() {
     let rig = Rig::with_config("");
-    for (key, bad) in [
-        ("stt.language", ""),
-        ("stt.speaker_you", "remote_1"),
-    ] {
+    for (key, bad) in [("stt.language", ""), ("stt.speaker_you", "remote_1")] {
         let e = rig.engine.set(key, &json!(bad), "test").unwrap_err();
         assert!(e.message.starts_with("stt:"), "{key}={bad}: {e}");
         assert_eq!(e.code, "invalid_value", "{key}={bad}");
@@ -387,31 +531,63 @@ fn the_subsystem_vetoes_bad_stt_values_and_keeps_the_running_config() {
     }
     // stt.local.model is an enum: anything outside the pinned set is refused by the key table.
     for bad in ["../escape", "large-v3", "base.EN", ""] {
-        let e = rig.engine.set("stt.local.model", &json!(bad), "test").unwrap_err();
+        let e = rig
+            .engine
+            .set("stt.local.model", &json!(bad), "test")
+            .unwrap_err();
         assert_eq!(e.code, "invalid_value", "model={bad}: {e}");
     }
     // Cloud-only checks apply once the cloud backend is selected.
-    rig.engine.set("stt.cloud.adapter", &json!("openai-compatible"), "test").unwrap();
-    rig.engine.set("stt.cloud.url", &json!("ftp://nope"), "test").unwrap(); // local backend: not checked
-    let e = rig.engine.set("stt.backend", &json!("cloud"), "test").unwrap_err();
+    rig.engine
+        .set("stt.cloud.adapter", &json!("openai-compatible"), "test")
+        .unwrap();
+    rig.engine
+        .set("stt.cloud.url", &json!("ftp://nope"), "test")
+        .unwrap(); // local backend: not checked
+    let e = rig
+        .engine
+        .set("stt.backend", &json!("cloud"), "test")
+        .unwrap_err();
     assert_eq!(e.code, "invalid_value");
-    assert_eq!(rig.engine.dispatch(&Action::SttStatus {}).unwrap()["backend"], "local");
-    rig.engine.set("stt.cloud.url", &json!("http://127.0.0.1:1/v1"), "test").unwrap();
-    rig.engine.set("stt.backend", &json!("cloud"), "test").unwrap();
-    assert_eq!(rig.engine.dispatch(&Action::SttStatus {}).unwrap()["backend"], "cloud");
+    assert_eq!(
+        rig.engine.dispatch(&Action::SttStatus {}).unwrap()["backend"],
+        "local"
+    );
+    rig.engine
+        .set("stt.cloud.url", &json!("http://127.0.0.1:1/v1"), "test")
+        .unwrap();
+    rig.engine
+        .set("stt.backend", &json!("cloud"), "test")
+        .unwrap();
+    assert_eq!(
+        rig.engine.dispatch(&Action::SttStatus {}).unwrap()["backend"],
+        "cloud"
+    );
 }
 
 #[test]
 fn engine_label_and_values_follow_config() {
     let mock = Mock::ok();
     let rig = Rig::cloud(&mock, "LBL", "");
-    rig.engine.set("stt.cloud.model", &json!("whisper-large"), "test").unwrap();
-    rig.engine.set("stt.language", &json!("de"), "test").unwrap();
-    rig.engine.set("stt.live.enabled", &json!(false), "test").unwrap();
+    rig.engine
+        .set("stt.cloud.model", &json!("whisper-large"), "test")
+        .unwrap();
+    rig.engine
+        .set("stt.language", &json!("de"), "test")
+        .unwrap();
+    rig.engine
+        .set("stt.live.enabled", &json!(false), "test")
+        .unwrap();
     let call = call_wav(rig.dir.path());
     rig.transcribe(&call, Some("s"), None).unwrap();
     let body = String::from_utf8_lossy(&mock.request(0)).to_string();
-    assert!(body.contains("name=\"model\"\r\n\r\nwhisper-large") && body.contains("name=\"language\"\r\n\r\nde"));
-    let meta: Value = serde_json::from_str(&std::fs::read_to_string(rig.session_dir("s").join("session.json")).unwrap()).unwrap();
+    assert!(
+        body.contains("name=\"model\"\r\n\r\nwhisper-large")
+            && body.contains("name=\"language\"\r\n\r\nde")
+    );
+    let meta: Value = serde_json::from_str(
+        &std::fs::read_to_string(rig.session_dir("s").join("session.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(meta["engine"], "openai-compatible:whisper-large");
 }

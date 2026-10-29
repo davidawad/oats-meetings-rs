@@ -31,7 +31,10 @@ pub fn run_headless(env: &dyn Fn(&str) -> Option<String>) -> i32 {
     })();
     match started {
         Ok(handle) => {
-            crate::elog!("oats-meetings-rs: engine listening on {}", handle.socket_display());
+            crate::elog!(
+                "oats-meetings-rs: engine listening on {}",
+                handle.socket_display()
+            );
             handle.wait();
             0
         }

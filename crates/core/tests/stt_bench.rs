@@ -24,16 +24,28 @@ struct Clip {
 }
 
 fn clips() -> Vec<Clip> {
-    let dir = PathBuf::from(std::env::var("OATS_BENCH_DIR").expect("OATS_BENCH_DIR: run ci/fetch-bench-corpus.sh"));
-    let m = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/stt-bench/manifest.tsv");
+    let dir = PathBuf::from(
+        std::env::var("OATS_BENCH_DIR").expect("OATS_BENCH_DIR: run ci/fetch-bench-corpus.sh"),
+    );
+    let m =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/stt-bench/manifest.tsv");
     std::fs::read_to_string(m)
         .unwrap()
         .lines()
         .filter(|l| !l.starts_with('#') && !l.is_empty())
         .map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            assert_eq!(f[2], "CC-BY-4.0", "{}: licence not recorded as CC-BY-4.0", f[0]);
-            Clip { id: f[0].into(), subset: f[1].into(), reference: f[6].into(), pcm: wav::read(&dir.join(format!("{}.wav", f[0]))).unwrap().you }
+            assert_eq!(
+                f[2], "CC-BY-4.0",
+                "{}: licence not recorded as CC-BY-4.0",
+                f[0]
+            );
+            Clip {
+                id: f[0].into(),
+                subset: f[1].into(),
+                reference: f[6].into(),
+                pcm: wav::read(&dir.join(format!("{}.wav", f[0]))).unwrap().you,
+            }
         })
         .collect()
 }
@@ -61,7 +73,15 @@ fn noise(n: usize, seed: u64) -> Vec<f32> {
 /// `a` plus `b` scaled so rms(a)/rms(scaled b) = snr_db; `b` is looped/cut to `a`'s length, starting `lead` samples in.
 fn mix(a: &[f32], b: &[f32], snr_db: f32, lead: usize) -> Vec<f32> {
     let g = rms(a) / (rms(b).max(1e-9) * 10f32.powf(snr_db / 20.0));
-    (0..a.len()).map(|i| a[i] + g * if i >= lead { b[(i - lead) % b.len()] } else { 0.0 }).collect()
+    (0..a.len())
+        .map(|i| {
+            a[i] + g * if i >= lead {
+                b[(i - lead) % b.len()]
+            } else {
+                0.0
+            }
+        })
+        .collect()
 }
 
 /// One pass of the real pipeline (`stt::run`: speech gate, padding, windowing, feed size from the default config) on a
@@ -75,14 +95,34 @@ fn pass(asr: &Arc<dyn Asr>, pcm: &[f32], live: bool) -> String {
     let dir = tempfile::tempdir().unwrap();
     let settings = oats_core::stt::Settings::from_config(&cfg, dir.path()).unwrap();
     let store = oats_core::sessions::Store::new(dir.path());
-    let chans = wav::Channels { you: pcm.to_vec(), them: vec![] };
+    let chans = wav::Channels {
+        you: pcm.to_vec(),
+        them: vec![],
+    };
     let id = "session_2026-10-28_12-00-00";
-    oats_core::stt::run(&store, None, Arc::clone(asr), &settings, &chans, id, chrono::Utc::now()).unwrap();
-    let f = dir.path().join(id).join(format!("transcript.{}.jsonl", if live { "live" } else { "final" }));
+    oats_core::stt::run(
+        &store,
+        None,
+        Arc::clone(asr),
+        &settings,
+        &chans,
+        id,
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    let f = dir.path().join(id).join(format!(
+        "transcript.{}.jsonl",
+        if live { "live" } else { "final" }
+    ));
     std::fs::read_to_string(f)
         .unwrap_or_default()
         .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap()["text"].as_str().unwrap_or("").to_string())
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -90,23 +130,36 @@ fn pass(asr: &Arc<dyn Asr>, pcm: &[f32], live: bool) -> String {
 fn status_kb(key: &str) -> u64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
-        .and_then(|s| s.lines().find(|l| l.starts_with(key)).and_then(|l| l.split_whitespace().nth(1)?.parse().ok()))
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with(key))
+                .and_then(|l| l.split_whitespace().nth(1)?.parse().ok())
+        })
         .unwrap_or(0)
 }
 
 fn load() -> (String, Arc<dyn Asr>) {
     let engine = std::env::var("OATS_BENCH_ENGINE").unwrap();
-    let models = PathBuf::from(std::env::var("OATS_WHISPER_MODELS_DIR").expect("OATS_WHISPER_MODELS_DIR"));
+    let models =
+        PathBuf::from(std::env::var("OATS_WHISPER_MODELS_DIR").expect("OATS_WHISPER_MODELS_DIR"));
     match engine.as_str() {
         #[cfg(feature = "whisper")]
         "whisper" => {
             let m = std::env::var("OATS_BENCH_MODEL").expect("OATS_BENCH_MODEL");
-            let asr = oats_core::stt::local::WhisperAsr::load(&models.join(format!("ggml-{m}.bin")), THREADS).unwrap();
+            let asr = oats_core::stt::local::WhisperAsr::load(
+                &models.join(format!("ggml-{m}.bin")),
+                THREADS,
+            )
+            .unwrap();
             (m, Arc::new(asr))
         }
         #[cfg(feature = "parakeet")]
         "parakeet" => {
-            let asr = oats_core::stt::parakeet::ParakeetAsr::load(&models.join(oats_core::stt::PARAKEET_DIR), THREADS).unwrap();
+            let asr = oats_core::stt::parakeet::ParakeetAsr::load(
+                &models.join(oats_core::stt::PARAKEET_DIR),
+                THREADS,
+            )
+            .unwrap();
             ("tdt-0.6b-v2-int8".into(), Arc::new(asr))
         }
         e => panic!("engine {e} not built in"),
@@ -115,7 +168,9 @@ fn load() -> (String, Arc<dyn Asr>) {
 
 #[test]
 fn bench() {
-    let Ok(engine) = std::env::var("OATS_BENCH_ENGINE") else { return };
+    let Ok(engine) = std::env::var("OATS_BENCH_ENGINE") else {
+        return;
+    };
     let clips = clips();
     let base_kb = status_kb("VmRSS:");
     let t0 = Instant::now();
@@ -125,16 +180,36 @@ fn bench() {
     let _ = pass(&asr, &clips[0].pcm[..16_000 * 3], false);
 
     let n = clips.len();
-    let mut conds: Vec<(&str, Vec<Vec<f32>>)> = vec![("clean", clips.iter().map(|c| c.pcm.clone()).collect())];
-    conds.push(("noise10db", clips.iter().enumerate().map(|(i, c)| mix(&c.pcm, &noise(c.pcm.len(), 0x9E37_79B9 + i as u64), NOISE_SNR_DB, 0)).collect()));
+    let mut conds: Vec<(&str, Vec<Vec<f32>>)> =
+        vec![("clean", clips.iter().map(|c| c.pcm.clone()).collect())];
+    conds.push((
+        "noise10db",
+        clips
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                mix(
+                    &c.pcm,
+                    &noise(c.pcm.len(), 0x9E37_79B9 + i as u64),
+                    NOISE_SNR_DB,
+                    0,
+                )
+            })
+            .collect(),
+    ));
     conds.push((
         "crosstalk5db",
-        clips.iter().enumerate().map(|(i, c)| mix(&c.pcm, &clips[(i + 5) % n].pcm, CROSSTALK_SNR_DB, 8_000)).collect(),
+        clips
+            .iter()
+            .enumerate()
+            .map(|(i, c)| mix(&c.pcm, &clips[(i + 5) % n].pcm, CROSSTALK_SNR_DB, 8_000))
+            .collect(),
     ));
     for (cond, audio) in &conds {
         for stage in ["live", "final"] {
             for subset in ["all", "dev-clean", "dev-other"] {
-                let (mut edits, mut ref_words, mut secs, mut wall) = (0.0f64, 0usize, 0.0f64, 0.0f64);
+                let (mut edits, mut ref_words, mut secs, mut wall) =
+                    (0.0f64, 0usize, 0.0f64, 0.0f64);
                 for (c, pcm) in clips.iter().zip(audio) {
                     if subset != "all" && c.subset != subset {
                         continue;

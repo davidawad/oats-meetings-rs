@@ -40,7 +40,9 @@ impl Mock {
         let (s2, st2, sv2) = (Arc::clone(&seen), Arc::clone(&stop), Arc::clone(&server));
         thread::spawn(move || {
             while !st2.load(Ordering::SeqCst) {
-                let Ok(Some(mut req)) = sv2.recv_timeout(Duration::from_millis(50)) else { continue };
+                let Ok(Some(mut req)) = sv2.recv_timeout(Duration::from_millis(50)) else {
+                    continue;
+                };
                 let mut raw = String::new();
                 let _ = req.as_reader().read_to_string(&mut raw);
                 let body: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
@@ -50,11 +52,17 @@ impl Mock {
                     .find(|h| h.field.equiv("Authorization"))
                     .map(|h| h.value.to_string());
                 let path = req.url().to_string();
-                s2.lock().unwrap().push(Seen { path: path.clone(), auth, body: body.clone() });
+                s2.lock().unwrap().push(Seen {
+                    path: path.clone(),
+                    auth,
+                    body: body.clone(),
+                });
                 let (code, text) = handler(&path, &body);
                 let resp = tiny_http::Response::from_string(text)
                     .with_status_code(code)
-                    .with_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+                    .with_header(
+                        tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
+                    );
                 let _ = req.respond(resp);
             }
         });
@@ -76,7 +84,9 @@ const NOTES: &str = "## CRM\nContact Name: Dana\nCompany: Acme\n\n## Summary\nRe
 
 fn chat_reply(backend: &str, text: &str) -> String {
     match backend {
-        "ollama" => json!({"message": {"role": "assistant", "content": text}, "done": true}).to_string(),
+        "ollama" => {
+            json!({"message": {"role": "assistant", "content": text}, "done": true}).to_string()
+        }
         _ => json!({"choices": [{"message": {"role": "assistant", "content": text}}]}).to_string(),
     }
 }
@@ -117,12 +127,29 @@ impl Rig {
         .unwrap();
         let rt = dir.path().join("rt");
         let handle = server::serve_with_poll(engine, &rt, Duration::from_millis(40)).unwrap();
-        let rig = Rig { dir: dir.path().to_path_buf(), _dir: dir, rt, cfg, handle: Some(handle) };
+        let rig = Rig {
+            dir: dir.path().to_path_buf(),
+            _dir: dir,
+            rt,
+            cfg,
+            handle: Some(handle),
+        };
         let mut c = rig.client();
-        let r = c.call("session-import", p(&[("from", json!(fixtures().join("openoats").to_str().unwrap()))])).unwrap();
+        let r = c
+            .call(
+                "session-import",
+                p(&[("from", json!(fixtures().join("openoats").to_str().unwrap()))]),
+            )
+            .unwrap();
         assert_eq!(r["ok"], true, "{r}");
         let r = c
-            .call("template-import", p(&[("from", json!(fixtures().join("openoats-templates.json").to_str().unwrap()))]))
+            .call(
+                "template-import",
+                p(&[(
+                    "from",
+                    json!(fixtures().join("openoats-templates.json").to_str().unwrap()),
+                )]),
+            )
             .unwrap();
         assert_eq!(r["ok"], true, "{r}");
         rig
@@ -144,11 +171,16 @@ impl Rig {
 const SESSION: &str = "session_2026-10-20_09-00-00";
 
 fn p(pairs: &[(&str, Value)]) -> Map<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 fn llm_toml(backend: &str, base: &str, extra: &str) -> String {
-    format!("[llm]\nbackend = \"{backend}\"\nbase_url = \"{base}\"\nmodel = \"test-model\"\n{extra}")
+    format!(
+        "[llm]\nbackend = \"{backend}\"\nbase_url = \"{base}\"\nmodel = \"test-model\"\n{extra}"
+    )
 }
 
 // ---------- backends ----------
@@ -158,7 +190,8 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
     let mock = Mock::start(|_, _| (200, chat_reply("ollama", NOTES)));
     let rig = Rig::new(&llm_toml("ollama", &mock.base, ""), &[]);
     let mut sub = rig.client();
-    sub.call("subscribe", p(&[("topics", json!(["session-saved"]))])).unwrap();
+    sub.call("subscribe", p(&[("topics", json!(["session-saved"]))]))
+        .unwrap();
     let r = rig.generate("Sales Prospect Call", &[]);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["data"]["notes"], NOTES);
@@ -170,7 +203,10 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
     assert_eq!(req.body["model"], "test-model");
     assert_eq!(req.body["stream"], false);
     assert_eq!(req.body["messages"][0]["role"], "system");
-    assert!(req.body["messages"][0]["content"].as_str().unwrap().contains("## CRM"));
+    assert!(req.body["messages"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("## CRM"));
     // Transcript: speaker names applied, cleaned text preferred, stale live line absent.
     let user = req.body["messages"][1]["content"].as_str().unwrap();
     assert!(user.contains("Dana: The renewal is OK."), "{user}");
@@ -178,15 +214,22 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
     assert!(!user.contains("stale live line"), "{user}");
     // Notes landed in the session, in the OpenOats-compatible metadata.
     let dir = rig.dir.join("sessions").join(SESSION);
-    assert_eq!(std::fs::read_to_string(dir.join("notes.md")).unwrap(), NOTES);
-    let meta: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("session.json")).unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("notes.md")).unwrap(),
+        NOTES
+    );
+    let meta: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("session.json")).unwrap()).unwrap();
     assert_eq!(meta["hasNotes"], true);
     assert_eq!(meta["notesTemplate"], "Sales Prospect Call");
     assert_eq!(meta["engine"], "parakeet", "OpenOats keys survive");
     // The exact headings the template demands are in the notes.
     for h in ["## CRM", "## Summary", "## Next Step"] {
         assert!(NOTES.lines().any(|l| l == h));
-        assert!(r["data"]["notes"].as_str().unwrap().lines().any(|l| l == h), "{h}");
+        assert!(
+            r["data"]["notes"].as_str().unwrap().lines().any(|l| l == h),
+            "{h}"
+        );
     }
     let ev = {
         let (tx, rx) = mpsc::channel();
@@ -195,13 +238,19 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
         });
         rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()
     };
-    assert_eq!((ev["data"]["id"].as_str(), ev["data"]["change"].as_str()), (Some(SESSION), Some("notes")));
+    assert_eq!(
+        (ev["data"]["id"].as_str(), ev["data"]["change"].as_str()),
+        (Some(SESSION), Some("notes"))
+    );
 }
 
 #[test]
 fn openai_compatible_backend_with_and_without_a_key() {
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
-    let rig = Rig::new(&llm_toml("openai-compatible", &mock.base, ""), &[("llm/api-key", "sk-test-1")]);
+    let rig = Rig::new(
+        &llm_toml("openai-compatible", &mock.base, ""),
+        &[("llm/api-key", "sk-test-1")],
+    );
     let r = rig.generate("Generic", &[]);
     // Template "Generic" demands Summary + Action Items; NOTES lacks Action Items, so turn the gate off here.
     assert_eq!(r["error"]["code"], "headings_missing", "{r}");
@@ -219,23 +268,41 @@ fn openai_compatible_backend_with_and_without_a_key() {
 
     // No base_url at all is a clear error, not a request to nowhere.
     let nourl = Rig::new("[llm]\nbackend = \"openai-compatible\"\n", &[]);
-    assert_eq!(nourl.generate("Sales Prospect Call", &[])["error"]["code"], "base_url_required");
+    assert_eq!(
+        nourl.generate("Sales Prospect Call", &[])["error"]["code"],
+        "base_url_required"
+    );
 }
 
 #[test]
 fn openrouter_backend_needs_network_allow_and_a_key() {
     let mock = Mock::start(|_, _| (200, chat_reply("openrouter", NOTES)));
-    let denied = Rig::new(&llm_toml("openrouter", &mock.base, ""), &[("llm/api-key", "k")]);
+    let denied = Rig::new(
+        &llm_toml("openrouter", &mock.base, ""),
+        &[("llm/api-key", "k")],
+    );
     let r = denied.generate("Sales Prospect Call", &[]);
     assert_eq!(r["error"]["code"], "network_denied", "{r}");
-    assert!(mock.requests().is_empty(), "a denied request must do no I/O");
+    assert!(
+        mock.requests().is_empty(),
+        "a denied request must do no I/O"
+    );
 
     let allow = "\n[network]\nallow = true\n";
-    let nokey = Rig::new(&format!("{}{allow}", llm_toml("openrouter", &mock.base, "")), &[]);
-    assert_eq!(nokey.generate("Sales Prospect Call", &[])["error"]["code"], "secret_missing");
+    let nokey = Rig::new(
+        &format!("{}{allow}", llm_toml("openrouter", &mock.base, "")),
+        &[],
+    );
+    assert_eq!(
+        nokey.generate("Sales Prospect Call", &[])["error"]["code"],
+        "secret_missing"
+    );
     assert!(mock.requests().is_empty());
 
-    let ok = Rig::new(&format!("{}{allow}", llm_toml("openrouter", &mock.base, "")), &[("llm/api-key", "or-key")]);
+    let ok = Rig::new(
+        &format!("{}{allow}", llm_toml("openrouter", &mock.base, "")),
+        &[("llm/api-key", "or-key")],
+    );
     let r = ok.generate("Sales Prospect Call", &[]);
     assert_eq!(r["ok"], true, "{r}");
     let req = &mock.requests()[0];
@@ -247,7 +314,11 @@ fn openrouter_backend_needs_network_allow_and_a_key() {
 fn custom_key_name_is_honoured() {
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
     let rig = Rig::new(
-        &llm_toml("openai-compatible", &mock.base, "api_key_ref = \"secret:llm/mine\"\n"),
+        &llm_toml(
+            "openai-compatible",
+            &mock.base,
+            "api_key_ref = \"secret:llm/mine\"\n",
+        ),
         &[("llm/mine", "named"), ("llm/api-key", "wrong")],
     );
     assert_eq!(rig.generate("Sales Prospect Call", &[])["ok"], true);
@@ -262,21 +333,39 @@ fn cloud_backend_without_network_allow_is_network_denied_with_default_urls() {
     let rig = Rig::new("[llm]\nbackend = \"openrouter\"\n", &[("llm/api-key", "k")]);
     let r = rig.generate("Sales Prospect Call", &[]);
     assert_eq!(r["error"]["code"], "network_denied", "{r}");
-    assert!(r["error"]["message"].as_str().unwrap().contains("openrouter.ai"));
+    assert!(r["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("openrouter.ai"));
 }
 
 #[test]
 fn non_loopback_ollama_is_outward_and_denied() {
-    let rig = Rig::new("[llm]\nbackend = \"ollama\"\nbase_url = \"http://10.255.255.1:11434\"\n", &[]);
-    assert_eq!(rig.generate("Sales Prospect Call", &[])["error"]["code"], "network_denied");
-    let rig = Rig::new("[llm]\nbackend = \"openai-compatible\"\nbase_url = \"https://api.example.com/v1\"\n", &[]);
-    assert_eq!(rig.generate("Sales Prospect Call", &[])["error"]["code"], "network_denied");
+    let rig = Rig::new(
+        "[llm]\nbackend = \"ollama\"\nbase_url = \"http://10.255.255.1:11434\"\n",
+        &[],
+    );
+    assert_eq!(
+        rig.generate("Sales Prospect Call", &[])["error"]["code"],
+        "network_denied"
+    );
+    let rig = Rig::new(
+        "[llm]\nbackend = \"openai-compatible\"\nbase_url = \"https://api.example.com/v1\"\n",
+        &[],
+    );
+    assert_eq!(
+        rig.generate("Sales Prospect Call", &[])["error"]["code"],
+        "network_denied"
+    );
 }
 
 #[test]
 fn dry_run_shows_the_request_without_sending_it_even_when_denied() {
     let mock = Mock::start(|_, _| (200, chat_reply("openai", NOTES)));
-    let rig = Rig::new(&llm_toml("openrouter", &mock.base, ""), &[("llm/api-key", "super-secret-key")]);
+    let rig = Rig::new(
+        &llm_toml("openrouter", &mock.base, ""),
+        &[("llm/api-key", "super-secret-key")],
+    );
     let r = rig.generate("Sales Prospect Call", &[("dry_run", json!(true))]);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["data"]["dry_run"], true);
@@ -284,74 +373,156 @@ fn dry_run_shows_the_request_without_sending_it_even_when_denied() {
     assert_eq!(r["data"]["outward"], true);
     assert_eq!(r["data"]["api_key_present"], true);
     assert_eq!(r["data"]["request"]["model"], "test-model");
-    assert!(!r.to_string().contains("super-secret-key"), "dry run must never print the key");
+    assert!(
+        !r.to_string().contains("super-secret-key"),
+        "dry run must never print the key"
+    );
     assert!(mock.requests().is_empty());
-    assert!(!rig.dir.join("sessions").join(SESSION).join("notes.md").exists());
+    assert!(!rig
+        .dir
+        .join("sessions")
+        .join(SESSION)
+        .join("notes.md")
+        .exists());
 }
 
 // ---------- failures ----------
 
 #[test]
 fn enforce_headings_both_ways() {
-    let mock = Mock::start(|_, _| (200, chat_reply("ollama", "Just some prose with no headings.")));
+    let mock = Mock::start(|_, _| {
+        (
+            200,
+            chat_reply("ollama", "Just some prose with no headings."),
+        )
+    });
     let on = Rig::new(&llm_toml("ollama", &mock.base, ""), &[]);
     let r = on.generate("Sales Prospect Call", &[]);
     assert_eq!(r["error"]["code"], "headings_missing", "{r}");
     assert!(r["error"]["message"].as_str().unwrap().contains("## CRM"));
-    assert!(!on.dir.join("sessions").join(SESSION).join("notes.md").exists(), "rejected notes must not be written");
+    assert!(
+        !on.dir
+            .join("sessions")
+            .join(SESSION)
+            .join("notes.md")
+            .exists(),
+        "rejected notes must not be written"
+    );
 
-    let off = Rig::new(&format!("{}[notes]\nenforce_headings = false\n", llm_toml("ollama", &mock.base, "")), &[]);
+    let off = Rig::new(
+        &format!(
+            "{}[notes]\nenforce_headings = false\n",
+            llm_toml("ollama", &mock.base, "")
+        ),
+        &[],
+    );
     let r = off.generate("Sales Prospect Call", &[]);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(off.dir.join("sessions").join(SESSION).join("notes.md").is_file());
+    assert!(off
+        .dir
+        .join("sessions")
+        .join(SESSION)
+        .join("notes.md")
+        .is_file());
 }
 
 #[test]
 fn backend_failures_have_stable_codes() {
     let m500 = Mock::start(|_, _| (500, "{\"error\":\"boom\"}".into()));
     let rig = Rig::new(&llm_toml("ollama", &m500.base, ""), &[]);
-    assert_eq!(rig.generate("Sales Prospect Call", &[])["error"]["code"], "backend_error");
+    assert_eq!(
+        rig.generate("Sales Prospect Call", &[])["error"]["code"],
+        "backend_error"
+    );
 
     let junk = Mock::start(|_, _| (200, "not json".into()));
     let rig = Rig::new(&llm_toml("ollama", &junk.base, ""), &[]);
-    assert_eq!(rig.generate("Sales Prospect Call", &[])["error"]["code"], "backend_bad_response");
+    assert_eq!(
+        rig.generate("Sales Prospect Call", &[])["error"]["code"],
+        "backend_bad_response"
+    );
 
     let empty = Mock::start(|_, _| (200, "{\"choices\":[]}".into()));
     let rig = Rig::new(&llm_toml("openai-compatible", &empty.base, ""), &[]);
-    assert_eq!(rig.generate("Sales Prospect Call", &[])["error"]["code"], "backend_bad_response");
+    assert_eq!(
+        rig.generate("Sales Prospect Call", &[])["error"]["code"],
+        "backend_bad_response"
+    );
 
     // Nothing listening (a port we just released).
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let rig = Rig::new(&llm_toml("ollama", &format!("http://127.0.0.1:{port}"), ""), &[]);
-    assert_eq!(rig.generate("Sales Prospect Call", &[])["error"]["code"], "backend_unreachable");
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let rig = Rig::new(
+        &llm_toml("ollama", &format!("http://127.0.0.1:{port}"), ""),
+        &[],
+    );
+    assert_eq!(
+        rig.generate("Sales Prospect Call", &[])["error"]["code"],
+        "backend_unreachable"
+    );
 }
 
 #[test]
 fn notes_get_and_set_show_and_edit_the_session_notes() {
     let mock = Mock::start(|_, _| (200, chat_reply("ollama", NOTES)));
     let rig = Rig::new(&llm_toml("ollama", &mock.base, ""), &[]);
-    let get = || rig.client().call("notes-get", p(&[("session", json!(SESSION))])).unwrap();
+    let get = || {
+        rig.client()
+            .call("notes-get", p(&[("session", json!(SESSION))]))
+            .unwrap()
+    };
     let r = get();
-    assert_eq!((r["data"]["notes"].as_str(), r["data"]["has_notes"].as_bool()), (Some(""), Some(false)), "{r}");
+    assert_eq!(
+        (
+            r["data"]["notes"].as_str(),
+            r["data"]["has_notes"].as_bool()
+        ),
+        (Some(""), Some(false)),
+        "{r}"
+    );
     assert_eq!(rig.generate("Sales Prospect Call", &[])["ok"], true);
     let r = get();
     assert_eq!(r["data"]["notes"], NOTES);
-    assert_eq!((r["data"]["template"].as_str(), r["data"]["backend"].as_str()), (Some("Sales Prospect Call"), Some("ollama")));
+    assert_eq!(
+        (
+            r["data"]["template"].as_str(),
+            r["data"]["backend"].as_str()
+        ),
+        (Some("Sales Prospect Call"), Some("ollama"))
+    );
     assert_eq!(r["data"]["edited"], false);
     let r = rig
         .client()
-        .call("notes-set", p(&[("session", json!(SESSION)), ("notes", json!("## Summary\nby hand"))]))
+        .call(
+            "notes-set",
+            p(&[
+                ("session", json!(SESSION)),
+                ("notes", json!("## Summary\nby hand")),
+            ]),
+        )
         .unwrap();
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(r["data"]["edited"], true);
     let dir = rig.dir.join("sessions").join(SESSION);
-    assert_eq!(std::fs::read_to_string(dir.join("notes.md")).unwrap(), "## Summary\nby hand");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("notes.md")).unwrap(),
+        "## Summary\nby hand"
+    );
     let r = get();
-    assert_eq!((r["data"]["notes"].as_str(), r["data"]["template"].as_str()), (Some("## Summary\nby hand"), Some("Sales Prospect Call")));
+    assert_eq!(
+        (r["data"]["notes"].as_str(), r["data"]["template"].as_str()),
+        (Some("## Summary\nby hand"), Some("Sales Prospect Call"))
+    );
     // Regenerating clears the edited mark.
     assert_eq!(rig.generate("Sales Prospect Call", &[])["ok"], true);
     assert_eq!(get()["data"]["edited"], false);
-    let r = rig.client().call("notes-get", p(&[("session", json!("nope"))])).unwrap();
+    let r = rig
+        .client()
+        .call("notes-get", p(&[("session", json!("nope"))]))
+        .unwrap();
     assert_eq!(r["error"]["code"], "not_found");
 }
 
@@ -359,10 +530,16 @@ fn notes_get_and_set_show_and_edit_the_session_notes() {
 fn unknown_template_session_and_empty_transcript() {
     let mock = Mock::start(|_, _| (200, chat_reply("ollama", NOTES)));
     let rig = Rig::new(&llm_toml("ollama", &mock.base, ""), &[]);
-    assert_eq!(rig.generate("No Such Template", &[])["error"]["code"], "not_found");
+    assert_eq!(
+        rig.generate("No Such Template", &[])["error"]["code"],
+        "not_found"
+    );
     let r = rig
         .client()
-        .call("notes-generate", p(&[("session", json!("nope")), ("template", json!("Generic"))]))
+        .call(
+            "notes-generate",
+            p(&[("session", json!("nope")), ("template", json!("Generic"))]),
+        )
         .unwrap();
     assert_eq!(r["error"]["code"], "not_found");
     assert!(mock.requests().is_empty());
@@ -387,14 +564,43 @@ fn backend_and_url_are_picked_up_by_reload_without_a_restart() {
 fn bad_urls_and_dirs_are_rejected_by_the_notes_subsystem() {
     let rig = Rig::new("", &[]);
     let mut c = rig.client();
-    let r = c.call("config-set", p(&[("key", json!("llm.base_url")), ("value", json!("not a url"))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("llm.base_url")),
+                ("value", json!("not a url")),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["error"]["code"], "invalid_value", "{r}");
-    assert!(r["error"]["message"].as_str().unwrap().starts_with("notes: "));
-    let r = c.call("config-set", p(&[("key", json!("kb.base_url")), ("value", json!("ftp://x"))])).unwrap();
+    assert!(r["error"]["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("notes: "));
+    let r = c
+        .call(
+            "config-set",
+            p(&[("key", json!("kb.base_url")), ("value", json!("ftp://x"))]),
+        )
+        .unwrap();
     assert_eq!(r["error"]["code"], "invalid_value");
-    let r = c.call("config-set", p(&[("key", json!("templates.dir")), ("value", json!(rig.cfg.to_str().unwrap()))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("templates.dir")),
+                ("value", json!(rig.cfg.to_str().unwrap())),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["error"]["code"], "invalid_value");
-    let r = c.call("config-set", p(&[("key", json!("llm.api_key_ref")), ("value", json!(" "))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[("key", json!("llm.api_key_ref")), ("value", json!(" "))]),
+        )
+        .unwrap();
     assert_eq!(r["error"]["code"], "secret_plaintext");
 }
 
@@ -405,13 +611,34 @@ fn api_keys_cannot_live_in_the_config_file() {
     let rig = Rig::new("", &[]);
     let mut c = rig.client();
     for key in ["llm.api_key", "llm.key", "secrets.api_key", "secrets.llm"] {
-        let r = c.call("config-set", p(&[("key", json!(key)), ("value", json!("sk-leak"))])).unwrap();
+        let r = c
+            .call(
+                "config-set",
+                p(&[("key", json!(key)), ("value", json!("sk-leak"))]),
+            )
+            .unwrap();
         assert_eq!(r["error"]["code"], "unknown_key", "{key}");
     }
     // The one place a key could be typed is the reference field, and it only takes references.
-    let r = c.call("config-set", p(&[("key", json!("llm.api_key_ref")), ("value", json!("sk-leak"))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("llm.api_key_ref")),
+                ("value", json!("sk-leak")),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["error"]["code"], "secret_plaintext", "{r}");
-    let r = c.call("config-set", p(&[("key", json!("llm.api_key_ref")), ("value", json!("secret:llm/other"))])).unwrap();
+    let r = c
+        .call(
+            "config-set",
+            p(&[
+                ("key", json!("llm.api_key_ref")),
+                ("value", json!("secret:llm/other")),
+            ]),
+        )
+        .unwrap();
     assert_eq!(r["ok"], true, "{r}");
     std::fs::write(&rig.cfg, "[llm]\napi_key = \"sk-leak\"\n").unwrap();
     let r = c.call("config-reload", Map::new()).unwrap();
@@ -437,13 +664,36 @@ fn keyring_backend_is_used_when_selected() {
         secrets: None,
     })
     .unwrap();
-    let h = server::serve_with_poll(engine, &dir.path().join("rt"), Duration::from_millis(40)).unwrap();
+    let h =
+        server::serve_with_poll(engine, &dir.path().join("rt"), Duration::from_millis(40)).unwrap();
     let mut c = Client::connect(&dir.path().join("rt")).unwrap();
-    c.call("session-import", p(&[("from", json!(fixtures().join("openoats").to_str().unwrap()))])).unwrap();
-    c.call("template-import", p(&[("from", json!(fixtures().join("openoats-templates.json").to_str().unwrap()))])).unwrap();
-    let r = c.call("notes-generate", p(&[("session", json!(SESSION)), ("template", json!("Sales Prospect Call"))])).unwrap();
+    c.call(
+        "session-import",
+        p(&[("from", json!(fixtures().join("openoats").to_str().unwrap()))]),
+    )
+    .unwrap();
+    c.call(
+        "template-import",
+        p(&[(
+            "from",
+            json!(fixtures().join("openoats-templates.json").to_str().unwrap()),
+        )]),
+    )
+    .unwrap();
+    let r = c
+        .call(
+            "notes-generate",
+            p(&[
+                ("session", json!(SESSION)),
+                ("template", json!("Sales Prospect Call")),
+            ]),
+        )
+        .unwrap();
     let code = r["error"]["code"].as_str().unwrap_or("");
-    assert!(code == "secret_missing" || code == "secret_backend_unavailable", "{r}");
+    assert!(
+        code == "secret_missing" || code == "secret_backend_unavailable",
+        "{r}"
+    );
     assert!(mock.requests().is_empty());
     drop(h);
 }
@@ -456,17 +706,37 @@ fn template_list_get_import() {
     let mut c = rig.client();
     let r = c.call("template-list", Map::new()).unwrap();
     assert_eq!(r["data"]["count"], 3);
-    let names: Vec<&str> = r["data"]["templates"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = r["data"]["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
     assert_eq!(names, ["Generic", "Sales Prospect Call", "Stand-Up"]);
     let sales = &r["data"]["templates"][1];
-    assert_eq!(sales["headings"], json!(["## CRM", "## Summary", "## Next Step"]));
-    let g = c.call("template-get", p(&[("name", json!("sales prospect call"))])).unwrap();
+    assert_eq!(
+        sales["headings"],
+        json!(["## CRM", "## Summary", "## Next Step"])
+    );
+    let g = c
+        .call("template-get", p(&[("name", json!("sales prospect call"))]))
+        .unwrap();
     assert_eq!(g["data"]["name"], "Sales Prospect Call");
     assert_eq!(g["data"]["schema_version"], 1);
-    assert_eq!(c.call("template-get", p(&[("name", json!("zzz"))])).unwrap()["error"]["code"], "not_found");
+    assert_eq!(
+        c.call("template-get", p(&[("name", json!("zzz"))]))
+            .unwrap()["error"]["code"],
+        "not_found"
+    );
     // Re-import is a no-op; the files are on disk next to the config.
     let again = c
-        .call("template-import", p(&[("from", json!(fixtures().join("openoats-templates.json").to_str().unwrap()))]))
+        .call(
+            "template-import",
+            p(&[(
+                "from",
+                json!(fixtures().join("openoats-templates.json").to_str().unwrap()),
+            )]),
+        )
         .unwrap();
     assert_eq!(again["data"]["imported"], json!([]));
     assert!(rig.dir.join("templates/sales-prospect-call.toml").is_file());
@@ -475,7 +745,10 @@ fn template_list_get_import() {
 #[test]
 fn templates_dir_key_moves_the_template_store() {
     let other = tempfile::tempdir().unwrap();
-    let toml = format!("[templates]\ndir = {:?}\n", other.path().join("tpl").to_str().unwrap());
+    let toml = format!(
+        "[templates]\ndir = {:?}\n",
+        other.path().join("tpl").to_str().unwrap()
+    );
     let rig = Rig::new(&toml, &[]);
     assert!(other.path().join("tpl/stand-up.toml").is_file());
     assert!(!rig.dir.join("templates").exists());
@@ -493,17 +766,29 @@ fn kb_rig(toml_extra: &str) -> (Rig, PathBuf) {
 }
 
 fn kb_paths(r: &Value) -> Vec<String> {
-    r["data"]["results"].as_array().unwrap().iter().map(|x| x["path"].as_str().unwrap().to_string()).collect()
+    r["data"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["path"].as_str().unwrap().to_string())
+        .collect()
 }
 
 #[test]
 fn kb_reindex_and_search_over_the_api_is_deterministic() {
     let (rig, _) = kb_rig("");
     let mut c = rig.client();
-    assert_eq!(c.call("kb-search", p(&[("query", json!("pricing"))])).unwrap()["error"]["code"], "index_missing");
+    assert_eq!(
+        c.call("kb-search", p(&[("query", json!("pricing"))]))
+            .unwrap()["error"]["code"],
+        "index_missing"
+    );
     let r = c.call("kb-reindex", Map::new()).unwrap();
     assert_eq!(r["data"]["files"], 6, "{r}");
-    let q = p(&[("query", json!("annual renewal discount pricing")), ("limit", json!(3))]);
+    let q = p(&[
+        ("query", json!("annual renewal discount pricing")),
+        ("limit", json!(3)),
+    ]);
     let a = c.call("kb-search", q.clone()).unwrap();
     assert_eq!(kb_paths(&a)[0], "pricing.md");
     assert_eq!(a["data"]["count"], 3);
@@ -544,9 +829,16 @@ fn kb_remote_embedders_ollama_and_openai_compatible() {
         let (rig, _) = kb_rig("");
         let mut c = rig.client();
         c.call("kb-reindex", Map::new()).unwrap();
-        c.call("kb-search", p(&[("query", json!("security incident response runbook"))])).unwrap()
+        c.call(
+            "kb-search",
+            p(&[("query", json!("security incident response runbook"))]),
+        )
+        .unwrap()
     };
-    for (embedder, path, key) in [("ollama", "/api/embeddings", None), ("openai-compatible", "/embeddings", Some("emb-key"))] {
+    for (embedder, path, key) in [
+        ("ollama", "/api/embeddings", None),
+        ("openai-compatible", "/embeddings", Some("emb-key")),
+    ] {
         let mock = embed_mock();
         let kbdir = tempfile::tempdir().unwrap().keep();
         for e in std::fs::read_dir(fixtures().join("kb")).unwrap().flatten() {
@@ -563,26 +855,54 @@ fn kb_remote_embedders_ollama_and_openai_compatible() {
         let r = c.call("kb-reindex", Map::new()).unwrap();
         assert_eq!(r["ok"], true, "{embedder}: {r}");
         assert_eq!(r["data"]["embedder"], format!("{embedder}:emb-m"));
-        let s = c.call("kb-search", p(&[("query", json!("security incident response runbook"))])).unwrap();
+        let s = c
+            .call(
+                "kb-search",
+                p(&[("query", json!("security incident response runbook"))]),
+            )
+            .unwrap();
         assert_eq!(s["ok"], true, "{embedder}: {s}");
         // Same vectors as local hashing, so the same ranking.
         assert_eq!(kb_paths(&s), kb_paths(&local), "{embedder}");
-        assert!(mock.requests().iter().any(|r| r.path.ends_with(path)), "{embedder}");
+        assert!(
+            mock.requests().iter().any(|r| r.path.ends_with(path)),
+            "{embedder}"
+        );
         if let Some(k) = key {
-            assert!(mock.requests().iter().all(|r| r.auth.as_deref() == Some(&format!("Bearer {k}"))));
+            assert!(mock
+                .requests()
+                .iter()
+                .all(|r| r.auth.as_deref() == Some(&format!("Bearer {k}"))));
         }
         // A config that changes the embedder makes the old index stale, loudly.
-        std::fs::write(&rig.cfg, format!("[kb]\ndir = {:?}\n", kbdir.to_str().unwrap())).unwrap();
+        std::fs::write(
+            &rig.cfg,
+            format!("[kb]\ndir = {:?}\n", kbdir.to_str().unwrap()),
+        )
+        .unwrap();
         c.call("config-reload", Map::new()).unwrap();
-        assert_eq!(c.call("kb-search", p(&[("query", json!("pricing"))])).unwrap()["error"]["code"], "index_stale");
+        assert_eq!(
+            c.call("kb-search", p(&[("query", json!("pricing"))]))
+                .unwrap()["error"]["code"],
+            "index_stale"
+        );
     }
 }
 
 #[test]
 fn kb_remote_embedder_is_gated_by_network_allow() {
-    let rig = Rig::new("[kb]\nembedder = \"ollama\"\nbase_url = \"http://10.255.255.1:11434\"\n", &[]);
+    let rig = Rig::new(
+        "[kb]\nembedder = \"ollama\"\nbase_url = \"http://10.255.255.1:11434\"\n",
+        &[],
+    );
     let mut c = rig.client();
-    assert_eq!(c.call("kb-reindex", Map::new()).unwrap()["error"]["code"], "network_denied");
+    assert_eq!(
+        c.call("kb-reindex", Map::new()).unwrap()["error"]["code"],
+        "network_denied"
+    );
     let rig = Rig::new("[kb]\nembedder = \"openai-compatible\"\n", &[]);
-    assert_eq!(rig.client().call("kb-reindex", Map::new()).unwrap()["error"]["code"], "base_url_required");
+    assert_eq!(
+        rig.client().call("kb-reindex", Map::new()).unwrap()["error"]["code"],
+        "base_url_required"
+    );
 }

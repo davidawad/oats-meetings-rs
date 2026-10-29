@@ -52,11 +52,15 @@ pub fn default_sessions_dir(env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
     if let Some(d) = env("OATS_DATA_DIR") {
         return PathBuf::from(d).join("sessions");
     }
-    let home = env("HOME").or_else(|| env("USERPROFILE")).unwrap_or_default();
+    let home = env("HOME")
+        .or_else(|| env("USERPROFILE"))
+        .unwrap_or_default();
     let base = if cfg!(target_os = "macos") {
         PathBuf::from(&home).join("Library/Application Support")
     } else if cfg!(windows) {
-        env("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&home))
+        env("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&home))
     } else {
         env("XDG_DATA_HOME")
             .map(PathBuf::from)
@@ -97,7 +101,10 @@ fn transcript(dir: &Path) -> (Option<&'static str>, Vec<Value>) {
 fn load(dir: &Path) -> Option<Loaded> {
     let bytes = std::fs::read(dir.join("session.json")).ok()?;
     match serde_json::from_slice::<Value>(&bytes).ok()? {
-        Value::Object(meta) => Some(Loaded { dir: dir.to_path_buf(), meta }),
+        Value::Object(meta) => Some(Loaded {
+            dir: dir.to_path_buf(),
+            meta,
+        }),
         _ => None,
     }
 }
@@ -155,7 +162,10 @@ fn in_window(started: Option<&str>, from: Option<&str>, to: Option<&str>) -> boo
 fn parse_bound(v: Option<&str>, flag: &str) -> Result<()> {
     if let Some(v) = v {
         chrono::DateTime::parse_from_rfc3339(v).map_err(|_| {
-            ConfigError::new("invalid_argument", format!("{flag} must be an RFC 3339 timestamp, got {v:?}"))
+            ConfigError::new(
+                "invalid_argument",
+                format!("{flag} must be an RFC 3339 timestamp, got {v:?}"),
+            )
         })?;
     }
     Ok(())
@@ -165,7 +175,10 @@ impl Store {
     /// A store with the default id limit; the engine uses `with_max_id` to apply the config.
     pub fn new(root: impl Into<PathBuf>) -> Store {
         let max_id = crate::config::keys::default_int("sessions.max_id_len") as usize;
-        Store { root: root.into(), max_id }
+        Store {
+            root: root.into(),
+            max_id,
+        }
     }
 
     pub fn with_max_id(mut self, max_id: usize) -> Store {
@@ -175,7 +188,10 @@ impl Store {
 
     /// Another handle on the same directory with the same limits.
     pub fn sibling(&self) -> Store {
-        Store { root: self.root.clone(), max_id: self.max_id }
+        Store {
+            root: self.root.clone(),
+            max_id: self.max_id,
+        }
     }
 
     pub fn valid_id(&self, id: &str) -> bool {
@@ -236,7 +252,10 @@ impl Store {
 
     pub fn tag(&self, id: &str, tag: &str, remove: bool) -> Result<Value> {
         if tag.trim().is_empty() {
-            return Err(ConfigError::new("invalid_argument", "tag must not be empty"));
+            return Err(ConfigError::new(
+                "invalid_argument",
+                "tag must not be empty",
+            ));
         }
         let mut l = self.find(id)?;
         let mut tags: Vec<Value> = l
@@ -252,13 +271,22 @@ impl Store {
             tags.push(json!(tag));
         }
         l.meta.insert("tags".into(), Value::Array(tags));
-        l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+        l.meta
+            .entry("schemaVersion")
+            .or_insert(json!(SCHEMA_VERSION));
         write_meta(&l.dir, &l.meta)?;
         Ok(summary(&l))
     }
 
     /// Write `notes.md` into the session and record how it was made in `session.json`.
-    pub fn set_notes(&self, id: &str, notes: &str, template: &str, backend: &str, model: &str) -> Result<PathBuf> {
+    pub fn set_notes(
+        &self,
+        id: &str,
+        notes: &str,
+        template: &str,
+        backend: &str,
+        model: &str,
+    ) -> Result<PathBuf> {
         let mut l = self.find(id)?;
         let path = l.dir.join("notes.md");
         let tmp = l.dir.join(format!(".notes.md.tmp{}", std::process::id()));
@@ -270,7 +298,9 @@ impl Store {
         l.meta.insert("notesBackend".into(), json!(backend));
         l.meta.insert("notesModel".into(), json!(model));
         l.meta.remove("notesEdited");
-        l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+        l.meta
+            .entry("schemaVersion")
+            .or_insert(json!(SCHEMA_VERSION));
         write_meta(&l.dir, &l.meta)?;
         Ok(path)
     }
@@ -307,7 +337,9 @@ impl Store {
             .map_err(|e| io(&path, e))?;
         l.meta.insert("hasNotes".into(), json!(true));
         l.meta.insert("notesEdited".into(), json!(true));
-        l.meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+        l.meta
+            .entry("schemaVersion")
+            .or_insert(json!(SCHEMA_VERSION));
         write_meta(&l.dir, &l.meta)?;
         self.notes(id)
     }
@@ -345,7 +377,13 @@ impl Store {
             ));
         }
         // Plan.
-        let mut plan: Vec<(String, Loaded, Vec<(String, Vec<u8>)>, Map<String, Value>, bool)> = vec![];
+        let mut plan: Vec<(
+            String,
+            Loaded,
+            Vec<(String, Vec<u8>)>,
+            Map<String, Value>,
+            bool,
+        )> = vec![];
         let mut conflicts = vec![];
         for src in sources {
             let id = id_of(&src);
@@ -367,7 +405,10 @@ impl Store {
         if !conflicts.is_empty() {
             return Err(ConfigError::new(
                 "conflict",
-                format!("sessions already present with different content: {}; use overwrite", conflicts.join(", ")),
+                format!(
+                    "sessions already present with different content: {}; use overwrite",
+                    conflicts.join(", ")
+                ),
             ));
         }
         let (mut imported, mut skipped) = (vec![], vec![]);
@@ -414,7 +455,10 @@ impl Store {
         check_id(id, self.max_id)?;
         let dir = self.root.join(id);
         if dir.exists() {
-            return Err(ConfigError::new("exists", format!("session '{id}' already exists")));
+            return Err(ConfigError::new(
+                "exists",
+                format!("session '{id}' already exists"),
+            ));
         }
         std::fs::create_dir_all(&dir).map_err(|e| io(&dir, e))?;
         let mut meta = Map::new();
@@ -432,9 +476,16 @@ impl Store {
 
     fn transcript_path(&self, id: &str, kind: &str) -> Result<PathBuf> {
         let l = self.find(id)?;
-        let file = TRANSCRIPTS.iter().find(|(k, _)| *k == kind).map(|(_, f)| *f).ok_or_else(|| {
-            ConfigError::new("invalid_argument", "transcript kind must be 'live' or 'final'")
-        })?;
+        let file = TRANSCRIPTS
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, f)| *f)
+            .ok_or_else(|| {
+                ConfigError::new(
+                    "invalid_argument",
+                    "transcript kind must be 'live' or 'final'",
+                )
+            })?;
         Ok(l.dir.join(file))
     }
 
@@ -456,7 +507,11 @@ impl Store {
     pub fn append_utterance(&self, id: &str, kind: &str, utterance: &Value) -> Result<()> {
         use std::io::Write;
         let path = self.transcript_path(id, kind)?;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| io(&path, e))?;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| io(&path, e))?;
         writeln!(f, "{utterance}").map_err(|e| io(&path, e))
     }
 
@@ -465,7 +520,8 @@ impl Store {
         let mut l = self.find(id)?;
         let (_, utterances) = transcript(&l.dir);
         l.meta.insert("endedAt".into(), json!(ended_at));
-        l.meta.insert("utteranceCount".into(), json!(utterances.len()));
+        l.meta
+            .insert("utteranceCount".into(), json!(utterances.len()));
         write_meta(&l.dir, &l.meta)?;
         Ok(summary(&l))
     }
@@ -495,11 +551,19 @@ mod tests {
     }
 
     fn fixture_ids() -> Vec<String> {
-        vec!["session_2026-10-20_09-00-00".into(), "session_2026-10-21_15-00-00".into()]
+        vec![
+            "session_2026-10-20_09-00-00".into(),
+            "session_2026-10-21_15-00-00".into(),
+        ]
     }
 
     fn ids(v: &Value) -> Vec<String> {
-        v["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect()
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -533,8 +597,18 @@ mod tests {
         let s = Store::new(d.path());
         s.import(&fixture_dir(), false).unwrap();
         let dir = d.path().join(&fixture_ids()[0]);
-        let meta: Value = serde_json::from_slice(&std::fs::read(dir.join("session.json")).unwrap()).unwrap();
-        for k in ["id", "startedAt", "endedAt", "title", "utteranceCount", "hasNotes", "engine", "speakerNames"] {
+        let meta: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("session.json")).unwrap()).unwrap();
+        for k in [
+            "id",
+            "startedAt",
+            "endedAt",
+            "title",
+            "utteranceCount",
+            "hasNotes",
+            "engine",
+            "speakerNames",
+        ] {
             assert!(meta.get(k).is_some(), "session.json lacks {k}");
         }
         assert_eq!(meta["schemaVersion"], 1);
@@ -542,12 +616,22 @@ mod tests {
         for f in ["transcript.final.jsonl", "transcript.live.jsonl"] {
             for line in std::fs::read_to_string(dir.join(f)).unwrap().lines() {
                 let u: Value = serde_json::from_str(line).unwrap();
-                assert!(u.get("speaker").is_some() && u.get("text").is_some() && u.get("timestamp").is_some());
+                assert!(
+                    u.get("speaker").is_some()
+                        && u.get("text").is_some()
+                        && u.get("timestamp").is_some()
+                );
             }
         }
         // Transcript read order: final, then live; an in-progress session falls back to live.
-        assert_eq!(s.get(&fixture_ids()[0]).unwrap()["transcript_source"], "final");
-        assert_eq!(s.get(&fixture_ids()[1]).unwrap()["transcript_source"], "live");
+        assert_eq!(
+            s.get(&fixture_ids()[0]).unwrap()["transcript_source"],
+            "final"
+        );
+        assert_eq!(
+            s.get(&fixture_ids()[1]).unwrap()["transcript_source"],
+            "live"
+        );
         // Non-canonical dirs are ignored.
         std::fs::create_dir_all(d.path().join("attachments-only")).unwrap();
         assert_eq!(ids(&s.list(None, None).unwrap()), fixture_ids());
@@ -562,7 +646,10 @@ mod tests {
         assert_eq!(s.rename(id, "New title").unwrap()["title"], "New title");
         assert_eq!(s.tag(id, "sales", false).unwrap()["tags"], json!(["sales"]));
         assert_eq!(s.tag(id, "sales", false).unwrap()["tags"], json!(["sales"]));
-        assert_eq!(s.tag(id, "q4", false).unwrap()["tags"], json!(["sales", "q4"]));
+        assert_eq!(
+            s.tag(id, "q4", false).unwrap()["tags"],
+            json!(["sales", "q4"])
+        );
         assert_eq!(s.tag(id, "sales", true).unwrap()["tags"], json!(["q4"]));
         // OpenOats' own keys survive edits.
         let g = s.get(id).unwrap();
@@ -570,7 +657,10 @@ mod tests {
         assert_eq!(g["metadata"]["speakerNames"]["remote_1"], "Dana");
         assert_eq!(s.delete(id, DeleteMode::Remove).unwrap()["deleted"], true);
         assert_eq!(s.get(id).unwrap_err().code, "not_found");
-        assert_eq!(ids(&s.list(None, None).unwrap()), vec![fixture_ids()[1].clone()]);
+        assert_eq!(
+            ids(&s.list(None, None).unwrap()),
+            vec![fixture_ids()[1].clone()]
+        );
     }
 
     #[test]
@@ -578,9 +668,17 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let s = Store::new(d.path());
         s.import(&fixture_dir(), false).unwrap();
-        let r = s.list(Some("2026-10-21T15:00:00-04:00"), Some("2026-10-22T00:00:00Z")).unwrap();
+        let r = s
+            .list(
+                Some("2026-10-21T15:00:00-04:00"),
+                Some("2026-10-22T00:00:00Z"),
+            )
+            .unwrap();
         assert_eq!(ids(&r), vec![fixture_ids()[1].clone()]);
-        assert_eq!(s.list(Some("yesterday"), None).unwrap_err().code, "invalid_argument");
+        assert_eq!(
+            s.list(Some("yesterday"), None).unwrap_err().code,
+            "invalid_argument"
+        );
     }
 
     #[test]
@@ -589,7 +687,11 @@ mod tests {
         let s = Store::new(d.path());
         for bad in ["../x", "a/b", "", ".hidden", "a\\b", "x y"] {
             assert_eq!(s.get(bad).unwrap_err().code, "invalid_argument", "{bad}");
-            assert_eq!(s.delete(bad, DeleteMode::Remove).unwrap_err().code, "invalid_argument", "{bad}");
+            assert_eq!(
+                s.delete(bad, DeleteMode::Remove).unwrap_err().code,
+                "invalid_argument",
+                "{bad}"
+            );
         }
         assert_eq!(s.get("nope").unwrap_err().code, "not_found");
     }
@@ -608,7 +710,10 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("session.json"), r#"{"id":"../escape"}"#).unwrap();
         let s = Store::new(d.path().join("store"));
-        assert_eq!(s.import(&d.path().join("src"), false).unwrap_err().code, "invalid_argument");
+        assert_eq!(
+            s.import(&d.path().join("src"), false).unwrap_err().code,
+            "invalid_argument"
+        );
         assert!(!d.path().join("escape").exists());
     }
 
@@ -622,8 +727,15 @@ mod tests {
         }
         let d = tempfile::tempdir().unwrap();
         let s = Store::new(d.path()).with_max_id(8);
-        assert!(s.create("abcdefgh", "2026-01-01T00:00:00Z", "", "t").is_ok());
-        assert_eq!(s.create("abcdefghi", "2026-01-01T00:00:00Z", "", "t").unwrap_err().code, "invalid_argument");
+        assert!(s
+            .create("abcdefgh", "2026-01-01T00:00:00Z", "", "t")
+            .is_ok());
+        assert_eq!(
+            s.create("abcdefghi", "2026-01-01T00:00:00Z", "", "t")
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
         assert!(s.sibling().valid_id("12345678") && !s.sibling().valid_id("123456789"));
     }
 }

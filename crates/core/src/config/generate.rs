@@ -30,7 +30,8 @@ fn sorted(v: &Value) -> Value {
 }
 
 pub fn defaults_json() -> String {
-    let mut s = serde_json::to_string_pretty(&sorted(&nest(&defaults_flat()))).expect("serializable");
+    let mut s =
+        serde_json::to_string_pretty(&sorted(&nest(&defaults_flat()))).expect("serializable");
     s.push('\n');
     s
 }
@@ -45,7 +46,8 @@ fn toml_lit(v: &Value) -> String {
 
 pub fn defaults_toml() -> String {
     // One header per table, parents before children, whatever order the key paths sort in.
-    let mut tables: std::collections::BTreeMap<&str, Vec<(&str, &super::keys::Key)>> = std::collections::BTreeMap::new();
+    let mut tables: std::collections::BTreeMap<&str, Vec<(&str, &super::keys::Key)>> =
+        std::collections::BTreeMap::new();
     for k in sorted_keys() {
         let (table, leaf) = k.path.rsplit_once('.').expect("keys are dotted");
         tables.entry(table).or_default().push((leaf, k));
@@ -54,7 +56,11 @@ pub fn defaults_toml() -> String {
     for (table, leaves) in tables {
         out.push_str(&format!("\n[{table}]\n"));
         for (leaf, k) in leaves {
-            out.push_str(&format!("# {}\n{leaf} = {}\n", k.doc, toml_lit(&k.default.to_json())));
+            out.push_str(&format!(
+                "# {}\n{leaf} = {}\n",
+                k.doc,
+                toml_lit(&k.default.to_json())
+            ));
         }
     }
     out
@@ -68,7 +74,10 @@ fn sorted_keys() -> Vec<&'static super::keys::Key> {
 
 pub fn schema_json() -> String {
     let mut root = Map::new();
-    root.insert("$schema".into(), json!("http://json-schema.org/draft-07/schema#"));
+    root.insert(
+        "$schema".into(),
+        json!("http://json-schema.org/draft-07/schema#"),
+    );
     root.insert("$comment".into(), json!(MARKER));
     root.insert("title".into(), json!("oats-meetings-rs config"));
     root.insert("type".into(), json!("object"));
@@ -97,8 +106,14 @@ pub fn schema_json() -> String {
                 leaf.insert("format".into(), json!("duration"));
                 leaf.insert("pattern".into(), json!("^[0-9]+(ms|s|m|h|d)$"));
                 leaf.insert("x-kind".into(), json!("duration"));
-                leaf.insert("x-min".into(), json!(super::keys::format_duration_ms(min_ms)));
-                leaf.insert("x-max".into(), json!(super::keys::format_duration_ms(max_ms)));
+                leaf.insert(
+                    "x-min".into(),
+                    json!(super::keys::format_duration_ms(min_ms)),
+                );
+                leaf.insert(
+                    "x-max".into(),
+                    json!(super::keys::format_duration_ms(max_ms)),
+                );
                 leaf.insert("x-min-ms".into(), json!(min_ms));
                 leaf.insert("x-max-ms".into(), json!(max_ms));
             }
@@ -116,9 +131,9 @@ pub fn schema_json() -> String {
             if i + 1 == parts.len() {
                 cur.insert((*part).to_string(), Value::Object(leaf.clone()));
             } else {
-                let node = cur.entry((*part).to_string()).or_insert_with(|| {
-                    json!({"type": "object", "additionalProperties": false, "properties": {}})
-                });
+                let node = cur.entry((*part).to_string()).or_insert_with(
+                    || json!({"type": "object", "additionalProperties": false, "properties": {}}),
+                );
                 cur = node
                     .get_mut("properties")
                     .and_then(Value::as_object_mut)
@@ -140,7 +155,8 @@ fn resort(text: &str) -> String {
 }
 
 pub fn actions_json() -> String {
-    let mut s = serde_json::to_string_pretty(&sorted(&crate::action::manifest_json())).expect("serializable");
+    let mut s = serde_json::to_string_pretty(&sorted(&crate::action::manifest_json()))
+        .expect("serializable");
     s.push('\n');
     s
 }
@@ -151,7 +167,10 @@ pub fn projections() -> Vec<(&'static str, String)> {
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
         ("actions.json", actions_json()),
-        ("template.schema.json", resort(&crate::templates::schema_json())),
+        (
+            "template.schema.json",
+            resort(&crate::templates::schema_json()),
+        ),
     ]
 }
 

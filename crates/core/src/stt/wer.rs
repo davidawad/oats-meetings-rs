@@ -45,6 +45,9 @@ mod tests {
 
     #[test]
     fn normalisation() {
-        assert_eq!(words("Hello, World! It\u{2019}s 5pm."), ["hello", "world", "it's", "5pm"]);
+        assert_eq!(
+            words("Hello, World! It\u{2019}s 5pm."),
+            ["hello", "world", "it's", "5pm"]
+        );
     }
 }

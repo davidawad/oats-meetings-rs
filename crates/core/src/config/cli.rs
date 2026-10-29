@@ -91,7 +91,10 @@ fn load_user(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<St
     match std::fs::read_to_string(&path) {
         Ok(s) => Ok(Some(s)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(None),
-        Err(e) => Err(ConfigError::new("io_error", format!("{}: {e}", path.display()))),
+        Err(e) => Err(ConfigError::new(
+            "io_error",
+            format!("{}: {e}", path.display()),
+        )),
     }
 }
 
@@ -103,11 +106,18 @@ pub fn host(env: &dyn Fn(&str) -> Option<String>) -> (String, String, String) {
     )
 }
 
-fn resolved_for(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Result<(resolve::Resolved, (String, String, String))> {
+fn resolved_for(
+    o: &Opts,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<(resolve::Resolved, (String, String, String))> {
     resolve::validate_all_axes()?;
     resolve::managed_keys()?; // validates every embedded pack
     let user = load_user(o, env)?;
-    let pack = o.pack.clone().or_else(|| env("OATS_PACK")).filter(|p| !p.is_empty());
+    let pack = o
+        .pack
+        .clone()
+        .or_else(|| env("OATS_PACK"))
+        .filter(|p| !p.is_empty());
     let h = host(env);
     let r = resolve::resolve(&Inputs {
         pack: pack.as_deref(),
@@ -122,10 +132,20 @@ fn resolved_for(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Result<(resol
 /// Error codes are `&'static str`; map the engine's codes back, anything else is `reload_failed`.
 fn remote_code(code: &str) -> &'static str {
     const KNOWN: &[&str] = &[
-        "unknown_key", "invalid_value", "type_mismatch", "invalid_combination", "parse_error",
-        "io_error", "already_running", "unsupported_version",
+        "unknown_key",
+        "invalid_value",
+        "type_mismatch",
+        "invalid_combination",
+        "parse_error",
+        "io_error",
+        "already_running",
+        "unsupported_version",
     ];
-    KNOWN.iter().copied().find(|k| *k == code).unwrap_or("reload_failed")
+    KNOWN
+        .iter()
+        .copied()
+        .find(|k| *k == code)
+        .unwrap_or("reload_failed")
 }
 
 fn scalar(v: &Value) -> String {
@@ -185,11 +205,17 @@ fn dispatch(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<(Va
             let r = c.call("config-reload", serde_json::Map::new())?;
             if r["ok"] == json!(true) {
                 let changed = r["data"]["changed"].as_array().map_or(0, Vec::len);
-                Ok((r["data"].clone(), format!("reloaded ({changed} key(s) changed)\n")))
+                Ok((
+                    r["data"].clone(),
+                    format!("reloaded ({changed} key(s) changed)\n"),
+                ))
             } else {
                 Err(ConfigError::new(
                     remote_code(r["error"]["code"].as_str().unwrap_or("")),
-                    r["error"]["message"].as_str().unwrap_or("reload failed").to_string(),
+                    r["error"]["message"]
+                        .as_str()
+                        .unwrap_or("reload failed")
+                        .to_string(),
                 ))
             }
         }
@@ -197,10 +223,16 @@ fn dispatch(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<(Va
             let dir = PathBuf::from(o.dir.clone().unwrap_or_else(|| "config".into()));
             if o.check {
                 generate::check(&dir)?;
-                Ok((json!({"drift": false}), "generated files are current\n".into()))
+                Ok((
+                    json!({"drift": false}),
+                    "generated files are current\n".into(),
+                ))
             } else {
                 generate::write(&dir)?;
-                Ok((json!({"written": dir}), format!("wrote {}\n", dir.display())))
+                Ok((
+                    json!({"written": dir}),
+                    format!("wrote {}\n", dir.display()),
+                ))
             }
         }
         other => Err(ConfigError::new(
@@ -216,7 +248,10 @@ pub fn run(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Out {
         Ok((data, human)) => Out {
             code: 0,
             stdout: if json_out {
-                format!("{}\n", json!({"ok": true, "data": data, "schema_version": SCHEMA_VERSION}))
+                format!(
+                    "{}\n",
+                    json!({"ok": true, "data": data, "schema_version": SCHEMA_VERSION})
+                )
             } else {
                 human
             },
@@ -300,7 +335,10 @@ mod tests {
     #[test]
     fn oats_pack_cloud_differs_only_in_managed_keys() {
         let env_default = env_with(vec![("OATS_OS", "linux".into())]);
-        let env_cloud = env_with(vec![("OATS_OS", "linux".into()), ("OATS_PACK", "cloud".into())]);
+        let env_cloud = env_with(vec![
+            ("OATS_OS", "linux".into()),
+            ("OATS_PACK", "cloud".into()),
+        ]);
         let a = data(&run(&s(&["resolved", "--json"]), &env_default));
         let b = data(&run(&s(&["resolved", "--json"]), &env_cloud));
         assert_eq!(b["pack"], "cloud");
@@ -309,7 +347,11 @@ mod tests {
         let mut fb = resolve::Flat::new();
         resolve::flatten(&a["config"], "", &mut fa);
         resolve::flatten(&b["config"], "", &mut fb);
-        let diff: Vec<_> = fa.iter().filter(|(k, v)| fb.get(*k) != Some(*v)).map(|(k, _)| k.clone()).collect();
+        let diff: Vec<_> = fa
+            .iter()
+            .filter(|(k, v)| fb.get(*k) != Some(*v))
+            .map(|(k, _)| k.clone())
+            .collect();
         assert!(!diff.is_empty());
         assert!(diff.iter().all(|k| managed.contains(k)), "{diff:?}");
     }
@@ -335,11 +377,20 @@ mod tests {
     fn generate_check_cli() {
         let d = tempfile::tempdir().unwrap();
         let dir = d.path().to_str().unwrap();
-        assert_eq!(run(&s(&["generate", "--check", "--dir", dir]), &no_env).code, 1);
+        assert_eq!(
+            run(&s(&["generate", "--check", "--dir", dir]), &no_env).code,
+            1
+        );
         assert_eq!(run(&s(&["generate", "--dir", dir]), &no_env).code, 0);
-        assert_eq!(run(&s(&["generate", "--check", "--dir", dir]), &no_env).code, 0);
+        assert_eq!(
+            run(&s(&["generate", "--check", "--dir", dir]), &no_env).code,
+            0
+        );
         std::fs::write(d.path().join("defaults.toml"), "# hand edited\n").unwrap();
-        let o = run(&s(&["generate", "--check", "--json", "--dir", dir]), &no_env);
+        let o = run(
+            &s(&["generate", "--check", "--json", "--dir", dir]),
+            &no_env,
+        );
         assert_eq!(o.code, 1);
         assert!(o.stdout.contains("\"drift\""));
     }

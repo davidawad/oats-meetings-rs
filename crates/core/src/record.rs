@@ -21,7 +21,8 @@ use crate::stt::Asr;
 pub const AUDIO_FILE: &str = "audio.wav";
 
 /// Builds the capture backend for the settings; the default is `oats_audio::select`.
-pub type Factory = Box<dyn Fn(&AudioSettings) -> oats_audio::Result<Box<dyn CaptureBackend>> + Send + Sync>;
+pub type Factory =
+    Box<dyn Fn(&AudioSettings) -> oats_audio::Result<Box<dyn CaptureBackend>> + Send + Sync>;
 
 /// Builds the ASR for a recording; the default is `stt::make_asr`, tests inject a fake.
 pub type AsrFactory = Box<dyn Fn(&crate::stt::Settings) -> Result<Arc<dyn Asr>> + Send + Sync>;
@@ -45,7 +46,11 @@ pub struct Recorder {
 
 impl Default for Recorder {
     fn default() -> Self {
-        Self { active: Mutex::new(None), factory: Mutex::new(Box::new(oats_audio::select)), asr: Mutex::new(None) }
+        Self {
+            active: Mutex::new(None),
+            factory: Mutex::new(Box::new(oats_audio::select)),
+            asr: Mutex::new(None),
+        }
     }
 }
 
@@ -58,13 +63,23 @@ fn io_err(p: &Path, e: impl std::fmt::Display) -> ConfigError {
 }
 
 pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
-    let s = |k: &str| flat.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    let s = |k: &str| {
+        flat.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
     let b = |k: &str| flat.get(k).and_then(Value::as_bool).unwrap_or(true);
     let dur = |k: &str| {
         let text = s(k);
         crate::config::keys::parse_duration_ms(&text)
             .map(std::time::Duration::from_millis)
-            .ok_or_else(|| ConfigError::new("invalid_value", format!("{k} '{text}' is not a duration like \"15s\"")))
+            .ok_or_else(|| {
+                ConfigError::new(
+                    "invalid_value",
+                    format!("{k} '{text}' is not a duration like \"15s\""),
+                )
+            })
     };
     Ok(AudioSettings {
         backend: BackendChoice::parse(&s("audio.backend")).map_err(audio_err)?,
@@ -73,7 +88,10 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
         system_device: s("audio.system.device"),
         mic_enabled: b("audio.mic.enabled"),
         mic_device: s("audio.mic.device"),
-        timing: oats_audio::Timing { open_timeout: dur("audio.open_timeout")?, poll: dur("audio.poll_interval")? },
+        timing: oats_audio::Timing {
+            open_timeout: dur("audio.open_timeout")?,
+            poll: dur("audio.poll_interval")?,
+        },
     })
 }
 
@@ -115,7 +133,9 @@ fn write_meta(dir: &Path, meta: &Map<String, Value>) -> Result<()> {
     let tmp = dir.join(format!(".session.json.tmp{}", std::process::id()));
     let text = serde_json::to_string_pretty(&Value::Object(meta.clone()))
         .map_err(|e| ConfigError::new("io_error", e.to_string()))?;
-    std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| io_err(&path, e))
+    std::fs::write(&tmp, text)
+        .and_then(|_| std::fs::rename(&tmp, &path))
+        .map_err(|e| io_err(&path, e))
 }
 
 /// Merge the audio facts into `session.json` without touching what the store or the user wrote
@@ -157,8 +177,12 @@ impl Recorder {
     pub fn devices(&self, st: &AudioSettings) -> Result<Value> {
         let be = self.backend(st)?;
         let devices = be.list_devices().map_err(audio_err)?;
-        let loopback = devices.iter().any(|d| d.kind == oats_audio::DeviceKind::Loopback);
-        Ok(json!({"backend": be.name(), "os": std::env::consts::OS, "loopback_available": loopback, "devices": devices}))
+        let loopback = devices
+            .iter()
+            .any(|d| d.kind == oats_audio::DeviceKind::Loopback);
+        Ok(
+            json!({"backend": be.name(), "os": std::env::consts::OS, "loopback_available": loopback, "devices": devices}),
+        )
     }
 
     /// Reload check: with an enumerable backend, a named device must exist; both sources off is
@@ -178,13 +202,20 @@ impl Recorder {
         if named.iter().all(|(on, _, d)| !on || d.is_empty()) {
             return Ok(());
         }
-        let Ok(be) = self.backend(st) else { return Ok(()) };
-        let Ok(devices) = be.list_devices() else { return Ok(()) };
+        let Ok(be) = self.backend(st) else {
+            return Ok(());
+        };
+        let Ok(devices) = be.list_devices() else {
+            return Ok(());
+        };
         for (on, key, d) in named {
             if on && !d.is_empty() && !devices.iter().any(|x| &x.id == d || &x.name == d) {
                 return Err(ConfigError::new(
                     "device_not_found",
-                    format!("{key} = '{d}' is not a device of the {} backend (see `ctl devices list`)", be.name()),
+                    format!(
+                        "{key} = '{d}' is not a device of the {} backend (see `ctl devices list`)",
+                        be.name()
+                    ),
                 ));
             }
         }
@@ -194,14 +225,21 @@ impl Recorder {
     /// The running recording keeps the devices, layout and transcription it started with; a config
     /// change applies to the next `record start`. This is the active session id, if any.
     pub fn active_id(&self) -> Option<String> {
-        self.active.lock().expect("active").as_ref().map(|a| a.id.clone())
+        self.active
+            .lock()
+            .expect("active")
+            .as_ref()
+            .map(|a| a.id.clone())
     }
 
     /// The recording in progress as `(session, paused, audio duration ms)`; the outer None means a
     /// start or stop holds the recorder right now (a GUI thread must not wait for it).
     pub fn active_state(&self) -> Option<Option<(String, bool, u64)>> {
         let g = self.active.try_lock().ok()?;
-        Some(g.as_ref().map(|a| (a.id.clone(), a.rec.paused(), a.rec.duration_ms())))
+        Some(
+            g.as_ref()
+                .map(|a| (a.id.clone(), a.rec.paused(), a.rec.duration_ms())),
+        )
     }
 
     pub fn start(
@@ -215,7 +253,10 @@ impl Recorder {
     ) -> Result<Value> {
         let mut slot = self.active.lock().expect("active");
         if let Some(a) = slot.as_ref() {
-            return Err(ConfigError::new("already_recording", format!("session {} is already recording", a.id)));
+            return Err(ConfigError::new(
+                "already_recording",
+                format!("session {} is already recording", a.id),
+            ));
         }
         let started = oats_audio::timefmt::now_secs();
         let id = session.map_or_else(|| oats_audio::timefmt::session_id(started), str::to_string);
@@ -227,9 +268,19 @@ impl Recorder {
         }
         let be = self.backend(st)?;
         let plan = plan.filter(|p| p.settings.live_enabled || p.settings.final_enabled);
-        let label = plan.as_ref().map_or_else(String::new, |p| p.settings.engine_label());
-        let started_dt = Utc.timestamp_opt(started, 0).single().unwrap_or_else(Utc::now);
-        let dir = store.create(&id, &oats_audio::timefmt::iso(started), title.unwrap_or_default(), &label)?;
+        let label = plan
+            .as_ref()
+            .map_or_else(String::new, |p| p.settings.engine_label());
+        let started_dt = Utc
+            .timestamp_opt(started, 0)
+            .single()
+            .unwrap_or_else(Utc::now);
+        let dir = store.create(
+            &id,
+            &oats_audio::timefmt::iso(started),
+            title.unwrap_or_default(),
+            &label,
+        )?;
         let wav = dir.join(AUDIO_FILE);
         let trans = plan.map(|p| Transcriber::start(p, store.sibling(), &id, started_dt));
         let rec = {
@@ -239,7 +290,8 @@ impl Recorder {
                     None => Box::new(|_: &[f32]| {}),
                 }
             };
-            let tap: Option<oats_audio::recorder::TapFactory> = if trans.is_some() { Some(&tapf) } else { None };
+            let tap: Option<oats_audio::recorder::TapFactory> =
+                if trans.is_some() { Some(&tapf) } else { None };
             oats_audio::recorder::start(be.as_ref(), st, &wav, tap)
         };
         let rec = match rec {
@@ -254,7 +306,11 @@ impl Recorder {
             }
         };
         merge_audio_meta(&dir, 0, st.layout.channels())?;
-        let transcription = if trans.is_some() { json!({"state": "on"}) } else { no_trans.clone() };
+        let transcription = if trans.is_some() {
+            json!({"state": "on"})
+        } else {
+            no_trans.clone()
+        };
         let out = json!({"session": id, "path": wav, "backend": be.name(),
             "channels": st.layout.channels(), "rate": oats_audio::SAMPLE_RATE,
             "started_at": oats_audio::timefmt::iso(started), "transcription": transcription});
@@ -278,26 +334,42 @@ impl Recorder {
             .take()
             .ok_or_else(|| ConfigError::new("not_recording", "no recording is active"))?;
         let ended = Utc::now();
-        let Active { id, dir, store, layout, rec, trans, no_trans, .. } = a;
+        let Active {
+            id,
+            dir,
+            store,
+            layout,
+            rec,
+            trans,
+            no_trans,
+            ..
+        } = a;
         let summary = rec.stop().map_err(audio_err)?;
         let transcription = match trans {
             Some(t) => t.finish(&summary.path, layout == Layout::Split, ended),
             None => {
-                let _ = store.finish(&id, &ended.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+                let _ = store.finish(
+                    &id,
+                    &ended.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                );
                 no_trans
             }
         };
         merge_audio_meta(&dir, summary.duration_ms, summary.channels)?;
-        Ok(json!({"session": id, "path": summary.path, "duration_ms": summary.duration_ms,
+        Ok(
+            json!({"session": id, "path": summary.path, "duration_ms": summary.duration_ms,
             "frames": summary.frames, "rate": summary.rate, "channels": summary.channels,
             "system_samples": summary.system_samples, "mic_samples": summary.mic_samples,
-            "transcription": transcription}))
+            "transcription": transcription}),
+        )
     }
 
     /// Toggle pause; returns the new state.
     pub fn pause(&self) -> Result<Value> {
         let slot = self.active.lock().expect("active");
-        let a = slot.as_ref().ok_or_else(|| ConfigError::new("not_recording", "no recording is active"))?;
+        let a = slot
+            .as_ref()
+            .ok_or_else(|| ConfigError::new("not_recording", "no recording is active"))?;
         let now = !a.rec.paused();
         a.rec.set_paused(now);
         Ok(json!({"session": a.id, "paused": now, "duration_ms": a.rec.duration_ms()}))
@@ -308,7 +380,11 @@ impl Recorder {
     pub fn annotate(&self, v: &mut Value, id: &str) {
         let live = self.active.lock().expect("active");
         if let Some(a) = live.as_ref().filter(|a| a.id == id) {
-            v["state"] = json!(if a.rec.paused() { "paused" } else { "recording" });
+            v["state"] = json!(if a.rec.paused() {
+                "paused"
+            } else {
+                "recording"
+            });
             v["duration_ms"] = json!(a.rec.duration_ms());
             v["audio_path"] = json!(a.rec.path());
             return;
@@ -316,9 +392,13 @@ impl Recorder {
         v["state"] = json!("saved");
         let meta = v["metadata"].as_object().cloned().unwrap_or_default();
         v["duration_ms"] = meta.get("durationMs").cloned().unwrap_or(Value::Null);
-        let audio = v["path"]
-            .as_str()
-            .map(|d| Path::new(d).join(meta.get("audioFile").and_then(Value::as_str).unwrap_or(AUDIO_FILE)));
+        let audio = v["path"].as_str().map(|d| {
+            Path::new(d).join(
+                meta.get("audioFile")
+                    .and_then(Value::as_str)
+                    .unwrap_or(AUDIO_FILE),
+            )
+        });
         v["audio_path"] = match audio {
             Some(p) if p.exists() => json!(p),
             _ => Value::Null,

@@ -40,7 +40,8 @@ pub fn valid_key(k: &str) -> bool {
         && !k.starts_with('/')
         && !k.ends_with('/')
         && !k.contains("..")
-        && k.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
+        && k.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
 }
 
 /// `secrets.max_key_len`: the key is at most `max` bytes.
@@ -50,7 +51,10 @@ pub fn check_len(k: &str, max: usize) -> Result<()> {
     } else {
         Err(ConfigError::new(
             "invalid_argument",
-            format!("secret key is {} bytes; secrets.max_key_len allows {max}", k.len()),
+            format!(
+                "secret key is {} bytes; secrets.max_key_len allows {max}",
+                k.len()
+            ),
         ))
     }
 }
@@ -87,7 +91,10 @@ pub fn resolve(store: &dyn SecretStore, reference: &str, max_len: usize) -> Resu
     let key = require_ref(reference, "the value")?;
     check_len(&key, max_len)?;
     store.get(&key)?.ok_or_else(|| {
-        ConfigError::new("secret_not_found", format!("no secret '{key}' in the {} store", store.name()))
+        ConfigError::new(
+            "secret_not_found",
+            format!("no secret '{key}' in the {} store", store.name()),
+        )
     })
 }
 
@@ -103,13 +110,21 @@ pub struct EnvStore {
 
 impl EnvStore {
     pub fn new(prefix: &str) -> EnvStore {
-        EnvStore { prefix: prefix.to_string() }
+        EnvStore {
+            prefix: prefix.to_string(),
+        }
     }
 
     pub fn var_name(&self, key: &str) -> String {
         let tail: String = key
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
             .collect();
         format!("{}{tail}", self.prefix)
     }
@@ -121,13 +136,18 @@ impl SecretStore for EnvStore {
     }
     fn get(&self, key: &str) -> Result<Option<String>> {
         check_key(key)?;
-        Ok(std::env::var(self.var_name(key)).ok().filter(|v| !v.is_empty()))
+        Ok(std::env::var(self.var_name(key))
+            .ok()
+            .filter(|v| !v.is_empty()))
     }
     fn set(&self, key: &str, _value: &str) -> Result<()> {
         check_key(key)?;
         Err(ConfigError::new(
             "secret_read_only",
-            format!("the env store is read only; export {} instead", self.var_name(key)),
+            format!(
+                "the env store is read only; export {} instead",
+                self.var_name(key)
+            ),
         ))
     }
     fn delete(&self, key: &str) -> Result<bool> {
@@ -141,7 +161,9 @@ pub struct KeyringStore {
 
 impl KeyringStore {
     pub fn new(service: &str) -> KeyringStore {
-        KeyringStore { service: service.to_string() }
+        KeyringStore {
+            service: service.to_string(),
+        }
     }
 
     fn entry(&self, key: &str) -> Result<keyring::Entry> {
@@ -231,7 +253,10 @@ impl SecretStore for MemStore {
     }
     fn set(&self, key: &str, value: &str) -> Result<()> {
         check_key(key)?;
-        self.0.lock().expect("mem store").insert(key.to_string(), value.to_string());
+        self.0
+            .lock()
+            .expect("mem store")
+            .insert(key.to_string(), value.to_string());
         Ok(())
     }
     fn delete(&self, key: &str) -> Result<bool> {
@@ -261,7 +286,10 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             check_key(key)?;
             check_len(key, cfg.max_key_len as usize)?;
             if value.is_empty() {
-                return Err(ConfigError::new("invalid_argument", "a secret cannot be empty"));
+                return Err(ConfigError::new(
+                    "invalid_argument",
+                    "a secret cannot be empty",
+                ));
             }
             store.set(key, value)?;
             Ok(json!({"key": key, "stored": true, "backend": store.name()}))
@@ -295,7 +323,10 @@ mod tests {
         assert_eq!(parse_ref(" secret:ics/work "), Some("ics/work"));
         assert_eq!(parse_ref("Bearer abc"), None);
         assert_eq!(parse_ref("secret:nokey"), None);
-        assert_eq!(require_ref("hunter2", "x").unwrap_err().code, "secret_plaintext");
+        assert_eq!(
+            require_ref("hunter2", "x").unwrap_err().code,
+            "secret_plaintext"
+        );
     }
 
     #[test]
@@ -313,8 +344,14 @@ mod tests {
         assert_eq!(e.set("ns/one", "x").unwrap_err().code, "secret_read_only");
         assert_eq!(e.delete("ns/one").unwrap_err().code, "secret_read_only");
         assert_eq!(resolve(&e, "secret:ns/one", 128).unwrap(), "tok");
-        assert_eq!(resolve(&e, "secret:ns/two", 128).unwrap_err().code, "secret_not_found");
-        assert_eq!(resolve(&e, "tok", 128).unwrap_err().code, "secret_plaintext");
+        assert_eq!(
+            resolve(&e, "secret:ns/two", 128).unwrap_err().code,
+            "secret_not_found"
+        );
+        assert_eq!(
+            resolve(&e, "tok", 128).unwrap_err().code,
+            "secret_plaintext"
+        );
     }
 
     #[test]
@@ -333,7 +370,10 @@ mod tests {
         let mem = MemStore::default();
         mem.set("ns/k", "from-mem").unwrap();
         mem.set("ns/only", "mem-only").unwrap();
-        let c = Chain(vec![Box::new(EnvStore::new("OATS_TEST_SECRETS_CHAIN_")), Box::new(mem)]);
+        let c = Chain(vec![
+            Box::new(EnvStore::new("OATS_TEST_SECRETS_CHAIN_")),
+            Box::new(mem),
+        ]);
         assert_eq!(c.get("ns/k").unwrap().as_deref(), Some("from-env"));
         assert_eq!(c.get("ns/only").unwrap().as_deref(), Some("mem-only"));
         c.set("ns/new", "v").unwrap(); // env refuses, memory accepts
@@ -359,11 +399,19 @@ mod tests {
             let at = format!("ns/{}", "k".repeat(max - 3));
             assert_eq!(at.len(), max);
             check_len(&at, max).unwrap();
-            assert_eq!(check_len(&format!("{at}k"), max).unwrap_err().code, "invalid_argument");
+            assert_eq!(
+                check_len(&format!("{at}k"), max).unwrap_err().code,
+                "invalid_argument"
+            );
             let store = MemStore::default();
             store.set(&at, "v").unwrap();
             assert_eq!(resolve(&store, &format!("secret:{at}"), max).unwrap(), "v");
-            assert_eq!(resolve(&store, &format!("secret:{at}k"), max).unwrap_err().code, "invalid_argument");
+            assert_eq!(
+                resolve(&store, &format!("secret:{at}k"), max)
+                    .unwrap_err()
+                    .code,
+                "invalid_argument"
+            );
         }
     }
 }

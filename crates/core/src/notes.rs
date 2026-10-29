@@ -14,10 +14,10 @@ use serde_json::{json, Value};
 use crate::config::typed::{Config, LlmBackend};
 use crate::config::{ConfigError, Result};
 use crate::control::subsystem::Subsystem;
+use crate::http;
 use crate::secrets::{self, SecretStore};
 use crate::sessions::Store;
 use crate::templates;
-use crate::http;
 
 pub const OLLAMA_DEFAULT: &str = "http://127.0.0.1:11434";
 pub const OPENROUTER_DEFAULT: &str = "https://openrouter.ai/api/v1";
@@ -41,11 +41,28 @@ pub fn backend_name(b: LlmBackend) -> &'static str {
 pub fn chat_url(cfg: &Config) -> Result<String> {
     let base = cfg.llm.base_url.as_str();
     match cfg.llm.backend {
-        LlmBackend::Ollama => Ok(http::join(if base.is_empty() { OLLAMA_DEFAULT } else { base }, "api/chat")),
-        LlmBackend::Openrouter => Ok(http::join(if base.is_empty() { OPENROUTER_DEFAULT } else { base }, "chat/completions")),
+        LlmBackend::Ollama => Ok(http::join(
+            if base.is_empty() {
+                OLLAMA_DEFAULT
+            } else {
+                base
+            },
+            "api/chat",
+        )),
+        LlmBackend::Openrouter => Ok(http::join(
+            if base.is_empty() {
+                OPENROUTER_DEFAULT
+            } else {
+                base
+            },
+            "chat/completions",
+        )),
         LlmBackend::OpenaiCompatible => {
             if base.is_empty() {
-                Err(ConfigError::new("base_url_required", "llm.backend = openai-compatible needs llm.base_url"))
+                Err(ConfigError::new(
+                    "base_url_required",
+                    "llm.backend = openai-compatible needs llm.base_url",
+                ))
             } else {
                 Ok(http::join(base, "chat/completions"))
             }
@@ -79,12 +96,21 @@ pub fn api_key(cfg: &Config, secrets: &dyn SecretStore) -> Result<Option<String>
     if cfg.llm.backend == LlmBackend::Ollama {
         return Ok(None);
     }
-    match secrets::resolve(secrets, &cfg.llm.api_key_ref, cfg.secrets.max_key_len as usize) {
+    match secrets::resolve(
+        secrets,
+        &cfg.llm.api_key_ref,
+        cfg.secrets.max_key_len as usize,
+    ) {
         Ok(k) => Ok(Some(k)),
-        Err(e) if e.code == "secret_not_found" && cfg.llm.backend != LlmBackend::Openrouter => Ok(None),
+        Err(e) if e.code == "secret_not_found" && cfg.llm.backend != LlmBackend::Openrouter => {
+            Ok(None)
+        }
         Err(e) if e.code == "secret_not_found" => Err(ConfigError::new(
             "secret_missing",
-            format!("openrouter needs an API key: {} (set it with `secret-set`)", e.message),
+            format!(
+                "openrouter needs an API key: {} (set it with `secret-set`)",
+                e.message
+            ),
         )),
         Err(e) => Err(e),
     }
@@ -98,22 +124,31 @@ fn render_transcript(store: &Store, session: &str) -> Result<String> {
     for u in t["utterances"].as_array().into_iter().flatten() {
         let speaker = u["speaker"].as_str().unwrap_or("?");
         let who = names[speaker].as_str().unwrap_or(speaker);
-        let text = u["refinedText"].as_str().or_else(|| u["text"].as_str()).unwrap_or("");
+        let text = u["refinedText"]
+            .as_str()
+            .or_else(|| u["text"].as_str())
+            .unwrap_or("");
         lines.push(match u["timestamp"].as_str() {
             Some(ts) => format!("[{ts}] {who}: {text}"),
             None => format!("{who}: {text}"),
         });
     }
     if lines.is_empty() {
-        return Err(ConfigError::new("no_transcript", format!("session '{session}' has no transcript")));
+        return Err(ConfigError::new(
+            "no_transcript",
+            format!("session '{session}' has no transcript"),
+        ));
     }
     Ok(lines.join("\n"))
 }
 
 fn request_body(cfg: &Config, system: &str, user: &str) -> Value {
-    let messages = json!([{"role": "system", "content": system}, {"role": "user", "content": user}]);
+    let messages =
+        json!([{"role": "system", "content": system}, {"role": "user", "content": user}]);
     match cfg.llm.backend {
-        LlmBackend::Ollama => json!({"model": cfg.llm.model, "messages": messages, "stream": false}),
+        LlmBackend::Ollama => {
+            json!({"model": cfg.llm.model, "messages": messages, "stream": false})
+        }
         _ => json!({"model": cfg.llm.model, "messages": messages}),
     }
 }
@@ -125,7 +160,12 @@ fn extract(backend: LlmBackend, resp: &Value) -> Result<String> {
     };
     text.map(str::to_string)
         .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| ConfigError::new("backend_bad_response", "backend reply has no message content"))
+        .ok_or_else(|| {
+            ConfigError::new(
+                "backend_bad_response",
+                "backend reply has no message content",
+            )
+        })
 }
 
 pub fn missing_headings(template_prompt: &str, output: &str) -> Vec<String> {
@@ -154,18 +194,33 @@ pub fn generate(ctx: &Ctx, session: &str, template: &str, dry_run: bool) -> Resu
     }
     gate(ctx.cfg, backend, &url)?;
     let key = api_key(ctx.cfg, ctx.secrets)?;
-    let resp = http::post_json(&url, key.as_deref(), &body, ctx.cfg.llm.timeout.as_duration(), ctx.cfg.network.error_snippet as usize)?;
+    let resp = http::post_json(
+        &url,
+        key.as_deref(),
+        &body,
+        ctx.cfg.llm.timeout.as_duration(),
+        ctx.cfg.network.error_snippet as usize,
+    )?;
     let notes = extract(backend, &resp)?;
     if ctx.cfg.notes.enforce_headings {
         let missing = missing_headings(&tpl.system_prompt, &notes);
         if !missing.is_empty() {
             return Err(ConfigError::new(
                 "headings_missing",
-                format!("backend output lacks required headings: {}", missing.join(", ")),
+                format!(
+                    "backend output lacks required headings: {}",
+                    missing.join(", ")
+                ),
             ));
         }
     }
-    let path = ctx.store.set_notes(session, &notes, &tpl.name, backend_name(backend), &ctx.cfg.llm.model)?;
+    let path = ctx.store.set_notes(
+        session,
+        &notes,
+        &tpl.name,
+        backend_name(backend),
+        &ctx.cfg.llm.model,
+    )?;
     Ok(json!({
         "session": session,
         "template": tpl.name,
@@ -185,14 +240,26 @@ impl Subsystem for NotesSubsystem {
     }
 
     fn validate(&self, new: &Config) -> Result<()> {
-        for (key, url) in [("llm.base_url", &new.llm.base_url), ("kb.base_url", &new.kb.base_url)] {
+        for (key, url) in [
+            ("llm.base_url", &new.llm.base_url),
+            ("kb.base_url", &new.kb.base_url),
+        ] {
             if !url.is_empty() && !http::valid_url(url) {
-                return Err(ConfigError::new("invalid_value", format!("{key} {url:?} is not an http(s) URL")));
+                return Err(ConfigError::new(
+                    "invalid_value",
+                    format!("{key} {url:?} is not an http(s) URL"),
+                ));
             }
         }
-        for (key, dir) in [("templates.dir", &new.templates.dir), ("kb.dir", &new.kb.dir)] {
+        for (key, dir) in [
+            ("templates.dir", &new.templates.dir),
+            ("kb.dir", &new.kb.dir),
+        ] {
             if !dir.is_empty() && Path::new(dir).is_file() {
-                return Err(ConfigError::new("invalid_value", format!("{key} {dir:?} is an existing file, not a directory")));
+                return Err(ConfigError::new(
+                    "invalid_value",
+                    format!("{key} {dir:?} is an existing file, not a directory"),
+                ));
             }
         }
         // A literal API key here is refused outright: only references are config.

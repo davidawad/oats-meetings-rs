@@ -44,8 +44,17 @@ fn out_of_range_set_is_vetoed_for_every_int_and_duration_key() {
         let err = e.set(k.path, &bad, "test").unwrap_err();
         assert_eq!(err.code, "invalid_value", "{}", k.path);
         assert!(err.message.contains(k.path), "{}: {}", k.path, err.message);
-        assert_eq!(e.snapshot().resolved.flat, before, "{} changed the running config", k.path);
-        assert!(!cfg.exists() || !std::fs::read_to_string(&cfg).unwrap().contains(k.path), "{} reached the file", k.path);
+        assert_eq!(
+            e.snapshot().resolved.flat,
+            before,
+            "{} changed the running config",
+            k.path
+        );
+        assert!(
+            !cfg.exists() || !std::fs::read_to_string(&cfg).unwrap().contains(k.path),
+            "{} reached the file",
+            k.path
+        );
     }
     assert!(n >= 14, "{n} typed keys");
 }
@@ -54,7 +63,10 @@ fn out_of_range_set_is_vetoed_for_every_int_and_duration_key() {
 fn out_of_range_file_reload_is_vetoed_and_reports_failure() {
     let d = tempfile::tempdir().unwrap();
     let (e, cfg) = engine(d.path());
-    let rx = e.bus.subscribe(vec!["config-reload-failed".into(), "config-reloaded".into()]);
+    let rx = e.bus.subscribe(vec![
+        "config-reload-failed".into(),
+        "config-reloaded".into(),
+    ]);
     std::fs::write(&cfg, "[llm]\ntimeout = \"30s\"\n[ics]\nwindow_days = 14\n").unwrap();
     e.reload("test").unwrap();
     assert_eq!(e.snapshot().config.llm.timeout.0, 30_000);
@@ -65,8 +77,13 @@ fn out_of_range_file_reload_is_vetoed_and_reports_failure() {
     let err = e.reload("test").unwrap_err();
     assert_eq!(err.code, "invalid_value");
     assert_eq!(e.snapshot().resolved.flat, good);
-    let evs: Vec<Value> = rx.try_iter().map(|l| serde_json::from_str(&l).unwrap()).collect();
-    assert!(evs.iter().any(|v| v["event"] == "config-reload-failed" && v["data"]["code"] == "invalid_value"));
+    let evs: Vec<Value> = rx
+        .try_iter()
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect();
+    assert!(evs
+        .iter()
+        .any(|v| v["event"] == "config-reload-failed" && v["data"]["code"] == "invalid_value"));
     assert!(!evs.iter().any(|v| v["event"] == "config-reloaded"));
 }
 
@@ -75,17 +92,29 @@ fn cli_style_strings_are_coerced_for_integers_only() {
     let d = tempfile::tempdir().unwrap();
     let (e, cfg) = engine(d.path());
     e.set("ics.window_days", &json!("30"), "test").unwrap();
-    assert!(std::fs::read_to_string(&cfg).unwrap().contains("window_days = 30"));
+    assert!(std::fs::read_to_string(&cfg)
+        .unwrap()
+        .contains("window_days = 30"));
     assert_eq!(e.snapshot().config.ics.window_days, 30);
-    assert_eq!(e.set("ics.window_days", &json!("many"), "test").unwrap_err().code, "type_mismatch");
+    assert_eq!(
+        e.set("ics.window_days", &json!("many"), "test")
+            .unwrap_err()
+            .code,
+        "type_mismatch"
+    );
     e.set("llm.timeout", &json!("45s"), "test").unwrap();
     assert_eq!(e.snapshot().config.llm.timeout.0, 45_000);
-    assert_eq!(e.set("llm.timeout", &json!(45), "test").unwrap_err().code, "type_mismatch");
+    assert_eq!(
+        e.set("llm.timeout", &json!(45), "test").unwrap_err().code,
+        "type_mismatch"
+    );
 }
 
 #[test]
 fn schema_declares_integer_and_duration_types() {
-    let schema: Value = serde_json::from_str(&std::fs::read_to_string(repo("config/schema.json")).unwrap()).unwrap();
+    let schema: Value =
+        serde_json::from_str(&std::fs::read_to_string(repo("config/schema.json")).unwrap())
+            .unwrap();
     let max_bytes = &schema["properties"]["ics"]["properties"]["max_bytes"];
     assert_eq!(max_bytes["type"], "integer");
     assert_eq!(max_bytes["minimum"], 1);
@@ -110,7 +139,9 @@ fn schema_declares_integer_and_duration_types() {
 }
 
 fn repo(rel: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -130,31 +161,53 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn no_timing_literals_outside_the_key_table() {
     let mut files = vec![];
-    for d in ["crates/core/src", "crates/ctl/src", "crates/ui/src", "crates/audio/src", "src"] {
+    for d in [
+        "crates/core/src",
+        "crates/ctl/src",
+        "crates/ui/src",
+        "crates/audio/src",
+        "src",
+    ] {
         rust_files(&repo(d), &mut files);
     }
     assert!(files.len() > 20, "scanned {} files", files.len());
     let table = repo("crates/core/src/config/keys.rs");
     let mut hits = vec![];
-    for f in files.iter().filter(|f| **f != table.canonicalize().unwrap_or(table.clone()) && !f.ends_with("config/keys.rs")) {
+    for f in files.iter().filter(|f| {
+        **f != table.canonicalize().unwrap_or(table.clone()) && !f.ends_with("config/keys.rs")
+    }) {
         let text = std::fs::read_to_string(f).unwrap();
         let prod = text.split("#[cfg(test)]").next().unwrap();
         for (i, line) in prod.lines().enumerate() {
             let code = line.split("//").next().unwrap();
-            if ["Duration::from_secs(", "Duration::from_millis(", "Duration::from_mins(", "Duration::from_micros(", "Duration::from_nanos("]
-                .iter()
-                .any(|pat| code.contains(pat))
+            if [
+                "Duration::from_secs(",
+                "Duration::from_millis(",
+                "Duration::from_mins(",
+                "Duration::from_micros(",
+                "Duration::from_nanos(",
+            ]
+            .iter()
+            .any(|pat| code.contains(pat))
             {
                 // Allowed: converting a value that came from config (an identifier or field),
                 // never a numeric literal.
-                let arg = code.split("Duration::from_").nth(1).and_then(|r| r.split('(').nth(1)).unwrap_or("");
+                let arg = code
+                    .split("Duration::from_")
+                    .nth(1)
+                    .and_then(|r| r.split('(').nth(1))
+                    .unwrap_or("");
                 if arg.trim_start().starts_with(|c: char| c.is_ascii_digit()) {
                     hits.push(format!("{}:{}: {}", f.display(), i + 1, line.trim()));
                 }
             }
         }
     }
-    assert!(hits.is_empty(), "timing literals outside the key table:\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "timing literals outside the key table:\n{}",
+        hits.join("\n")
+    );
 }
 
 /// Numeric constants in production code are tunables unless they are listed here as true
@@ -162,13 +215,41 @@ fn no_timing_literals_outside_the_key_table() {
 /// `const X: u32 = 7;` that is a choice belongs in the key table; one that is a fact of a format
 /// goes on this list with its reason.
 const TRUE_CONSTANTS: &[(&str, &str, &str)] = &[
-    ("crates/audio/src/lib.rs", "SAMPLE_RATE", "recorder output format: 48 kHz mono f32"),
-    ("crates/core/src/stt/wav.rs", "SAMPLE_RATE", "recogniser input format: 16 kHz"),
-    ("crates/core/src/kb.rs", "INDEX_VERSION", "on-disk index format version"),
-    ("crates/core/src/sessions.rs", "SCHEMA_VERSION", "session.json schema version"),
-    ("crates/core/src/templates.rs", "SCHEMA_VERSION", "template file schema version"),
-    ("crates/core/src/config/mod.rs", "SCHEMA_VERSION", "config schema version"),
-    ("crates/core/src/control/mod.rs", "PROTOCOL", "control wire protocol version"),
+    (
+        "crates/audio/src/lib.rs",
+        "SAMPLE_RATE",
+        "recorder output format: 48 kHz mono f32",
+    ),
+    (
+        "crates/core/src/stt/wav.rs",
+        "SAMPLE_RATE",
+        "recogniser input format: 16 kHz",
+    ),
+    (
+        "crates/core/src/kb.rs",
+        "INDEX_VERSION",
+        "on-disk index format version",
+    ),
+    (
+        "crates/core/src/sessions.rs",
+        "SCHEMA_VERSION",
+        "session.json schema version",
+    ),
+    (
+        "crates/core/src/templates.rs",
+        "SCHEMA_VERSION",
+        "template file schema version",
+    ),
+    (
+        "crates/core/src/config/mod.rs",
+        "SCHEMA_VERSION",
+        "config schema version",
+    ),
+    (
+        "crates/core/src/control/mod.rs",
+        "PROTOCOL",
+        "control wire protocol version",
+    ),
     ("crates/ui/src/view.rs", "BG", "colour palette"),
     ("crates/ui/src/view.rs", "PANEL", "colour palette"),
     ("crates/ui/src/view.rs", "FG", "colour palette"),
@@ -185,13 +266,26 @@ fn numeric_consts(prod: &str) -> Vec<(usize, String)> {
     let mut out = vec![];
     for (i, line) in prod.lines().enumerate() {
         let t = line.trim_start();
-        let t = t.strip_prefix("pub(crate) ").or_else(|| t.strip_prefix("pub ")).unwrap_or(t);
-        let Some(rest) = t.strip_prefix("const ").or_else(|| t.strip_prefix("static ")) else { continue };
-        let Some((name, ty)) = rest.split_once(':') else { continue };
+        let t = t
+            .strip_prefix("pub(crate) ")
+            .or_else(|| t.strip_prefix("pub "))
+            .unwrap_or(t);
+        let Some(rest) = t
+            .strip_prefix("const ")
+            .or_else(|| t.strip_prefix("static "))
+        else {
+            continue;
+        };
+        let Some((name, ty)) = rest.split_once(':') else {
+            continue;
+        };
         let ty = ty.trim_start();
-        let numeric = ["u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64"]
-            .iter()
-            .any(|n| ty.starts_with(n) && ty[n.len()..].trim_start().starts_with('='));
+        let numeric = [
+            "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "isize", "f32",
+            "f64",
+        ]
+        .iter()
+        .any(|n| ty.starts_with(n) && ty[n.len()..].trim_start().starts_with('='));
         if numeric {
             out.push((i + 1, name.trim().to_string()));
         }
@@ -202,19 +296,30 @@ fn numeric_consts(prod: &str) -> Vec<(usize, String)> {
 #[test]
 fn no_unlisted_numeric_constants_in_production_code() {
     let mut files = vec![];
-    for d in ["crates/core/src", "crates/ctl/src", "crates/ui/src", "crates/audio/src", "src"] {
+    for d in [
+        "crates/core/src",
+        "crates/ctl/src",
+        "crates/ui/src",
+        "crates/audio/src",
+        "src",
+    ] {
         rust_files(&repo(d), &mut files);
     }
     let mut hits = vec![];
     let mut used = std::collections::BTreeSet::new();
     for f in files.iter().filter(|f| !f.ends_with("config/keys.rs")) {
-        let rel = f.strip_prefix(repo(".").canonicalize().unwrap_or_else(|_| repo("."))).unwrap_or(f);
+        let rel = f
+            .strip_prefix(repo(".").canonicalize().unwrap_or_else(|_| repo(".")))
+            .unwrap_or(f);
         let rel = rel.to_string_lossy().replace('\\', "/");
         let rel = rel.split("/../../").last().unwrap_or(&rel).to_string();
         let text = std::fs::read_to_string(f).unwrap();
         let prod = text.split("#[cfg(test)]").next().unwrap();
         for (line, name) in numeric_consts(prod) {
-            match TRUE_CONSTANTS.iter().find(|(p, n, _)| rel.ends_with(p) && *n == name) {
+            match TRUE_CONSTANTS
+                .iter()
+                .find(|(p, n, _)| rel.ends_with(p) && *n == name)
+            {
                 Some((p, n, _)) => {
                     used.insert((*p, *n));
                 }
@@ -226,12 +331,20 @@ fn no_unlisted_numeric_constants_in_production_code() {
             let code = l.split("//").next().unwrap();
             if let Some(arg) = code.split(".take(").nth(1) {
                 if arg.trim_start().starts_with(|c: char| c.is_ascii_digit()) {
-                    hits.push(format!("{rel}:{}: take({})", i + 1, arg.split(')').next().unwrap_or("")));
+                    hits.push(format!(
+                        "{rel}:{}: take({})",
+                        i + 1,
+                        arg.split(')').next().unwrap_or("")
+                    ));
                 }
             }
         }
     }
-    assert!(hits.is_empty(), "numeric tunables outside the key table (add a key, or list a true constant):\n{}", hits.join("\n"));
+    assert!(
+        hits.is_empty(),
+        "numeric tunables outside the key table (add a key, or list a true constant):\n{}",
+        hits.join("\n")
+    );
     for (p, n, _) in TRUE_CONSTANTS {
         assert!(used.contains(&(*p, *n)), "stale allowlist entry {p} {n}");
     }
@@ -248,6 +361,10 @@ fn the_const_scanner_sees_what_it_should() {
 fn the_grep_test_would_catch_a_literal() {
     // Guard the guard: the pattern the scanner relies on is what a literal looks like.
     let sample = "let t = Duration::from_secs(30);";
-    let arg = sample.split("Duration::from_").nth(1).and_then(|r| r.split('(').nth(1)).unwrap();
+    let arg = sample
+        .split("Duration::from_")
+        .nth(1)
+        .and_then(|r| r.split('(').nth(1))
+        .unwrap();
     assert!(arg.trim_start().starts_with(|c: char| c.is_ascii_digit()));
 }

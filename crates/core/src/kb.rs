@@ -86,7 +86,9 @@ pub fn chunk(text: &str, max_chunk: usize, min_chunk: usize) -> Vec<String> {
     if !cur.is_empty() {
         out.push(cur);
     }
-    out.into_iter().filter(|c| c.chars().count() >= min_chunk).collect()
+    out.into_iter()
+        .filter(|c| c.chars().count() >= min_chunk)
+        .collect()
 }
 
 pub struct Ctx<'a> {
@@ -107,34 +109,65 @@ fn embedder_id(cfg: &Config) -> String {
 fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
     let cfg = ctx.cfg;
     match cfg.kb.embedder {
-        KbEmbedder::Hash => Ok(texts.iter().map(|t| hash_embed(t, cfg.kb.hash_dims as usize)).collect()),
+        KbEmbedder::Hash => Ok(texts
+            .iter()
+            .map(|t| hash_embed(t, cfg.kb.hash_dims as usize))
+            .collect()),
         KbEmbedder::Ollama => {
-            let base = if cfg.kb.base_url.is_empty() { notes::OLLAMA_DEFAULT } else { &cfg.kb.base_url };
+            let base = if cfg.kb.base_url.is_empty() {
+                notes::OLLAMA_DEFAULT
+            } else {
+                &cfg.kb.base_url
+            };
             let url = http::join(base, "api/embeddings");
             notes::gate(cfg, LlmBackend::Ollama, &url)?;
             texts
                 .iter()
                 .map(|t| {
-                    let r = http::post_json(&url, None, &json!({"model": cfg.kb.model, "prompt": t}), cfg.kb.timeout.as_duration(), cfg.network.error_snippet as usize)?;
+                    let r = http::post_json(
+                        &url,
+                        None,
+                        &json!({"model": cfg.kb.model, "prompt": t}),
+                        cfg.kb.timeout.as_duration(),
+                        cfg.network.error_snippet as usize,
+                    )?;
                     vector_of(&r["embedding"])
                 })
                 .collect()
         }
         KbEmbedder::OpenaiCompatible => {
             if cfg.kb.base_url.is_empty() {
-                return Err(ConfigError::new("base_url_required", "kb.embedder = openai-compatible needs kb.base_url"));
+                return Err(ConfigError::new(
+                    "base_url_required",
+                    "kb.embedder = openai-compatible needs kb.base_url",
+                ));
             }
             let url = http::join(&cfg.kb.base_url, "embeddings");
             notes::gate(cfg, LlmBackend::OpenaiCompatible, &url)?;
-            let key = match secrets::resolve(ctx.secrets, &cfg.llm.api_key_ref, cfg.secrets.max_key_len as usize) {
+            let key = match secrets::resolve(
+                ctx.secrets,
+                &cfg.llm.api_key_ref,
+                cfg.secrets.max_key_len as usize,
+            ) {
                 Ok(k) => Some(k),
                 Err(e) if e.code == "secret_not_found" => None,
                 Err(e) => return Err(e),
             };
-            let r = http::post_json(&url, key.as_deref(), &json!({"model": cfg.kb.model, "input": texts}), cfg.kb.timeout.as_duration(), cfg.network.error_snippet as usize)?;
-            let data = r["data"].as_array().ok_or_else(|| ConfigError::new("backend_bad_response", "no data array"))?;
+            let r = http::post_json(
+                &url,
+                key.as_deref(),
+                &json!({"model": cfg.kb.model, "input": texts}),
+                cfg.kb.timeout.as_duration(),
+                cfg.network.error_snippet as usize,
+            )?;
+            let data = r["data"]
+                .as_array()
+                .ok_or_else(|| ConfigError::new("backend_bad_response", "no data array"))?;
             if data.len() != texts.len() {
-                return Err(ConfigError::new("backend_bad_response", "embedding count mismatch"));
+                return Err(ConfigError::new(
+                    "backend_bad_response",
+                    "embedding count mismatch",
+                ));
             }
             data.iter().map(|d| vector_of(&d["embedding"])).collect()
         }
@@ -142,15 +175,21 @@ fn embed(ctx: &Ctx, texts: &[String]) -> Result<Vec<Vec<f32>>> {
 }
 
 fn vector_of(v: &Value) -> Result<Vec<f32>> {
-    let a = v.as_array().ok_or_else(|| ConfigError::new("backend_bad_response", "embedding is not an array"))?;
+    let a = v
+        .as_array()
+        .ok_or_else(|| ConfigError::new("backend_bad_response", "embedding is not an array"))?;
     let vec: Option<Vec<f32>> = a.iter().map(|x| x.as_f64().map(|f| f as f32)).collect();
-    vec.map(normalize).ok_or_else(|| ConfigError::new("backend_bad_response", "embedding has non-numbers"))
+    vec.map(normalize)
+        .ok_or_else(|| ConfigError::new("backend_bad_response", "embedding has non-numbers"))
 }
 
 /// Source files (relative path, absolute path) in path order.
 fn files(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     fn walk(base: &Path, cur: &Path, out: &mut Vec<(String, PathBuf)>) -> Result<()> {
-        let mut entries: Vec<_> = std::fs::read_dir(cur).map_err(|e| io(cur, e))?.flatten().collect();
+        let mut entries: Vec<_> = std::fs::read_dir(cur)
+            .map_err(|e| io(cur, e))?
+            .flatten()
+            .collect();
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             let p = e.path();
@@ -162,7 +201,11 @@ fn files(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
             if ft.is_dir() {
                 walk(base, &p, out)?;
             } else if matches!(p.extension().and_then(|x| x.to_str()), Some("md" | "txt")) {
-                let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                let rel = p
+                    .strip_prefix(base)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 out.push((rel, p));
             }
         }
@@ -181,7 +224,14 @@ pub fn reindex(ctx: &Ctx) -> Result<Value> {
     let srcs = files(&ctx.dir)?;
     for (rel, abs) in &srcs {
         let text = std::fs::read_to_string(abs).map_err(|e| io(abs, e))?;
-        for (i, c) in chunk(&text, ctx.cfg.kb.max_chunk as usize, ctx.cfg.kb.min_chunk as usize).into_iter().enumerate() {
+        for (i, c) in chunk(
+            &text,
+            ctx.cfg.kb.max_chunk as usize,
+            ctx.cfg.kb.min_chunk as usize,
+        )
+        .into_iter()
+        .enumerate()
+        {
             chunks.push((rel.clone(), i, c));
         }
     }
@@ -191,7 +241,9 @@ pub fn reindex(ctx: &Ctx) -> Result<Value> {
     let entries: Vec<Value> = chunks
         .iter()
         .zip(&vectors)
-        .map(|((path, idx, text), v)| json!({"path": path, "chunk": idx, "text": text, "vector": v}))
+        .map(
+            |((path, idx, text), v)| json!({"path": path, "chunk": idx, "text": text, "vector": v}),
+        )
         .collect();
     let index = json!({
         "schema_version": INDEX_VERSION,
@@ -201,11 +253,15 @@ pub fn reindex(ctx: &Ctx) -> Result<Value> {
     });
     std::fs::create_dir_all(&ctx.dir).map_err(|e| io(&ctx.dir, e))?;
     let path = ctx.dir.join(INDEX_FILE);
-    let tmp = ctx.dir.join(format!("{INDEX_FILE}.tmp{}", std::process::id()));
+    let tmp = ctx
+        .dir
+        .join(format!("{INDEX_FILE}.tmp{}", std::process::id()));
     std::fs::write(&tmp, serde_json::to_string(&index).expect("serializable"))
         .and_then(|_| std::fs::rename(&tmp, &path))
         .map_err(|e| io(&path, e))?;
-    Ok(json!({"files": srcs.len(), "chunks": chunks.len(), "embedder": embedder_id(ctx.cfg), "index": path}))
+    Ok(
+        json!({"files": srcs.len(), "chunks": chunks.len(), "embedder": embedder_id(ctx.cfg), "index": path}),
+    )
 }
 
 fn round6(x: f32) -> f64 {
@@ -214,18 +270,28 @@ fn round6(x: f32) -> f64 {
 
 pub fn search(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
     if query.trim().is_empty() {
-        return Err(ConfigError::new("invalid_argument", "query must not be empty"));
+        return Err(ConfigError::new(
+            "invalid_argument",
+            "query must not be empty",
+        ));
     }
     let path = ctx.dir.join(INDEX_FILE);
     let text = std::fs::read_to_string(&path).map_err(|_| {
-        ConfigError::new("index_missing", format!("no KB index at {}; run kb-reindex", path.display()))
+        ConfigError::new(
+            "index_missing",
+            format!("no KB index at {}; run kb-reindex", path.display()),
+        )
     })?;
     let index: Value = serde_json::from_str(&text)
         .map_err(|e| ConfigError::new("parse_error", format!("{}: {e}", path.display())))?;
     if index["embedder"] != json!(embedder_id(ctx.cfg)) {
         return Err(ConfigError::new(
             "index_stale",
-            format!("index was built with {}, config says {}; run kb-reindex", index["embedder"], embedder_id(ctx.cfg)),
+            format!(
+                "index was built with {}, config says {}; run kb-reindex",
+                index["embedder"],
+                embedder_id(ctx.cfg)
+            ),
         ));
     }
     let q = embed(ctx, &[query.to_string()])?.remove(0);
@@ -233,7 +299,10 @@ pub fn search(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
     for c in index["chunks"].as_array().into_iter().flatten() {
         let v = vector_of(&c["vector"])?;
         if v.len() != q.len() {
-            return Err(ConfigError::new("index_stale", "index vectors have a different dimension; run kb-reindex"));
+            return Err(ConfigError::new(
+                "index_stale",
+                "index vectors have a different dimension; run kb-reindex",
+            ));
         }
         let score = round6(v.iter().zip(&q).map(|(a, b)| a * b).sum());
         scored.push((
@@ -243,7 +312,11 @@ pub fn search(ctx: &Ctx, query: &str, limit: usize) -> Result<Value> {
             c["text"].as_str().unwrap_or_default().to_string(),
         ));
     }
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+    scored.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
     let results: Vec<Value> = scored
         .into_iter()
         .take(limit)
@@ -259,10 +332,16 @@ mod tests {
     use crate::secrets::MemStore;
 
     fn cfg() -> Config {
-        resolve(&Inputs { pack: None, os: "linux", arch: "x", machine: "default", user_toml: None })
-            .unwrap()
-            .typed()
-            .unwrap()
+        resolve(&Inputs {
+            pack: None,
+            os: "linux",
+            arch: "x",
+            machine: "default",
+            user_toml: None,
+        })
+        .unwrap()
+        .typed()
+        .unwrap()
     }
 
     fn fixture() -> PathBuf {
@@ -282,7 +361,12 @@ mod tests {
     }
 
     fn paths(v: &Value) -> Vec<String> {
-        v["results"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap().to_string()).collect()
+        v["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["path"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -342,7 +426,11 @@ mod tests {
     fn ranking_is_deterministic_and_sensible_on_the_fixture() {
         let d = tempfile::tempdir().unwrap();
         let (cfg, secrets) = built(d.path());
-        let ctx = Ctx { cfg: &cfg, dir: d.path().to_path_buf(), secrets: &secrets };
+        let ctx = Ctx {
+            cfg: &cfg,
+            dir: d.path().to_path_buf(),
+            secrets: &secrets,
+        };
         let r = reindex(&ctx).unwrap();
         assert_eq!(r["files"], 6);
         for (q, top) in [
@@ -359,10 +447,16 @@ mod tests {
             // Order is exactly (score desc, path asc, chunk asc).
             let rs = a["results"].as_array().unwrap();
             for w in rs.windows(2) {
-                let (s0, s1) = (w[0]["score"].as_f64().unwrap(), w[1]["score"].as_f64().unwrap());
+                let (s0, s1) = (
+                    w[0]["score"].as_f64().unwrap(),
+                    w[1]["score"].as_f64().unwrap(),
+                );
                 assert!(s0 >= s1);
                 if s0 == s1 {
-                    assert!((w[0]["path"].as_str(), w[0]["chunk"].as_u64()) <= (w[1]["path"].as_str(), w[1]["chunk"].as_u64()));
+                    assert!(
+                        (w[0]["path"].as_str(), w[0]["chunk"].as_u64())
+                            <= (w[1]["path"].as_str(), w[1]["chunk"].as_u64())
+                    );
                 }
             }
         }
@@ -382,19 +476,31 @@ mod tests {
     fn index_errors() {
         let d = tempfile::tempdir().unwrap();
         let (cfg, secrets) = built(d.path());
-        let ctx = Ctx { cfg: &cfg, dir: d.path().to_path_buf(), secrets: &secrets };
+        let ctx = Ctx {
+            cfg: &cfg,
+            dir: d.path().to_path_buf(),
+            secrets: &secrets,
+        };
         assert_eq!(search(&ctx, "x y", 3).unwrap_err().code, "index_missing");
         reindex(&ctx).unwrap();
         assert_eq!(search(&ctx, "  ", 3).unwrap_err().code, "invalid_argument");
         let mut other = cfg.clone();
         other.kb.model = "m".into();
         other.kb.embedder = KbEmbedder::Ollama;
-        let ctx2 = Ctx { cfg: &other, dir: d.path().to_path_buf(), secrets: &secrets };
+        let ctx2 = Ctx {
+            cfg: &other,
+            dir: d.path().to_path_buf(),
+            secrets: &secrets,
+        };
         assert_eq!(search(&ctx2, "pricing", 3).unwrap_err().code, "index_stale");
         // kb.hash_dims changed: the old index is refused until kb-reindex rebuilds it.
         let mut dims = cfg.clone();
         dims.kb.hash_dims = 16;
-        let ctx3 = Ctx { cfg: &dims, dir: d.path().to_path_buf(), secrets: &secrets };
+        let ctx3 = Ctx {
+            cfg: &dims,
+            dir: d.path().to_path_buf(),
+            secrets: &secrets,
+        };
         assert_eq!(search(&ctx3, "pricing", 3).unwrap_err().code, "index_stale");
         reindex(&ctx3).unwrap();
         search(&ctx3, "pricing", 3).unwrap();

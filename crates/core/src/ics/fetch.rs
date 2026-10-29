@@ -18,7 +18,9 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            let hex = std::str::from_utf8(&b[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+            let hex = std::str::from_utf8(&b[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok());
             if let Some(v) = hex {
                 out.push(v);
                 i += 3;
@@ -37,13 +39,20 @@ fn file_path(rest: &str) -> PathBuf {
     // file:///C:/x on Windows carries a leading slash before the drive letter.
     let b = decoded.as_bytes();
     let drive = b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':';
-    PathBuf::from(if drive { decoded[1..].to_string() } else { decoded })
+    PathBuf::from(if drive {
+        decoded[1..].to_string()
+    } else {
+        decoded
+    })
 }
 
 /// Classify a feed URL; the only error is `invalid_argument`.
 pub fn classify(url: &str, webcal_https: bool) -> Result<Source> {
     let bad = |why: &str| ConfigError::new("invalid_argument", format!("feed url '{url}': {why}"));
-    let (scheme, rest) = url.trim().split_once("://").ok_or_else(|| bad("missing scheme://"))?;
+    let (scheme, rest) = url
+        .trim()
+        .split_once("://")
+        .ok_or_else(|| bad("missing scheme://"))?;
     if rest.is_empty() {
         return Err(bad("empty after the scheme"));
     }
@@ -55,7 +64,9 @@ pub fn classify(url: &str, webcal_https: bool) -> Result<Source> {
         ))),
         "webcals" => Ok(Source::Http(format!("https://{rest}"))),
         "file" => Ok(Source::File(file_path(rest))),
-        other => Err(bad(&format!("unsupported scheme '{other}' (http, https, webcal, webcals, file)"))),
+        other => Err(bad(&format!(
+            "unsupported scheme '{other}' (http, https, webcal, webcals, file)"
+        ))),
     }
 }
 
@@ -70,24 +81,33 @@ pub struct FetchOpts {
 
 #[derive(Debug)]
 pub enum Fetched {
-    Body { text: String, etag: Option<String>, last_modified: Option<String> },
+    Body {
+        text: String,
+        etag: Option<String>,
+        last_modified: Option<String>,
+    },
     NotModified,
 }
 
 fn too_large(max: u64) -> ConfigError {
-    ConfigError::new("feed_too_large", format!("feed body is larger than ics.max_bytes ({max})"))
+    ConfigError::new(
+        "feed_too_large",
+        format!("feed body is larger than ics.max_bytes ({max})"),
+    )
 }
 
 pub fn fetch(src: &Source, o: &FetchOpts) -> Result<Fetched> {
     match src {
         Source::File(path) => {
-            let meta = std::fs::metadata(path)
-                .map_err(|e| ConfigError::new("fetch_failed", format!("{}: {e}", path.display())))?;
+            let meta = std::fs::metadata(path).map_err(|e| {
+                ConfigError::new("fetch_failed", format!("{}: {e}", path.display()))
+            })?;
             if meta.len() > o.max_bytes {
                 return Err(too_large(o.max_bytes));
             }
-            let bytes = std::fs::read(path)
-                .map_err(|e| ConfigError::new("fetch_failed", format!("{}: {e}", path.display())))?;
+            let bytes = std::fs::read(path).map_err(|e| {
+                ConfigError::new("fetch_failed", format!("{}: {e}", path.display()))
+            })?;
             Ok(Fetched::Body {
                 text: String::from_utf8_lossy(&bytes).into_owned(),
                 etag: None,
@@ -111,7 +131,9 @@ fn fetch_http(url: &str, o: &FetchOpts) -> Result<Fetched> {
         .http_status_as_error(false);
     #[cfg(windows)]
     let builder = builder.tls_config(
-        ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build(),
+        ureq::tls::TlsConfig::builder()
+            .provider(ureq::tls::TlsProvider::NativeTls)
+            .build(),
     );
     let agent: ureq::Agent = builder.build().into();
     let mut req = agent
@@ -132,7 +154,10 @@ fn fetch_http(url: &str, o: &FetchOpts) -> Result<Fetched> {
         return Ok(Fetched::NotModified);
     }
     if !(200..300).contains(&status) {
-        return Err(ConfigError::new("http_status", format!("{url}: HTTP {status}")));
+        return Err(ConfigError::new(
+            "http_status",
+            format!("{url}: HTTP {status}"),
+        ));
     }
     let hdr = |name: &str| {
         resp.headers()
@@ -157,7 +182,11 @@ fn fetch_http(url: &str, o: &FetchOpts) -> Result<Fetched> {
     if bytes.len() as u64 > o.max_bytes {
         return Err(too_large(o.max_bytes));
     }
-    Ok(Fetched::Body { text: String::from_utf8_lossy(&bytes).into_owned(), etag, last_modified })
+    Ok(Fetched::Body {
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+        etag,
+        last_modified,
+    })
 }
 
 #[cfg(test)]
@@ -166,14 +195,36 @@ mod tests {
 
     #[test]
     fn schemes_classify() {
-        assert_eq!(classify("https://a/b.ics", true).unwrap(), Source::Http("https://a/b.ics".into()));
-        assert_eq!(classify("webcal://a/b.ics", true).unwrap(), Source::Http("https://a/b.ics".into()));
-        assert_eq!(classify("webcal://a/b.ics", false).unwrap(), Source::Http("http://a/b.ics".into()));
-        assert_eq!(classify("WEBCALS://a/b.ics", false).unwrap(), Source::Http("https://a/b.ics".into()));
-        assert_eq!(classify("file:///tmp/a%20b.ics", true).unwrap(), Source::File("/tmp/a b.ics".into()));
-        assert_eq!(classify("file:///C:/x/y.ics", true).unwrap(), Source::File("C:/x/y.ics".into()));
+        assert_eq!(
+            classify("https://a/b.ics", true).unwrap(),
+            Source::Http("https://a/b.ics".into())
+        );
+        assert_eq!(
+            classify("webcal://a/b.ics", true).unwrap(),
+            Source::Http("https://a/b.ics".into())
+        );
+        assert_eq!(
+            classify("webcal://a/b.ics", false).unwrap(),
+            Source::Http("http://a/b.ics".into())
+        );
+        assert_eq!(
+            classify("WEBCALS://a/b.ics", false).unwrap(),
+            Source::Http("https://a/b.ics".into())
+        );
+        assert_eq!(
+            classify("file:///tmp/a%20b.ics", true).unwrap(),
+            Source::File("/tmp/a b.ics".into())
+        );
+        assert_eq!(
+            classify("file:///C:/x/y.ics", true).unwrap(),
+            Source::File("C:/x/y.ics".into())
+        );
         for bad in ["ftp://x/y", "nope", "http://", "file://"] {
-            assert_eq!(classify(bad, true).unwrap_err().code, "invalid_argument", "{bad}");
+            assert_eq!(
+                classify(bad, true).unwrap_err().code,
+                "invalid_argument",
+                "{bad}"
+            );
         }
     }
 }

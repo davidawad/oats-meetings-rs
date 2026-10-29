@@ -32,7 +32,10 @@ impl Client {
             .to_fs_name::<GenericFilePath>()
             .map_err(|e| ConfigError::new("io_error", e.to_string()))?;
         let stream = Stream::connect(name).map_err(|e| {
-            ConfigError::new("not_running", format!("cannot connect to {}: {e}", sock.display()))
+            ConfigError::new(
+                "not_running",
+                format!("cannot connect to {}: {e}", sock.display()),
+            )
         })?;
         let (rx, tx) = Half::pair(stream);
         let mut c = Client {
@@ -80,7 +83,12 @@ impl Client {
         self.call_with_id(json!(id), action, params)
     }
 
-    pub fn call_with_id(&mut self, id: Value, action: &str, params: Map<String, Value>) -> Result<Value> {
+    pub fn call_with_id(
+        &mut self,
+        id: Value,
+        action: &str,
+        params: Map<String, Value>,
+    ) -> Result<Value> {
         let mut obj = params;
         obj.insert("id".into(), id.clone());
         obj.insert("v".into(), json!(PROTOCOL));
