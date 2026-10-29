@@ -2,8 +2,10 @@
 //! dash-joined prefix of the words that names an action in the manifest is the action
 //! (`config set k v` -> `config-set`), and the remaining words fill its parameters.
 //!
-//! Exit codes: 0 ok, 1 error response, 2 usage, 3 engine not running.
+//! Exit codes: 0 ok, 1 error response, 2 usage, 3 engine not running. A reader that closes stdout
+//! early (`ctl list-actions | head`, EPIPE) is a normal early exit: 0, no panic (dot-4uzgol.47).
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -167,21 +169,39 @@ pub fn run(args: &[String]) -> i32 {
     run_with(args, &|k| std::env::var(k).ok())
 }
 
-fn print_envelope(p: &Parsed, v: &Value) -> i32 {
+pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
+    run_to(args, env, &mut io::stdout())
+}
+
+/// The exit code for a failed stdout write: a closed reader is a normal early exit.
+fn out_failed(e: io::Error) -> i32 {
+    if e.kind() == io::ErrorKind::BrokenPipe {
+        0
+    } else {
+        oats_core::elog!("cannot write stdout: {e}");
+        1
+    }
+}
+
+fn print_envelope(p: &Parsed, v: &Value, out: &mut dyn Write) -> i32 {
     let ok = v["ok"] == json!(true);
-    if p.json {
-        println!("{v}");
+    let written = if p.json {
+        writeln!(out, "{v}")
     } else if ok {
         match &v["data"] {
-            Value::String(s) => println!("{s}"),
-            other => println!("{other}"),
+            Value::String(s) => writeln!(out, "{s}"),
+            other => writeln!(out, "{other}"),
         }
     } else {
-        eprintln!(
+        oats_core::elog!(
             "error[{}]: {}",
             v["error"]["code"].as_str().unwrap_or("?"),
             v["error"]["message"].as_str().unwrap_or("")
         );
+        Ok(())
+    };
+    if let Err(e) = written.and_then(|_| out.flush()) {
+        return out_failed(e);
     }
     if ok {
         0
@@ -190,11 +210,12 @@ fn print_envelope(p: &Parsed, v: &Value) -> i32 {
     }
 }
 
-pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
+/// `run_with` writing stdout to `out`, so a test can hand it a pipe whose reader is gone.
+pub fn run_to(args: &[String], env: &dyn Fn(&str) -> Option<String>, out: &mut dyn Write) -> i32 {
     let p = match parse(args) {
         Ok(p) => p,
         Err(m) => {
-            eprintln!("{m}");
+            oats_core::elog!("{m}");
             return 2;
         }
     };
@@ -210,38 +231,38 @@ pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
         Ok(c) => c,
         Err(e) => {
             if p.json {
-                println!(
-                    "{}",
-                    json!({"ok": false, "error": {"code": e.code, "message": e.message}})
-                );
+                let v = json!({"ok": false, "error": {"code": e.code, "message": e.message}});
+                if let Err(e) = writeln!(out, "{v}").and_then(|_| out.flush()) {
+                    return out_failed(e);
+                }
             } else {
-                eprintln!("{e}");
+                oats_core::elog!("{e}");
             }
             return 3;
         }
     };
     if p.action == "subscribe" {
-        return subscribe(client, &p);
+        return subscribe(client, &p, out);
     }
     match client.call(&p.action, p.params.clone()) {
-        Ok(v) => print_envelope(&p, &v),
+        Ok(v) => print_envelope(&p, &v, out),
         Err(e) => {
-            eprintln!("{e}");
+            oats_core::elog!("{e}");
             1
         }
     }
 }
 
 /// Print the ack, then event lines until `--count` events or `--timeout-ms` pass.
-fn subscribe(mut client: Client, p: &Parsed) -> i32 {
+fn subscribe(mut client: Client, p: &Parsed, out: &mut dyn Write) -> i32 {
     let ack = match client.call("subscribe", p.params.clone()) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("{e}");
+            oats_core::elog!("{e}");
             return 1;
         }
     };
-    let code = print_envelope(p, &ack);
+    let code = print_envelope(p, &ack, out);
     if code != 0 {
         return code;
     }
@@ -257,7 +278,9 @@ fn subscribe(mut client: Client, p: &Parsed) -> i32 {
     loop {
         match rx.recv_timeout(Duration::from_millis(p.timeout_ms)) {
             Ok(ev) => {
-                println!("{ev}");
+                if let Err(e) = writeln!(out, "{ev}").and_then(|_| out.flush()) {
+                    return out_failed(e);
+                }
                 seen += 1;
                 if p.count.is_some_and(|c| seen >= c) {
                     return 0;

@@ -1,6 +1,7 @@
 //! `oats-meetings-rs config check|resolved|get|generate`. Pure over (args, env) so it is
 //! testable without spawning a process; `run_env` is the process entry point.
 
+use std::io::Write;
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
@@ -17,8 +18,10 @@ pub struct Out {
 
 pub fn run_env(args: &[String]) -> i32 {
     let out = run(args, &|k| std::env::var(k).ok());
-    print!("{}", out.stdout);
-    eprint!("{}", out.stderr);
+    // A reader that closed early (`config resolved | head`, EPIPE) is not a panic (dot-4uzgol.47).
+    let _ = std::io::stdout().write_all(out.stdout.as_bytes());
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().write_all(out.stderr.as_bytes());
     out.code
 }
 
