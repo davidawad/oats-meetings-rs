@@ -100,6 +100,79 @@ pub fn read_sharing_type(window: &Window) -> Option<usize> {
     }
 }
 
+/// What AppKit says about the window: `(isVisible, isKeyWindow, width, height)`.
+#[cfg(target_os = "macos")]
+pub fn read_window_state(window: &Window) -> Option<(bool, bool, f64, f64)> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyObject, Bool};
+    let RawWindowHandle::AppKit(h) = HasWindowHandle::window_handle(window).ok()?.as_raw() else {
+        return None;
+    };
+    // SAFETY: as in `apply_raw`.
+    unsafe {
+        let view = h.ns_view.as_ptr() as *mut AnyObject;
+        let win: *mut AnyObject = msg_send![view, window];
+        if win.is_null() {
+            return None;
+        }
+        let visible: Bool = msg_send![win, isVisible];
+        let key: Bool = msg_send![win, isKeyWindow];
+        let frame: objc2_foundation::NSRect = msg_send![win, frame];
+        Some((
+            visible.as_bool(),
+            key.as_bool(),
+            frame.size.width,
+            frame.size.height,
+        ))
+    }
+}
+
+/// `NSApp.isActive`: whether this app is frontmost (took focus).
+#[cfg(target_os = "macos")]
+pub fn app_is_active() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject, Bool};
+    let Some(cls) = AnyClass::get(c"NSApplication") else {
+        return false;
+    };
+    // SAFETY: `sharedApplication` and `isActive` are plain AppKit messages on the main thread.
+    unsafe {
+        let app: *mut AnyObject = msg_send![cls, sharedApplication];
+        if app.is_null() {
+            return false;
+        }
+        let active: Bool = msg_send![app, isActive];
+        active.as_bool()
+    }
+}
+
+/// Order the window on screen without making it key or activating the app (`orderFront:`), for
+/// a show request while `ui.activate_on_show` is off. Elsewhere a no-op: the window is already
+/// mapped.
+pub fn order_front(window: &Window) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
+            return;
+        };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+            return;
+        };
+        // SAFETY: as in `apply_raw`.
+        unsafe {
+            let view = h.ns_view.as_ptr() as *mut AnyObject;
+            let win: *mut AnyObject = msg_send![view, window];
+            if !win.is_null() {
+                let _: () = msg_send![win, orderFront: std::ptr::null_mut::<AnyObject>()];
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 #[cfg(target_os = "windows")]
 fn apply_raw(handle: RawWindowHandle, plan: Plan) -> Applied {
     use windows::Win32::Foundation::HWND;

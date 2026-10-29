@@ -183,12 +183,15 @@ pub struct Notes {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Ui {
+    pub activate_on_show: bool,
     pub drive_wait: Dur,
     pub live_follow: bool,
     pub live_max_lines: u32,
+    pub quit_timeout: Dur,
     pub record_controls: bool,
     pub show_elapsed: bool,
     pub speaker_width: u32,
+    pub start_hidden: bool,
     pub tick: Dur,
     pub tz: String,
 }

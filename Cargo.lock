@@ -4239,6 +4239,7 @@ dependencies = [
  "oats-audio",
  "oats-core",
  "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
  "raw-window-handle",
  "serde_json",
  "tempfile",

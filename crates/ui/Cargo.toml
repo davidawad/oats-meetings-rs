@@ -27,6 +27,8 @@ ksni = { version = "0.3", default-features = false, features = ["async-io", "blo
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
+# NSRect for reading the window frame back (tests/macos_window_visible.rs); already in the tree via gpui_macos.
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "objc2-core-foundation"] }
 # Without font-kit gpui_macos installs NoopTextSystem: layout runs but no glyph is drawn
 # (dot-4uzgol.52). Linux has its own text system, so this is macOS only.
 gpui_platform = { workspace = true, features = ["font-kit"] }
@@ -49,4 +51,8 @@ harness = false
 
 [[test]]
 name = "macos_text_system"
+harness = false
+
+[[test]]
+name = "macos_window_visible"
 harness = false

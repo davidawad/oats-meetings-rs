@@ -99,6 +99,24 @@ struct Host {
     capture_supported: bool,
     /// `ui-*` requests from the engine (`ctl ui-select`, `ui-state`, `ui-invoke`).
     port: Arc<drive::Port>,
+    /// The next `window-changed` is the launch-time show: open the window without activating.
+    launch_show: bool,
+    /// `cx.quit()` has been called.
+    quitting: bool,
+    /// Started at quit with `ui.quit_timeout`: `force_exit_after` (tests record the call).
+    backstop: fn(std::time::Duration),
+    /// How many times the app took focus (`cx.activate`); only explicit show requests do.
+    activations: usize,
+}
+
+/// Backstop for `ctl quit`: if `NSApplication terminate:` has not ended the process within
+/// `after`, exit(0) (the engine lock is a flock, released with the process).
+fn force_exit_after(after: std::time::Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(after);
+        oats_core::elog!("oats-meetings-rs: quit did not finish in time; exiting");
+        std::process::exit(0);
+    });
 }
 
 type Shared = Rc<RefCell<Host>>;
@@ -114,19 +132,58 @@ fn capture_plan(engine: &Engine) -> capture::Plan {
     )
 }
 
-fn open_window(host: &mut Host, cx: &mut App) {
-    let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
+/// What a tick does to the main window once the engine's events are read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reconcile {
+    /// Open the window; `focus` makes it key and activates the app.
+    Open {
+        focus: bool,
+    },
+    /// The window is open and a show request came: bring it front, activating only if `activate`.
+    Raise {
+        activate: bool,
+    },
+    Close,
+    Nothing,
+}
+
+/// The window decision. `raise` is an explicit show request this tick (tray, menu,
+/// `ctl window-show`); the launch-time show is not one. The app takes focus only for an explicit
+/// request with `ui.activate_on_show` on: never at launch, never on its own (dot-4uzgol.54).
+fn reconcile(want: bool, open: bool, raise: bool, activate_on_show: bool) -> Reconcile {
+    let activate = raise && activate_on_show;
+    match (want, open) {
+        (true, false) => Reconcile::Open { focus: activate },
+        (true, true) if raise => Reconcile::Raise { activate },
+        (false, true) => Reconcile::Close,
+        (true, true) | (false, false) => Reconcile::Nothing,
+    }
+}
+
+/// The main window's options. Shown either way; key (and so app-activating) only when `focus`.
+pub fn window_options(cx: &App, focus: bool) -> WindowOptions {
+    let want = size(px(960.), px(640.));
+    let mut bounds = Bounds::centered(None, want, cx);
+    // A display that reports no visible area yet would clamp the window to 0x0 (dot-4uzgol.56).
+    if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+        bounds.size = want;
+    }
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        // Wayland app_id / X11 WM_CLASS; matches packaging/linux/*.desktop StartupWMClass.
+        app_id: Some(APP_ID.to_string()),
+        show: true,
+        focus,
+        ..Default::default()
+    }
+}
+
+fn open_window(host: &mut Host, cx: &mut App, focus: bool) {
     let engine = Arc::clone(&host.engine);
     let kept = Rc::clone(&host.kept);
-    match cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            // Wayland app_id / X11 WM_CLASS; matches packaging/linux/*.desktop StartupWMClass.
-            app_id: Some(APP_ID.to_string()),
-            ..Default::default()
-        },
-        move |_, cx| cx.new(|_| MainWindow::resume(engine, kept)),
-    ) {
+    match cx.open_window(window_options(cx, focus), move |_, cx| {
+        cx.new(|_| MainWindow::resume(engine, kept))
+    }) {
         Ok(h) => {
             host.window = Some(h);
             host.applied_capture = None; // new window: capture plan must be applied again
@@ -143,20 +200,30 @@ fn open_window(host: &mut Host, cx: &mut App) {
 fn tick(host: &Shared, cx: &mut App) {
     let mut h = host.borrow_mut();
     if h.engine.is_shutdown() {
-        cx.quit();
+        if !h.quitting {
+            h.quitting = true;
+            // Close the window first: a live window must not keep the run loop's terminate waiting.
+            if let Some(w) = h.window.take() {
+                let _ = w.update(cx, |_, window, _| window.remove_window());
+            }
+            (h.backstop)(h.engine.snapshot().config.ui.quit_timeout.as_duration());
+            cx.quit();
+        }
         return;
     }
     let mut changed_sessions = false;
     // Raise only on a show request: activating every tick keeps making the window key and
     // ordering it front on macOS, which fights the user and any other app (dot-4uzgol.52).
     let mut raise = false;
+    // The launch-time show is the app's own, not a user request: it opens without focus.
+    let launch = std::mem::take(&mut h.launch_show);
     let lines: Vec<String> = h.events.try_iter().collect();
     for line in &lines {
         let v: Value = serde_json::from_str(line).unwrap_or(Value::Null);
         match v["event"].as_str() {
             Some("window-changed") => {
                 h.want_visible = v["data"]["visible"].as_bool().unwrap_or(false);
-                raise = h.want_visible;
+                raise = h.want_visible && !launch;
             }
             Some(
                 "session-saved" | "session-deleted" | "config-reloaded" | "setting-changed"
@@ -174,16 +241,36 @@ fn tick(host: &Shared, cx: &mut App) {
             // consume our own event next tick
         }
     }
-    match (h.want_visible, h.window) {
-        (true, None) => open_window(&mut h, cx),
-        (true, Some(w)) if raise => {
-            let _ = w.update(cx, |_, window, _| window.activate_window());
+    let activate_on_show = h.engine.snapshot().config.ui.activate_on_show;
+    match (
+        reconcile(h.want_visible, h.window.is_some(), raise, activate_on_show),
+        h.window,
+    ) {
+        (Reconcile::Open { focus }, _) => {
+            open_window(&mut h, cx, focus);
+            if focus && h.window.is_some() {
+                cx.activate(true);
+                h.activations += 1;
+            }
         }
-        (false, Some(w)) => {
+        (Reconcile::Raise { activate }, Some(w)) => {
+            let _ = w.update(cx, |_, window, _| {
+                if activate {
+                    window.activate_window();
+                } else {
+                    capture::order_front(window);
+                }
+            });
+            if activate {
+                cx.activate(true);
+                h.activations += 1;
+            }
+        }
+        (Reconcile::Close, Some(w)) => {
             let _ = w.update(cx, |_, window, _| window.remove_window());
             h.window = None;
         }
-        (true, Some(_)) | (false, None) => {}
+        _ => {}
     }
     if let Some(w) = h.window {
         let plan = capture_plan(&h.engine);
@@ -281,6 +368,10 @@ pub fn run_with(
         tray_entries: model::entries(model::TRAY, capture_supported),
         capture_supported,
         port,
+        launch_show: false,
+        quitting: false,
+        backstop: force_exit_after,
+        activations: 0,
     }));
     let h2 = Rc::clone(&host);
     gpui_platform::application().run(move |cx: &mut App| {
@@ -302,7 +393,10 @@ pub fn run_with(
                 .detach();
         });
         // Show the window through the engine so `window-changed` and the control API agree.
-        let _ = model::dispatch(&h2.borrow().engine, "window-show", json!({}));
+        if !h2.borrow().engine.snapshot().config.ui.start_hidden {
+            h2.borrow_mut().launch_show = true;
+            let _ = model::dispatch(&h2.borrow().engine, "window-show", json!({}));
+        }
         let h3 = Rc::clone(&h2);
         cx.spawn(async move |cx: &mut AsyncApp| loop {
             // ui.tick is read each round, so a reload changes the cadence at once.
@@ -311,7 +405,7 @@ pub fn run_with(
             cx.update(|cx| tick(&h3, cx));
         })
         .detach();
-        cx.activate(true);
+        // No cx.activate here: the app never takes focus on its own (dot-4uzgol.54).
     });
     engine.set_ui(None);
     handle.shutdown();
@@ -353,6 +447,10 @@ mod tests {
             tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
             capture_supported: engine.capture_hiding_supported(),
             port: Arc::default(),
+            launch_show: false,
+            quitting: false,
+            backstop: |_| {},
+            activations: 0,
         }));
         let mut cx = TestAppContext::single();
         let step = |action: &str, cx: &mut TestAppContext| {
@@ -394,6 +492,10 @@ mod tests {
             tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
             capture_supported: engine.capture_hiding_supported(),
             port,
+            launch_show: false,
+            quitting: false,
+            backstop: |_| {},
+            activations: 0,
         }))
     }
 
@@ -564,6 +666,11 @@ mod tests {
             tray_gate: tray::Gate::default(),
             tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
             capture_supported: engine.capture_hiding_supported(),
+            port: Arc::default(),
+            launch_show: false,
+            quitting: false,
+            backstop: |_| {},
+            activations: 0,
         }));
         let mut cx = TestAppContext::single();
         let tick_n = |n: usize, cx: &mut TestAppContext| {
@@ -586,6 +693,146 @@ mod tests {
         model::dispatch(&engine, "window-show", json!({})).unwrap();
         tick_n(1, &mut cx);
         assert_eq!(cx.update(|cx| cx.active_window()), Some(w.into()));
+    }
+
+    fn plain_host(engine: &Arc<Engine>) -> Shared {
+        Rc::new(RefCell::new(Host {
+            engine: Arc::clone(engine),
+            events: engine.bus.subscribe(vec![]),
+            tray_state: Arc::new(TrayState::new(false)),
+            tray: Box::new(Mock::default()),
+            window: None,
+            kept: Rc::default(),
+            applied_capture: None,
+            want_visible: false,
+            tray_gate: tray::Gate::default(),
+            tray_entries: model::entries(model::TRAY, engine.capture_hiding_supported()),
+            capture_supported: engine.capture_hiding_supported(),
+            port: Arc::default(),
+            launch_show: false,
+            quitting: false,
+            backstop: |_| {},
+            activations: 0,
+        }))
+    }
+
+    fn tick_once(host: &Shared, cx: &mut TestAppContext) {
+        cx.update(|cx| tick(host, cx));
+        cx.run_until_parked();
+    }
+
+    #[test]
+    fn reconcile_takes_focus_only_for_an_explicit_show_with_activate_on_show() {
+        use Reconcile::*;
+        // (want, open, raise, activate_on_show) -> what the tick does.
+        for (want, open, raise, aos, out) in [
+            (true, false, false, true, Open { focus: false }), // launch / idle open
+            (true, false, true, true, Open { focus: true }),
+            (true, false, true, false, Open { focus: false }),
+            (true, true, true, true, Raise { activate: true }),
+            (true, true, true, false, Raise { activate: false }),
+            (true, true, false, true, Nothing),
+            (false, true, false, true, Close),
+            (false, true, true, true, Close),
+            (false, false, false, true, Nothing),
+        ] {
+            assert_eq!(
+                reconcile(want, open, raise, aos),
+                out,
+                "want={want} open={open} raise={raise} activate_on_show={aos}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_launch_show_opens_the_window_without_taking_focus() {
+        let (engine, _d) = testutil::engine(&[]);
+        let host = plain_host(&engine);
+        let mut cx = TestAppContext::single();
+        // What run_with does when ui.start_hidden is off.
+        host.borrow_mut().launch_show = true;
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().window.is_some(), "window shown at launch");
+        assert_eq!(host.borrow().activations, 0, "launch activated the app");
+        assert!(!host.borrow().launch_show);
+        // Idle ticks never activate either.
+        for _ in 0..3 {
+            tick_once(&host, &mut cx);
+        }
+        assert_eq!(host.borrow().activations, 0);
+        // An explicit show (tray, ctl window-show) does, with ui.activate_on_show on (default).
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert_eq!(host.borrow().activations, 1);
+        // Hidden then shown again: reopened with focus.
+        model::dispatch(&engine, "window-hide", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().window.is_none());
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().window.is_some());
+        assert_eq!(host.borrow().activations, 2);
+    }
+
+    #[test]
+    fn a_show_request_never_activates_with_activate_on_show_off() {
+        let (engine, _d) = testutil::engine(&[("ui.activate_on_show", json!(false))]);
+        assert!(!engine.snapshot().config.ui.activate_on_show);
+        let host = plain_host(&engine);
+        let mut cx = TestAppContext::single();
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().window.is_some(), "still shown");
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().window.is_some());
+        assert_eq!(host.borrow().activations, 0);
+    }
+
+    #[test]
+    fn the_window_keys_have_their_defaults() {
+        let (engine, _d) = testutil::engine(&[]);
+        let ui = &engine.snapshot().config.ui;
+        assert!(!ui.start_hidden);
+        assert!(ui.activate_on_show);
+        assert!(ui.quit_timeout.as_duration() > std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn quit_closes_the_window_quits_once_and_arms_the_backstop() {
+        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        static ARMED: AtomicUsize = AtomicUsize::new(0);
+        static AFTER_MS: AtomicU64 = AtomicU64::new(0);
+        let (engine, _d) = testutil::engine(&[("ui.quit_timeout", json!("2s"))]);
+        let host = plain_host(&engine);
+        host.borrow_mut().backstop = |after| {
+            ARMED.fetch_add(1, Ordering::SeqCst);
+            AFTER_MS.store(after.as_millis() as u64, Ordering::SeqCst);
+        };
+        let mut cx = TestAppContext::single();
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().window.is_some());
+        engine.request_shutdown();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().quitting);
+        assert!(host.borrow().window.is_none(), "window kept open at quit");
+        assert!(cx.update(|cx| cx.windows().is_empty()));
+        assert_eq!(ARMED.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            AFTER_MS.load(Ordering::SeqCst),
+            engine
+                .snapshot()
+                .config
+                .ui
+                .quit_timeout
+                .as_duration()
+                .as_millis() as u64
+        );
+        // Later ticks do not quit or arm again.
+        tick_once(&host, &mut cx);
+        assert_eq!(ARMED.load(Ordering::SeqCst), 1);
     }
 
     #[test]

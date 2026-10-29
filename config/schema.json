@@ -1025,6 +1025,13 @@
     "ui": {
       "additionalProperties": false,
       "properties": {
+        "activate_on_show": {
+          "default": true,
+          "description": "An explicit show request (tray Show Window, ctl window-show) brings the app to the front and gives it focus. The app never takes focus on its own, with this on or off.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
         "drive_wait": {
           "default": "10s",
           "description": "How long a ui-select, ui-state or ui-invoke call waits for the window to answer before failing with timeout.",
@@ -1055,6 +1062,20 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "quit_timeout": {
+          "default": "5s",
+          "description": "How long after ctl quit the app waits for the GUI to exit before it exits the process itself.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "5m",
+          "x-max-ms": 300000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "record_controls": {
           "default": true,
           "description": "Show the Start, Pause / Resume and Stop buttons and the recording badge in the main window.",
@@ -1076,6 +1097,13 @@
           "minimum": 40,
           "type": "integer",
           "x-reload": "live",
+          "x-ui": true
+        },
+        "start_hidden": {
+          "default": false,
+          "description": "Start with the main window closed (tray / ctl window-show opens it); off opens it at launch.",
+          "type": "boolean",
+          "x-reload": "lock",
           "x-ui": true
         },
         "tick": {
