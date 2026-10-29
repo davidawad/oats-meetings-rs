@@ -32,7 +32,7 @@ pub struct MainWindow {
     pub(crate) engine: Arc<Engine>,
     pub state: State,
     /// Keyboard focus for the settings text editor; created on first render.
-    focus: Option<FocusHandle>,
+    pub(crate) focus: Option<FocusHandle>,
     live_scroll: ScrollHandle,
 }
 

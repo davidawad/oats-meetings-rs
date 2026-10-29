@@ -241,6 +241,7 @@ pub struct State {
     /// Number of capture devices the audio backend reports (0 when none or unavailable).
     pub devices: usize,
     pub status: String,
+    pub sessions_ui: crate::views::sessions::Ui,
 }
 
 fn s(v: &Value, k: &str) -> String {
@@ -511,6 +512,9 @@ impl State {
     /// editor stays open with the server's message; on success it closes and the rows reload.
     pub fn commit_edit(&mut self, engine: &Engine) {
         let Some(e) = self.edit.clone() else { return };
+        if crate::views::sessions::is_ours(e.path) {
+            return crate::views::sessions::commit(self, engine);
+        }
         match model::dispatch(
             engine,
             "config-set",
