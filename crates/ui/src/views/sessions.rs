@@ -1,6 +1,9 @@
 //! Sessions tab: the session list (searchable) and the selected session's transcript, with rename,
-//! tag and delete through the `session-*` actions `ctl` uses. Text inputs reuse the window's single
+//! tag, delete and (for one saved without a transcript) transcribe through the `session-*` actions
+//! `ctl` uses. Text inputs reuse the window's single
 //! `Edit` under the `session:*` paths; `commit` is where Enter / save lands for them.
+
+use std::sync::Arc;
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
 use oats_core::config::typed::DeleteMode;
@@ -22,6 +25,8 @@ pub struct Ui {
     pub query: String,
     /// A delete waiting for its second click (`sessions.confirm_delete`).
     pub confirm: Option<String>,
+    /// A `session-transcribe` running off the UI thread.
+    pub transcribing: Option<String>,
 }
 
 pub(crate) fn is_ours(path: &str) -> bool {
@@ -132,6 +137,56 @@ pub fn delete(st: &mut State, engine: &Engine, id: &str) {
         Err(e) => st.status = e.to_string(),
     }
     st.refresh(engine);
+}
+
+/// `session-transcribe` finished: say how it went, reload the list and the shown transcript.
+pub fn transcribed(
+    st: &mut State,
+    engine: &Engine,
+    id: &str,
+    res: oats_core::config::Result<serde_json::Value>,
+) {
+    st.sessions_ui.transcribing = None;
+    st.status = match res {
+        Ok(v) => format!(
+            "Transcribed {id} ({} lines)",
+            v["summary"]["utterance_count"].as_u64().unwrap_or(0)
+        ),
+        Err(e) => e.to_string(),
+    };
+    st.refresh(engine);
+    if st.selected.as_deref() == Some(id) {
+        let status = std::mem::take(&mut st.status);
+        st.select(engine, id);
+        if st.status.is_empty() {
+            st.status = status;
+        }
+    }
+}
+
+/// The Transcribe button: the ASR runs over the whole recording, so off the UI thread.
+fn transcribe(this: &mut MainWindow, id: String, cx: &mut Context<MainWindow>) {
+    if this.state.sessions_ui.transcribing.is_some() {
+        return;
+    }
+    this.state.sessions_ui.transcribing = Some(id.clone());
+    this.state.status = format!("Transcribing {id}…");
+    cx.notify();
+    let engine = Arc::clone(&this.engine);
+    cx.spawn(async move |view, cx| {
+        let (eng, sid) = (Arc::clone(&engine), id.clone());
+        let res = cx
+            .background_executor()
+            .spawn(
+                async move { model::dispatch(&eng, "session-transcribe", json!({"session": sid})) },
+            )
+            .await;
+        let _ = view.update(cx, |v, cx| {
+            transcribed(&mut v.state, &v.engine, &id, res);
+            cx.notify();
+        });
+    })
+    .detach();
 }
 
 fn chip(
@@ -357,6 +412,21 @@ fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyEl
                 cx.notify();
             },
         ));
+    if s.utterances == 0 {
+        let busy = w.state.sessions_ui.transcribing.as_deref() == Some(s.id.as_str());
+        let sid = s.id.clone();
+        actions = actions.child(chip(
+            "session-transcribe",
+            if busy {
+                "Transcribing…"
+            } else {
+                "Transcribe"
+            },
+            ACCENT,
+            cx,
+            move |this, _, cx| transcribe(this, sid.clone(), cx),
+        ));
+    }
     if armed {
         actions = actions
             .child(
@@ -573,6 +643,65 @@ mod tests {
         assert!(st.selected.is_none() && st.transcript.is_empty());
         assert!(st.status.starts_with("Deleted a"), "{}", st.status);
         assert!(!dir.path().join("sessions/a").exists());
+    }
+
+    struct Says;
+    impl oats_core::stt::Asr for Says {
+        fn name(&self) -> &'static str {
+            "says"
+        }
+        fn transcribe(
+            &self,
+            pcm: &[f32],
+            _: &str,
+        ) -> oats_core::config::Result<Vec<oats_core::stt::Segment>> {
+            Ok(vec![oats_core::stt::Segment {
+                start: 0.0,
+                end: pcm.len() as f64 / 16000.0,
+                text: "hello".into(),
+            }])
+        }
+    }
+
+    #[test]
+    fn transcribe_fills_a_session_saved_without_a_transcript() {
+        let (engine, dir) = testutil::engine(&[]);
+        engine.set_asr_factory(Box::new(|_| Ok(Arc::new(Says))));
+        let d = dir.path().join("sessions/q");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(
+            d.join("session.json"),
+            r#"{"id":"q","startedAt":"2026-10-27T10:00:00Z","transcribePending":true}"#,
+        )
+        .unwrap();
+        let mut w = oats_audio::wav::WavWriter::create(&d.join("audio.wav"), 2, 16000).unwrap();
+        let tone: Vec<f32> = (0..16000 * 3)
+            .flat_map(|i| {
+                let v = 0.5 * (i as f32 * 0.05).sin();
+                [v, v]
+            })
+            .collect();
+        w.write(&tone).unwrap();
+        w.finish().unwrap();
+        let mut st = State::default();
+        st.refresh(&engine);
+        st.select(&engine, "q");
+        assert!(st.transcript.is_empty());
+        let res = model::dispatch(&engine, "session-transcribe", json!({"session": "q"}));
+        st.sessions_ui.transcribing = Some("q".into());
+        transcribed(&mut st, &engine, "q", res);
+        assert!(st.sessions_ui.transcribing.is_none());
+        assert!(st.status.starts_with("Transcribed q"), "{}", st.status);
+        assert!(st.sessions.iter().any(|s| s.id == "q" && s.utterances > 0));
+        assert!(st.transcript.iter().any(|l| l.text == "hello"));
+        // A second press says it already has one.
+        let res = model::dispatch(&engine, "session-transcribe", json!({"session": "q"}));
+        transcribed(&mut st, &engine, "q", res);
+        assert!(
+            st.status.contains("already has a transcript"),
+            "{}",
+            st.status
+        );
     }
 
     #[test]

@@ -80,6 +80,7 @@ actions! {
     TrashList, "trash-list", "Sessions in the OS trash (moved there by session-delete with sessions.delete_mode=trash), newest first. Linux and Windows; macOS says unsupported.", "implemented", "read", {};
     TrashRestore, "trash-restore", "Restore a trashed session to the session store.", "implemented", "write", { session: String };
     TrashEmpty, "trash-empty", "Delete trashed sessions for good (one session, or all of them); needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: Option<String>, confirm: Option<bool> };
+    SessionTranscribe, "session-transcribe", "Transcribe a saved session's own audio into it with the stt.* keys (a recording saved as audio only, e.g. while the model was missing; those are also transcribed automatically once it downloads). overwrite=true replaces an existing transcript.", "implemented", "write", { session: String, overwrite: Option<bool> };
     TranscriptGet, "transcript-get", "A session transcript (final, else live).", "implemented", "read", { session: String };
     TranscriptSearch, "transcript-search", "Search transcripts.", "planned", "read", { query: String };
     NotesGenerate, "notes-generate", "Generate notes for a session from a template with the configured LLM backend; dry_run shows the request without sending.", "implemented", "write", { session: String, template: String, dry_run: Option<bool> };

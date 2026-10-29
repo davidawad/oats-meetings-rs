@@ -907,7 +907,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.local.auto_download",
         kind: Kind::Bool,
         default: Def::B(true),
-        doc: "When a recording starts and the local whisper model is missing, download it in the background (about 142 MB for base.en). Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.",
+        doc: "When the local whisper model is missing at app launch (or when a recording starts), download it in the background (about 142 MB for base.en); recordings saved as audio only meanwhile are transcribed when it finishes. Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.",
         ui: true,
         reload: Reload::Live,
     },

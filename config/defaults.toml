@@ -211,7 +211,7 @@ chunk = "4s"
 enabled = true
 
 [stt.local]
-# When a recording starts and the local whisper model is missing, download it in the background (about 142 MB for base.en). Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.
+# When the local whisper model is missing at app launch (or when a recording starts), download it in the background (about 142 MB for base.en); recordings saved as audio only meanwhile are transcribed when it finishes. Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.
 auto_download = true
 # Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).
 engine = "whisper"

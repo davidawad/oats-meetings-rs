@@ -241,6 +241,7 @@ pub fn run_with(
         "oats-meetings-rs: engine listening on {}",
         handle.socket_display()
     );
+    engine.launched();
     let host: Shared = Rc::new(RefCell::new(Host {
         engine: Arc::clone(&engine),
         events: engine.bus.subscribe(vec![]),

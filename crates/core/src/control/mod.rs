@@ -27,7 +27,9 @@ use crate::config::ConfigError;
 pub fn run_headless(env: &dyn Fn(&str) -> Option<String>) -> i32 {
     let started = (|| -> Result<server::ServerHandle, ConfigError> {
         let engine = engine::Engine::from_env(env)?;
-        server::serve(Arc::clone(&engine), &paths::runtime_dir(env))
+        let handle = server::serve(Arc::clone(&engine), &paths::runtime_dir(env))?;
+        engine.launched();
+        Ok(handle)
     })();
     match started {
         Ok(handle) => {

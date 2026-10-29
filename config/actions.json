@@ -509,6 +509,24 @@
       "status": "implemented"
     },
     {
+      "doc": "Transcribe a saved session's own audio into it with the stt.* keys (a recording saved as audio only, e.g. while the model was missing; those are also transcribed automatically once it downloads). overwrite=true replaces an existing transcript.",
+      "effect": "write",
+      "name": "session-transcribe",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "A session transcript (final, else live).",
       "effect": "read",
       "name": "transcript-get",

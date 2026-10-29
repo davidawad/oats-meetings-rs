@@ -1,9 +1,11 @@
 //! Fetching the local whisper model (dot-4uzgol.26). `stt-model-fetch` (and, when
-//! `stt.local.auto_download` is on, the first recording that finds the model missing) downloads
+//! `stt.local.auto_download` is on, app launch or a recording that finds the model missing) downloads
 //! `ggml-<stt.local.model>.bin` from `stt.local.model_url` into the models directory, checks it
 //! against the SHA-256 pinned below (the same pins as ci/fetch-models.sh; a test keeps them in
 //! sync), and only then moves it into place. Progress is a `model-download` bus event and the
 //! `download` object of `stt-status`. The download runs on its own thread; one per target file.
+//! When it lands, the engine transcribes the recordings saved as audio only meanwhile
+//! (dot-4uzgol.44).
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -247,9 +249,13 @@ fn run_pinned(s: &Settings, bus: Option<&Bus>, sha: &str) -> Result<Value> {
     }
 }
 
-/// Start `run` on its own thread unless the file is present or already being fetched. Returns the
-/// status to show.
-pub fn spawn(s: &Settings, bus: Option<std::sync::Arc<Bus>>) -> Result<Value> {
+/// Start `run` on its own thread unless the file is present or already being fetched; `then` runs
+/// on that thread once the file is in place. Returns the status to show.
+pub fn spawn(
+    s: &Settings,
+    bus: Option<std::sync::Arc<Bus>>,
+    then: Box<dyn FnOnce() + Send>,
+) -> Result<Value> {
     check(s)?;
     if s.model_file.is_file() {
         return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
@@ -265,7 +271,9 @@ pub fn spawn(s: &Settings, bus: Option<std::sync::Arc<Bus>>) -> Result<Value> {
     std::thread::Builder::new()
         .name("oats-model-download".into())
         .spawn(move || {
-            let _ = run(&s2, bus.as_deref());
+            if run(&s2, bus.as_deref()).is_ok() {
+                then();
+            }
         })
         .map_err(|e| {
             ConfigError::new("io_error", format!("cannot start the download thread: {e}"))

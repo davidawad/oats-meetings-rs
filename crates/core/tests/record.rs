@@ -578,3 +578,153 @@ fn changing_devices_during_a_recording_defers_to_the_next_one() {
         d2.tone_hz(0)
     );
 }
+
+/// An ASR that is missing (model_not_found) until `present` is set: the first-run model download.
+fn missing_until(present: &Arc<std::sync::atomic::AtomicBool>) -> oats_core::record::AsrFactory {
+    let present = Arc::clone(present);
+    Box::new(move |_| {
+        if present.load(std::sync::atomic::Ordering::SeqCst) {
+            Ok(Arc::new(ToneAsr) as Arc<dyn Asr>)
+        } else {
+            Err(oats_core::config::ConfigError::new(
+                "model_not_found",
+                "no model",
+            ))
+        }
+    })
+}
+
+fn meta(r: &Rig, id: &str) -> Value {
+    r.engine
+        .dispatch(&Action::SessionGet { session: id.into() })
+        .unwrap()
+}
+
+#[test]
+fn a_recording_made_while_the_model_is_missing_is_transcribed_once_it_arrives() {
+    let r = rig();
+    // No real download from a test; the flow is the same once the model file appears.
+    r.engine
+        .set("stt.local.auto_download", &json!(false), "test")
+        .unwrap();
+    let present = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.engine.set_asr_factory(missing_until(&present));
+    let s = start(&r, "first");
+    assert_eq!(s["transcription"]["code"], "model_not_found");
+    std::thread::sleep(Duration::from_millis(2500));
+    stop(&r);
+    let m = meta(&r, "first");
+    let ended = m["ended_at"].clone();
+    assert!(ended.is_string());
+    assert_eq!(m["utterance_count"], 0);
+    assert_eq!(m["metadata"]["transcribePending"], true);
+    // Still missing: the pass leaves it pending and says why.
+    let v = r.engine.transcribe_pending();
+    assert_eq!(v["failed"][0]["code"], "model_not_found");
+    assert_eq!(meta(&r, "first")["metadata"]["transcribePending"], true);
+    // The model arrives: the same session gets its transcript, no second recording needed.
+    present.store(true, std::sync::atomic::Ordering::SeqCst);
+    // (record-stop also queued a pass in the background; either one may do the work.)
+    let v = r.engine.transcribe_pending();
+    assert_eq!(v["failed"], json!([]), "{v}");
+    let m = meta(&r, "first");
+    assert!(m["utterance_count"].as_u64().unwrap() > 0, "{m}");
+    assert!(m["metadata"].get("transcribePending").is_none(), "{m}");
+    assert_eq!(m["metadata"]["engine"], "whisper.cpp:base.en");
+    assert_eq!(m["ended_at"], ended);
+    assert!(!lines(&r, "first", "final").is_empty());
+    assert!(lines(&r, "first", "live")
+        .iter()
+        .all(|u| u["text"] == "tone"));
+    // Nothing left to do.
+    assert_eq!(r.engine.transcribe_pending()["transcribed"], json!([]));
+}
+
+#[test]
+fn a_pending_recording_still_running_when_the_model_arrives_is_transcribed_at_stop() {
+    let r = rig();
+    r.engine
+        .set("stt.local.auto_download", &json!(false), "test")
+        .unwrap();
+    let present = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.engine.set_asr_factory(missing_until(&present));
+    start(&r, "long");
+    std::thread::sleep(Duration::from_millis(1500));
+    present.store(true, std::sync::atomic::Ordering::SeqCst);
+    // The download-finished pass skips the session that is still recording.
+    assert_eq!(r.engine.transcribe_pending()["transcribed"], json!([]));
+    stop(&r);
+    wait_until("the stopped session to be transcribed", || {
+        meta(&r, "long")["utterance_count"].as_u64().unwrap_or(0) > 0
+    });
+    assert!(meta(&r, "long")["metadata"]
+        .get("transcribePending")
+        .is_none());
+}
+
+#[test]
+fn session_transcribe_runs_on_a_saved_session_and_guards_its_transcript() {
+    let r = rig();
+    r.engine
+        .set("audio.transcribe", &json!("off"), "test")
+        .unwrap();
+    start(&r, "s");
+    let busy = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "s".into(),
+            overwrite: None,
+        })
+        .unwrap_err();
+    assert_eq!(busy.code, "recording");
+    std::thread::sleep(Duration::from_millis(2500));
+    stop(&r);
+    // audio.transcribe = off is not a pending session.
+    assert!(meta(&r, "s")["metadata"].get("transcribePending").is_none());
+    let v = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "s".into(),
+            overwrite: None,
+        })
+        .unwrap();
+    assert_eq!(v["session"], "s");
+    let n = v["summary"]["utterance_count"].as_u64().unwrap();
+    assert!(n > 0, "{v}");
+    let again = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "s".into(),
+            overwrite: None,
+        })
+        .unwrap_err();
+    assert_eq!(again.code, "exists");
+    let v = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "s".into(),
+            overwrite: Some(true),
+        })
+        .unwrap();
+    assert_eq!(v["summary"]["utterance_count"].as_u64().unwrap(), n);
+    // No audio, unknown session.
+    let dir = r.dir.path().join("rec/noaudio");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("session.json"), r#"{"id":"noaudio"}"#).unwrap();
+    let e = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "noaudio".into(),
+            overwrite: None,
+        })
+        .unwrap_err();
+    assert_eq!(e.code, "no_audio");
+    let e = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "nope".into(),
+            overwrite: None,
+        })
+        .unwrap_err();
+    assert_eq!(e.code, "not_found");
+}

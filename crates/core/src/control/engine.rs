@@ -11,7 +11,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::SystemTime;
 
 use serde_json::{json, Value};
@@ -114,6 +114,9 @@ pub struct Engine {
     shutdown: AtomicBool,
     window_visible: AtomicBool,
     recorder: Arc<Recorder>,
+    me: Weak<Engine>,
+    // One session-transcribe at a time (ctl, the GUI and the model-arrived pass).
+    transcribe_lock: Mutex<()>,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -264,7 +267,7 @@ impl Engine {
         let resolved = Self::resolve_with(&opts, text.as_deref())?;
         let config = resolved.typed()?;
         let stamp = stamp_of(&opts.user_config);
-        let engine = Arc::new(Engine {
+        let engine = Arc::new_cyclic(|me| Engine {
             opts,
             state: RwLock::new(State {
                 snap: Arc::new(Snapshot { resolved, config }),
@@ -278,6 +281,8 @@ impl Engine {
             shutdown: AtomicBool::new(false),
             window_visible: AtomicBool::new(false),
             recorder: Arc::new(Recorder::default()),
+            me: me.clone(),
+            transcribe_lock: Mutex::new(()),
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
@@ -359,7 +364,11 @@ impl Engine {
             }) {
                 Ok(a) => a,
                 Err(e) => {
-                    note = self.first_run_model(&settings, &e);
+                    if self.first_run_model(&settings, &e) {
+                        note = Some(
+                            "Downloading it now (progress in stt-status); this recording is saved as audio only and transcribed when the download finishes",
+                        );
+                    }
                     return Err(e);
                 }
             };
@@ -383,19 +392,150 @@ impl Engine {
         }
     }
 
-    /// The local model is missing: with `stt.local.auto_download` start fetching it and return the
-    /// sentence that tells the user what happens to this recording.
-    fn first_run_model(&self, s: &crate::stt::Settings, e: &ConfigError) -> Option<String> {
-        if e.code != "model_not_found" || !s.auto_download {
-            return None;
+    /// The local model is missing: with `stt.local.auto_download` start fetching it (or join the
+    /// download already running). True when a download is under way.
+    fn first_run_model(&self, s: &crate::stt::Settings, e: &ConfigError) -> bool {
+        e.code == "model_not_found"
+            && s.auto_download
+            && crate::stt::models::spawn(s, Some(Arc::clone(&self.bus)), self.on_model_arrived())
+                .is_ok()
+    }
+
+    /// App launch (GUI or `--headless`; not `Engine::new`, which tests and embedders use): with
+    /// `stt.local.auto_download` fetch a missing local model now, so the first recording does not
+    /// find it missing, and transcribe the sessions an earlier run left pending.
+    pub fn launched(&self) {
+        use crate::config::typed::{AudioTranscribe, SttBackend};
+        let cfg = self.snapshot().config.clone();
+        if let Ok(s) = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir()) {
+            if cfg!(feature = "whisper")
+                && cfg.audio.transcribe != AudioTranscribe::Off
+                && s.backend == SttBackend::Local
+                && s.auto_download
+                && !s.model_file.is_file()
+                && crate::stt::models::check(&s).is_ok()
+            {
+                let _ = crate::stt::models::spawn(
+                    &s,
+                    Some(Arc::clone(&self.bus)),
+                    self.on_model_arrived(),
+                );
+                return;
+            }
         }
-        match crate::stt::models::spawn(s, Some(Arc::clone(&self.bus))) {
-            Ok(_) => Some(
-                "Downloading it now (progress in stt-status); this recording is audio only. Once the model is present, run `ctl stt transcribe <session audio.wav>` to transcribe it"
-                    .to_string(),
-            ),
-            Err(_) => None,
+        if !self.store().pending().is_empty() {
+            self.model_arrived();
         }
+    }
+
+    /// What a model download runs once the file is in place: `transcribe_pending`.
+    pub(crate) fn on_model_arrived(&self) -> Box<dyn FnOnce() + Send> {
+        let me = self.me.clone();
+        Box::new(move || {
+            if let Some(e) = me.upgrade() {
+                e.transcribe_pending();
+            }
+        })
+    }
+
+    /// `transcribe_pending` on its own thread (it runs the ASR over whole recordings).
+    pub(crate) fn model_arrived(&self) {
+        if let Some(e) = self.me.upgrade() {
+            let _ = std::thread::Builder::new()
+                .name("oats-transcribe-pending".into())
+                .spawn(move || e.transcribe_pending());
+        }
+    }
+
+    /// Transcribe every session saved as audio only because the model was missing (marked
+    /// `transcribePending`), except the one still recording; it is picked up when it stops.
+    pub fn transcribe_pending(&self) -> Value {
+        let store = self.store();
+        let active = self.recorder.active_id();
+        let (mut done, mut failed) = (vec![], vec![]);
+        for id in store.pending() {
+            if active.as_deref() == Some(id.as_str()) {
+                continue;
+            }
+            match self.session_transcribe(&id, false, false) {
+                Ok(_) => done.push(id),
+                Err(e) if matches!(e.code, "exists" | "no_audio" | "not_found") => {
+                    let _ = store.set_pending(&id, false);
+                }
+                Err(e) => {
+                    crate::elog!("oats-meetings-rs: transcribing {id}: {e}");
+                    failed.push(json!({"session": id, "code": e.code, "message": e.message}));
+                }
+            }
+        }
+        json!({"transcribed": done, "failed": failed})
+    }
+
+    /// `session-transcribe`: run the ASR over a saved session's own audio and write the transcript
+    /// into it. `fetch` starts the model download when it is missing (the session stays pending).
+    fn session_transcribe(&self, id: &str, overwrite: bool, fetch: bool) -> Result<Value> {
+        let _one = self
+            .transcribe_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.recorder.active_id().as_deref() == Some(id) {
+            return Err(ConfigError::new(
+                "recording",
+                format!("session {id} is still recording; stop it first"),
+            ));
+        }
+        let store = self.store();
+        let v = store.get(id)?;
+        if !overwrite && v["utterance_count"].as_u64().unwrap_or(0) > 0 {
+            return Err(ConfigError::new(
+                "exists",
+                format!("session {id} already has a transcript; overwrite=true replaces it"),
+            ));
+        }
+        let meta = &v["metadata"];
+        let audio = Path::new(v["path"].as_str().unwrap_or_default()).join(
+            meta["audioFile"]
+                .as_str()
+                .unwrap_or(crate::record::AUDIO_FILE),
+        );
+        if !audio.is_file() {
+            return Err(ConfigError::new(
+                "no_audio",
+                format!("session {id} has no audio to transcribe"),
+            ));
+        }
+        let chans = crate::stt::wav::read(&audio)?;
+        let cfg = self.snapshot().config.clone();
+        let settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
+        let secrets = self.secret_store(&cfg);
+        let asr = self
+            .recorder
+            .make_asr(&settings, &|s| {
+                crate::stt::make_asr(s, cfg.network.allow, &*secrets)
+            })
+            .map_err(|e| {
+                if e.code == "model_not_found" {
+                    let _ = store.set_pending(id, true);
+                    if fetch && self.first_run_model(&settings, &e) {
+                        return ConfigError::new(
+                            e.code,
+                            format!("{}. Downloading it now (progress in stt-status); this session is transcribed when the download finishes", e.message),
+                        );
+                    }
+                }
+                e
+            })?;
+        let started = meta["startedAt"]
+            .as_str()
+            .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+            .map_or_else(
+                || {
+                    chrono::Utc::now()
+                        - chrono::Duration::milliseconds((chans.seconds() * 1000.0) as i64)
+                },
+                |t| t.with_timezone(&chrono::Utc),
+            );
+        crate::stt::into_session(&store, Some(&self.bus), asr, &settings, &chans, id, started)
     }
 
     /// Register a subsystem (audio, hotkeys, ...). It sees every later reload.
@@ -695,14 +835,22 @@ impl Engine {
             Action::RecordStart { session, title } => {
                 let cfg = self.snapshot().config.clone();
                 let (plan, why) = self.transcribe_plan(&cfg)?;
+                // Saved as audio only for want of the model: transcribed once it is present.
+                let pending = why["code"] == "model_not_found";
+                let store = self.store();
                 let v = self.recorder.start(
                     &self.audio_settings()?,
-                    &self.store(),
+                    &store,
                     session.as_deref(),
                     title.as_deref(),
                     plan,
                     why,
                 )?;
+                if pending {
+                    if let Some(id) = v["session"].as_str() {
+                        store.set_pending(id, true)?;
+                    }
+                }
                 self.bus.publish("recording-started", v.clone());
                 Ok(v)
             }
@@ -710,6 +858,11 @@ impl Engine {
                 let v = self.recorder.stop()?;
                 self.bus.publish("recording-stopped", v.clone());
                 self.session_saved(&v["session"]);
+                // The model may have arrived while this pending recording was running.
+                let id = v["session"].as_str().unwrap_or_default();
+                if self.store().pending().iter().any(|p| p == id) {
+                    self.model_arrived();
+                }
                 Ok(v)
             }
             Action::RecordPause {} => {
@@ -724,6 +877,9 @@ impl Engine {
                 Ok(v)
             }
             Action::TranscriptGet { session } => self.store().transcript(session),
+            Action::SessionTranscribe { session, overwrite } => {
+                self.session_transcribe(session, overwrite.unwrap_or(false), true)
+            }
             Action::SessionRename { session, name } => {
                 let v = self.store().rename(session, name)?;
                 self.session_event(session, "rename");

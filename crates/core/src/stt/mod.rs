@@ -550,6 +550,76 @@ pub fn run(
         "",
         &s.engine_label(),
     )?;
+    let (live_n, final_n) = match passes(store, bus, &asr, s, chans, id, started) {
+        Ok(n) => n,
+        Err(e) => {
+            // A failed run leaves no half-written session behind.
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+    };
+    let summary = store.finish(id, &now.to_rfc3339_opts(SecondsFormat::Secs, true))?;
+    if let Some(b) = bus {
+        b.publish("session-saved", json!({"id": id, "change": "transcribed"}));
+    }
+    Ok(json!({
+        "session": id, "backend": asr.name(), "duration_secs": duration,
+        "live_utterances": live_n, "final_utterances": final_n, "summary": summary,
+    }))
+}
+
+/// Transcribe `chans` (the session's own audio, which began at `started`) into the existing
+/// session `id`, replacing any transcript it has (`session-transcribe`). A failed run leaves the
+/// session with no transcript and its audio untouched.
+pub fn into_session(
+    store: &Store,
+    bus: Option<&Bus>,
+    asr: Arc<dyn Asr>,
+    s: &Settings,
+    chans: &Channels,
+    id: &str,
+    started: DateTime<Utc>,
+) -> Result<Value> {
+    if !s.live_enabled && !s.final_enabled {
+        return Err(ConfigError::new(
+            "nothing_enabled",
+            "stt.live.enabled and stt.final.enabled are both off",
+        ));
+    }
+    let clear = || {
+        store
+            .write_transcript(id, "live", &[])
+            .and_then(|()| store.write_transcript(id, "final", &[]))
+    };
+    clear()?;
+    let (live_n, final_n) = match passes(store, bus, &asr, s, chans, id, started) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = clear();
+            return Err(e);
+        }
+    };
+    let summary = store.transcribed(id, &s.engine_label())?;
+    if let Some(b) = bus {
+        b.publish("session-saved", json!({"id": id, "change": "transcribed"}));
+    }
+    Ok(json!({
+        "session": id, "backend": asr.name(), "duration_secs": chans.seconds(),
+        "live_utterances": live_n, "final_utterances": final_n, "summary": summary,
+    }))
+}
+
+/// The live pass (if enabled) then the final pass (if enabled) into session `id`; returns the
+/// number of (live, final) utterances written.
+fn passes(
+    store: &Store,
+    bus: Option<&Bus>,
+    asr: &Arc<dyn Asr>,
+    s: &Settings,
+    chans: &Channels,
+    id: &str,
+    started: DateTime<Utc>,
+) -> Result<(usize, usize)> {
     let emit = |kind: &str, u: &Utt| {
         if let Some(b) = bus {
             b.publish(
@@ -559,68 +629,53 @@ pub fn run(
         }
     };
     let (mut live_n, mut final_n) = (0usize, 0usize);
-    let result = (|| -> Result<()> {
-        if s.live_enabled {
-            let mut live = Live::new(
-                Arc::clone(&asr),
-                &s.language,
-                s.chunk_secs,
-                s.tuning,
-                &s.speaker_you,
-                &s.speaker_them,
-            );
-            let step = s.tuning.feed_samples;
-            let total = chans.you.len().max(chans.them.len());
-            let mut pos = 0;
-            let mut write = |us: Vec<Utt>| -> Result<()> {
-                for u in by_time(us) {
-                    store.append_utterance(id, "live", &utterance_json(&u, started))?;
-                    emit("live", &u);
-                    live_n += 1;
-                }
-                Ok(())
-            };
-            while pos < total {
-                for (ch, pcm) in [(0usize, &chans.you), (1usize, &chans.them)] {
-                    let end = (pos + step).min(pcm.len());
-                    if pos < end {
-                        write(live.push(ch, &pcm[pos..end])?)?;
-                    }
-                }
-                pos += step;
+    if s.live_enabled {
+        let mut live = Live::new(
+            Arc::clone(asr),
+            &s.language,
+            s.chunk_secs,
+            s.tuning,
+            &s.speaker_you,
+            &s.speaker_them,
+        );
+        let step = s.tuning.feed_samples;
+        let total = chans.you.len().max(chans.them.len());
+        let mut pos = 0;
+        let mut write = |us: Vec<Utt>| -> Result<()> {
+            for u in by_time(us) {
+                store.append_utterance(id, "live", &utterance_json(&u, started))?;
+                emit("live", &u);
+                live_n += 1;
             }
-            write(live.flush()?)?;
+            Ok(())
+        };
+        while pos < total {
+            for (ch, pcm) in [(0usize, &chans.you), (1usize, &chans.them)] {
+                let end = (pos + step).min(pcm.len());
+                if pos < end {
+                    write(live.push(ch, &pcm[pos..end])?)?;
+                }
+            }
+            pos += step;
         }
-        if s.final_enabled {
-            let mut all = final_channel(&*asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
-            all.extend(final_channel(
-                &*asr,
-                &chans.them,
-                &s.speaker_them,
-                &s.language,
-                &s.tuning,
-            )?);
-            let all = by_time(all);
-            let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
-            store.write_transcript(id, "final", &lines)?;
-            all.iter().for_each(|u| emit("final", u));
-            final_n = lines.len();
-        }
-        Ok(())
-    })();
-    if let Err(e) = result {
-        // A failed run leaves no half-written session behind.
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(e);
+        write(live.flush()?)?;
     }
-    let summary = store.finish(id, &now.to_rfc3339_opts(SecondsFormat::Secs, true))?;
-    if let Some(b) = bus {
-        b.publish("session-saved", json!({"id": id, "change": "transcribed"}));
+    if s.final_enabled {
+        let mut all = final_channel(&**asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
+        all.extend(final_channel(
+            &**asr,
+            &chans.them,
+            &s.speaker_them,
+            &s.language,
+            &s.tuning,
+        )?);
+        let all = by_time(all);
+        let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
+        store.write_transcript(id, "final", &lines)?;
+        all.iter().for_each(|u| emit("final", u));
+        final_n = lines.len();
     }
-    Ok(json!({
-        "session": id, "backend": asr.name(), "duration_secs": duration,
-        "live_utterances": live_n, "final_utterances": final_n, "summary": summary,
-    }))
+    Ok((live_n, final_n))
 }
 
 // ---- engine glue ---------------------------------------------------------------------------
@@ -691,9 +746,11 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 if s.model_file.is_file() {
                     return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
                 }
-                return models::run(&s, Some(&*engine.bus));
+                let v = models::run(&s, Some(&*engine.bus))?;
+                engine.model_arrived();
+                return Ok(v);
             }
-            models::spawn(&s, Some(Arc::clone(&engine.bus)))
+            models::spawn(&s, Some(Arc::clone(&engine.bus)), engine.on_model_arrived())
         }
         Action::SttStatus {} => {
             let key = if s.cloud_key.is_empty() {

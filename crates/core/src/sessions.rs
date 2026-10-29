@@ -6,8 +6,8 @@
 //!   <root>/<id>/transcript.final.jsonl  one JSON object per utterance (batch re-transcription)
 //!   <root>/<id>/transcript.live.jsonl   live transcript
 //!
-//! We add two keys to `session.json`, which the OpenOats reader ignores: `schemaVersion`
-//! (this store's layout version) and `tags`. Unknown keys written by OpenOats are preserved.
+//! We add keys to `session.json`, which the OpenOats reader ignores: `schemaVersion`
+//! (this store's layout version), `tags` and `transcribePending`. Unknown keys written by OpenOats are preserved.
 
 use std::path::{Path, PathBuf};
 
@@ -21,6 +21,8 @@ const TRANSCRIPTS: [(&str, &str); 2] = [
     ("final", "transcript.final.jsonl"),
     ("live", "transcript.live.jsonl"),
 ];
+/// A recording saved as audio only while the model was missing; cleared once it is transcribed.
+const PENDING: &str = "transcribePending";
 
 fn io(what: &Path, e: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("io_error", format!("{}: {e}", what.display()))
@@ -522,6 +524,40 @@ impl Store {
         l.meta.insert("endedAt".into(), json!(ended_at));
         l.meta
             .insert("utteranceCount".into(), json!(utterances.len()));
+        write_meta(&l.dir, &l.meta)?;
+        Ok(summary(&l))
+    }
+
+    /// Mark (or unmark) a session as recorded while transcription was unavailable, so it is
+    /// transcribed once the model arrives (`transcribePending` in session.json).
+    pub fn set_pending(&self, id: &str, pending: bool) -> Result<()> {
+        let mut l = self.find(id)?;
+        if pending {
+            l.meta.insert(PENDING.into(), json!(true));
+        } else if l.meta.remove(PENDING).is_none() {
+            return Ok(());
+        }
+        write_meta(&l.dir, &l.meta)
+    }
+
+    /// Ids of the sessions marked by `set_pending`, in directory-name order.
+    pub fn pending(&self) -> Vec<String> {
+        self.discover()
+            .iter()
+            .filter(|l| l.meta.get(PENDING) == Some(&json!(true)))
+            .map(id_of)
+            .collect()
+    }
+
+    /// After transcribing an existing session in place: stamp the engine and utterance count and
+    /// drop the pending mark; `endedAt` keeps the recording's end.
+    pub fn transcribed(&self, id: &str, engine: &str) -> Result<Value> {
+        let mut l = self.find(id)?;
+        let (_, utterances) = transcript(&l.dir);
+        l.meta.insert("engine".into(), json!(engine));
+        l.meta
+            .insert("utteranceCount".into(), json!(utterances.len()));
+        l.meta.remove(PENDING);
         write_meta(&l.dir, &l.meta)?;
         Ok(summary(&l))
     }

@@ -157,6 +157,7 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "session-list",
     "session-get",
     "transcript-get",
+    "session-transcribe",
     "session-rename",
     "session-tag",
     "session-delete",
