@@ -44,27 +44,48 @@ impl Engine {
 
     fn start() -> Engine {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "[audio]\nbackend = \"screencapturekit\"\ntranscribe = \"off\"\n").unwrap();
-        let child = Self::cmd(dir.path()).arg("--headless").stderr(Stdio::null()).spawn().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[audio]\nbackend = \"screencapturekit\"\ntranscribe = \"off\"\n",
+        )
+        .unwrap();
+        let child = Self::cmd(dir.path())
+            .arg("--headless")
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
         let e = Engine { child, dir };
         let t = Instant::now();
         while e.ctl(&["ping"]).0 != 0 {
-            assert!(t.elapsed() < Duration::from_secs(30), "engine did not come up");
+            assert!(
+                t.elapsed() < Duration::from_secs(30),
+                "engine did not come up"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         e
     }
 
     fn ctl(&self, args: &[&str]) -> (i32, String) {
-        let o = Self::cmd(self.dir.path()).arg("ctl").args(args).output().unwrap();
-        (o.status.code().unwrap(), String::from_utf8_lossy(&o.stdout).into_owned())
+        let o = Self::cmd(self.dir.path())
+            .arg("ctl")
+            .args(args)
+            .output()
+            .unwrap();
+        (
+            o.status.code().unwrap(),
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+        )
     }
 
     fn json(&self, args: &[&str]) -> (i32, Value) {
         let mut a = vec!["--json"];
         a.extend_from_slice(args);
         let (code, out) = self.ctl(&a);
-        (code, serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{args:?}: {e}: {out}")))
+        (
+            code,
+            serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{args:?}: {e}: {out}")),
+        )
     }
 }
 
@@ -98,7 +119,14 @@ fn five_second_recording_is_non_silent_stereo_or_permission_denied() {
     let e = Engine::start();
     let (code, v) = e.json(&["devices", "list"]);
     assert_eq!(code, 0, "{v}");
-    assert!(v["data"]["devices"].as_array().unwrap().iter().any(|d| d["kind"] == "loopback"), "{v}");
+    assert!(
+        v["data"]["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d["kind"] == "loopback"),
+        "{v}"
+    );
     let mut tone = play_tone(e.dir.path());
     let (code, v) = e.json(&["record", "start", "--session", "live_mac"]);
     if code != 0 {
@@ -115,13 +143,25 @@ fn five_second_recording_is_non_silent_stereo_or_permission_denied() {
     assert_eq!(code, 0, "{got}");
     let dur = got["data"]["duration_ms"].as_u64().unwrap();
     assert!(dur >= 4000, "duration_ms {dur}");
-    let w = wav::read(std::path::Path::new(got["data"]["audio_path"].as_str().unwrap())).unwrap();
+    let w = wav::read(std::path::Path::new(
+        got["data"]["audio_path"].as_str().unwrap(),
+    ))
+    .unwrap();
     eprintln!(
         "audio_live_macos: {} ch, {} Hz, {:.2}s, rms mic {:.3} system {:.3}, system tone {:.0} Hz",
-        w.channels, w.rate, w.duration_secs(), w.rms(0), w.rms(1), w.tone_hz(1)
+        w.channels,
+        w.rate,
+        w.duration_secs(),
+        w.rms(0),
+        w.rms(1),
+        w.tone_hz(1)
     );
     assert_eq!(w.channels, 2);
     assert!(w.duration_secs() >= 4.0, "wav {:.2}s", w.duration_secs());
     assert!(w.rms(1) > RMS_MIN, "system rms {}", w.rms(1));
-    assert!((w.tone_hz(1) - 440.0).abs() < 15.0, "system tone {} Hz", w.tone_hz(1));
+    assert!(
+        (w.tone_hz(1) - 440.0).abs() < 15.0,
+        "system tone {} Hz",
+        w.tone_hz(1)
+    );
 }

@@ -40,7 +40,12 @@ fn base(rt: &str, cfg: &str) -> Command {
 
 impl Procs {
     fn ctl(&self, args: &[&str]) -> (i32, Value) {
-        let o = base(&self.rt, &self.cfg).arg("ctl").arg("--json").args(args).output().unwrap();
+        let o = base(&self.rt, &self.cfg)
+            .arg("ctl")
+            .arg("--json")
+            .args(args)
+            .output()
+            .unwrap();
         let v = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
         (o.status.code().unwrap_or(-1), v)
     }
@@ -71,10 +76,19 @@ fn start(menubar: bool) -> Option<Procs> {
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
-    let p = Procs { xvfb, gui, rt, cfg, _dir: dir };
+    let p = Procs {
+        xvfb,
+        gui,
+        rt,
+        cfg,
+        _dir: dir,
+    };
     let t0 = Instant::now();
     while p.ctl(&["ping"]).0 != 0 {
-        assert!(t0.elapsed() < Duration::from_secs(60), "GUI process did not serve the control socket");
+        assert!(
+            t0.elapsed() < Duration::from_secs(60),
+            "GUI process did not serve the control socket"
+        );
         std::thread::sleep(Duration::from_millis(200));
     }
     Some(p)
@@ -87,21 +101,31 @@ fn check(menubar: bool) {
     let (code, v) = p.ctl(&["list-actions"]);
     assert_eq!(code, 0);
     let committed: Value = serde_json::from_str(
-        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config/actions.json")).unwrap(),
+        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config/actions.json"))
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(v["data"], committed);
     // Window actions answer through the GUI process (a GUI that cannot open a window, e.g. no
     // GPU, flips back to hidden on its own, so only the immediate answers are asserted).
-    assert_eq!(p.ctl(&["window-hide"]).1["data"]["visible"], Value::Bool(false));
-    assert_eq!(p.ctl(&["window-show"]).1["data"]["visible"], Value::Bool(true));
+    assert_eq!(
+        p.ctl(&["window-hide"]).1["data"]["visible"],
+        Value::Bool(false)
+    );
+    assert_eq!(
+        p.ctl(&["window-show"]).1["data"]["visible"],
+        Value::Bool(true)
+    );
     std::thread::sleep(Duration::from_millis(500));
     // The process is still the GUI, alive after window churn.
     assert!(p.gui.try_wait().unwrap().is_none());
     assert_eq!(p.ctl(&["quit"]).0, 0);
     let t0 = Instant::now();
     while p.gui.try_wait().unwrap().is_none() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "GUI did not exit after quit");
+        assert!(
+            t0.elapsed() < Duration::from_secs(20),
+            "GUI did not exit after quit"
+        );
         std::thread::sleep(Duration::from_millis(100));
     }
 }

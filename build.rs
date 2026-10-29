@@ -20,7 +20,12 @@ fn embed() {
     fs::copy(&ico, out.join("oats-meetings-rs.ico"))
         .unwrap_or_else(|e| panic!("{}: {e} (run ci/icons.sh first)", ico.display()));
     let v = env::var("CARGO_PKG_VERSION").unwrap();
-    let nums: Vec<String> = v.split('.').map(|p| p.to_string()).chain(std::iter::repeat("0".into())).take(4).collect();
+    let nums: Vec<String> = v
+        .split('.')
+        .map(|p| p.to_string())
+        .chain(std::iter::repeat("0".into()))
+        .take(4)
+        .collect();
     let n = nums.join(",");
     let rc = format!(
         "1 ICON \"oats-meetings-rs.ico\"\n\

@@ -29,7 +29,10 @@ fn unknown_key_exits_one_with_unknown_key() {
     let d = tempfile::tempdir().unwrap();
     let f = d.path().join("c.toml");
     std::fs::write(&f, "[nope]\nx = 1\n").unwrap();
-    let (code, out, _) = run(&["config", "check", "--json"], &[("OATS_CONFIG", f.to_str().unwrap())]);
+    let (code, out, _) = run(
+        &["config", "check", "--json"],
+        &[("OATS_CONFIG", f.to_str().unwrap())],
+    );
     assert_eq!(code, 1);
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["error"]["code"], "unknown_key");
@@ -53,19 +56,28 @@ fn cloud_pack_differs_from_default_only_in_pack_keys() {
     }
     changed.sort();
     // Pack-managed top-level leaves/sections only: stt (nested), llm.backend, network.allow.
-    assert_eq!(changed, vec!["llm.backend", "network.allow", "stt.backend", "stt.cloud"]);
+    assert_eq!(
+        changed,
+        vec!["llm.backend", "network.allow", "stt.backend", "stt.cloud"]
+    );
     assert_eq!(b["data"]["pack"], "cloud");
 }
 
 #[test]
 fn committed_generated_files_are_current_and_hand_edits_drift() {
     let cfg = concat!(env!("CARGO_MANIFEST_DIR"), "/config");
-    assert_eq!(run(&["config", "generate", "--check", "--dir", cfg], &[]).0, 0);
+    assert_eq!(
+        run(&["config", "generate", "--check", "--dir", cfg], &[]).0,
+        0
+    );
     let d = tempfile::tempdir().unwrap();
     let dir = d.path().to_str().unwrap();
     assert_eq!(run(&["config", "generate", "--dir", dir], &[]).0, 0);
     std::fs::write(d.path().join("schema.json"), "{}\n").unwrap();
-    let (code, out, _) = run(&["config", "generate", "--check", "--json", "--dir", dir], &[]);
+    let (code, out, _) = run(
+        &["config", "generate", "--check", "--json", "--dir", dir],
+        &[],
+    );
     assert_eq!(code, 1);
     assert!(out.contains("\"drift\""), "{out}");
 }

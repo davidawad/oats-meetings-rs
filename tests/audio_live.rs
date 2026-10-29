@@ -60,10 +60,18 @@ impl Engine {
             _dir: dir,
         };
         e.child.wait().unwrap();
-        e.child = e.cmd().arg("--headless").stderr(Stdio::null()).spawn().unwrap();
+        e.child = e
+            .cmd()
+            .arg("--headless")
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
         let t = Instant::now();
         while e.ctl(&["ping"]).0 != 0 {
-            assert!(t.elapsed() < Duration::from_secs(30), "engine did not come up");
+            assert!(
+                t.elapsed() < Duration::from_secs(30),
+                "engine did not come up"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         e
@@ -82,7 +90,8 @@ impl Engine {
         let mut a = vec!["--json"];
         a.extend_from_slice(args);
         let (code, out, err) = self.ctl(&a);
-        let v = serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{args:?}: {e}: {out} {err}"));
+        let v = serde_json::from_str(out.trim())
+            .unwrap_or_else(|e| panic!("{args:?}: {e}: {out} {err}"));
         (code, v)
     }
 }
@@ -104,7 +113,13 @@ struct Tone {
 impl Tone {
     fn play(sink: &str, hz: f32) -> Tone {
         let mut child = Command::new("pacat")
-            .args(["--playback", &format!("--device={sink}"), "--format=float32le", "--rate=48000", "--channels=1"])
+            .args([
+                "--playback",
+                &format!("--device={sink}"),
+                "--format=float32le",
+                "--rate=48000",
+                "--channels=1",
+            ])
             .stdin(Stdio::piped())
             .spawn()
             .expect("pacat");
@@ -117,7 +132,9 @@ impl Tone {
                 let mut buf = Vec::with_capacity(4800 * 4);
                 for i in 0..4800u64 {
                     let t = (n + i) as f32 / 48000.0;
-                    buf.extend_from_slice(&((t * hz * std::f32::consts::TAU).sin() * 0.5).to_le_bytes());
+                    buf.extend_from_slice(
+                        &((t * hz * std::f32::consts::TAU).sin() * 0.5).to_le_bytes(),
+                    );
                 }
                 n += 4800;
                 if stdin.write_all(&buf).is_err() {
@@ -125,7 +142,11 @@ impl Tone {
                 }
             }
         });
-        Tone { child, th: Some(th), stop }
+        Tone {
+            child,
+            th: Some(th),
+            stop,
+        }
     }
 }
 
@@ -154,7 +175,9 @@ fn devices_list_json_shows_a_loopback_source() {
         return;
     }
     for be in backends() {
-        let e = Engine::start(&format!("[audio]\nbackend = \"{be}\"\ntranscribe = \"off\"\n"));
+        let e = Engine::start(&format!(
+            "[audio]\nbackend = \"{be}\"\ntranscribe = \"off\"\n"
+        ));
         let (code, v) = e.json(&["devices", "list"]);
         assert_eq!(code, 0, "{be}: {v}");
         assert_eq!(v["data"]["loopback_available"], true, "{be}: {v}");
@@ -175,7 +198,11 @@ fn five_second_loopback_recording_is_non_silent_stereo() {
         let _sys = Tone::play(SYSTEM_SINK, 440.0);
         let _mic = Tone::play(MIC_SINK, 880.0);
         // The mic channel reads the second sink's monitor: there is no physical mic in a pod.
-        let monitor = if be == "pipewire" { MIC_SINK } else { "oats_mic_sink.monitor" };
+        let monitor = if be == "pipewire" {
+            MIC_SINK
+        } else {
+            "oats_mic_sink.monitor"
+        };
         let e = Engine::start(&format!("[audio]\nbackend = \"{be}\"\ntranscribe = \"off\"\n[audio.mic]\ndevice = \"{monitor}\"\n"));
         let (code, v) = e.json(&["record", "start", "--session", "live_a"]);
         assert_eq!(code, 0, "{be}: {v}");
@@ -190,18 +217,33 @@ fn five_second_loopback_recording_is_non_silent_stereo() {
         assert_eq!(code, 0, "{be}: {got}");
         let dur = got["data"]["duration_ms"].as_u64().unwrap();
         assert!(dur >= 4000, "{be}: duration_ms {dur}");
-        let w = wav::read(std::path::Path::new(got["data"]["audio_path"].as_str().unwrap())).unwrap();
+        let w = wav::read(std::path::Path::new(
+            got["data"]["audio_path"].as_str().unwrap(),
+        ))
+        .unwrap();
         eprintln!(
             "audio_live[{be}]: {} ch, {} Hz, {:.2}s, rms L {:.3} R {:.3}, tone L {:.0} Hz R {:.0} Hz",
             w.channels, w.rate, w.duration_secs(), w.rms(0), w.rms(1), w.tone_hz(0), w.tone_hz(1)
         );
         assert_eq!(w.channels, 2, "{be}");
-        assert!(w.duration_secs() >= 4.0, "{be}: wav {:.2}s", w.duration_secs());
+        assert!(
+            w.duration_secs() >= 4.0,
+            "{be}: wav {:.2}s",
+            w.duration_secs()
+        );
         assert!(w.rms(0) > RMS_MIN, "{be}: system rms {}", w.rms(0));
         assert!(w.rms(1) > RMS_MIN, "{be}: mic rms {}", w.rms(1));
         // Right tone on the right channel: left = mic (880 Hz sink), right = system (440 Hz sink).
-        assert!((w.tone_hz(0) - 880.0).abs() < 30.0, "{be}: left (mic) {} Hz", w.tone_hz(0));
-        assert!((w.tone_hz(1) - 440.0).abs() < 15.0, "{be}: right (system) {} Hz", w.tone_hz(1));
+        assert!(
+            (w.tone_hz(0) - 880.0).abs() < 30.0,
+            "{be}: left (mic) {} Hz",
+            w.tone_hz(0)
+        );
+        assert!(
+            (w.tone_hz(1) - 440.0).abs() < 15.0,
+            "{be}: right (system) {} Hz",
+            w.tone_hz(1)
+        );
     }
 }
 
@@ -223,7 +265,12 @@ fn layout_mix_and_disabled_mic_over_ctl() {
     let (_, v) = e.json(&["record", "stop"]);
     let w = wav::read(std::path::Path::new(v["data"]["path"].as_str().unwrap())).unwrap();
     assert_eq!(w.channels, 2);
-    assert!(w.rms(1) > RMS_MIN && w.rms(0) == 0.0, "L (mic) {} R (system) {}", w.rms(0), w.rms(1));
+    assert!(
+        w.rms(1) > RMS_MIN && w.rms(0) == 0.0,
+        "L (mic) {} R (system) {}",
+        w.rms(0),
+        w.rms(1)
+    );
     assert_eq!(e.ctl(&["config", "set", "audio.layout", "mix"]).0, 0);
     let (code, _) = e.json(&["record", "start", "--session", "mixed"]);
     assert_eq!(code, 0);
@@ -235,7 +282,9 @@ fn layout_mix_and_disabled_mic_over_ctl() {
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stt").join(name)
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/stt")
+        .join(name)
 }
 
 /// Play a WAV file into a sink with `paplay` (it returns when the file has been played).
@@ -252,7 +301,10 @@ fn speech_played_into_the_sinks_becomes_live_and_final_transcripts() {
     if !live() {
         return;
     }
-    let Some(model) = std::env::var("OATS_WHISPER_MODEL").ok().filter(|m| !m.is_empty()) else {
+    let Some(model) = std::env::var("OATS_WHISPER_MODEL")
+        .ok()
+        .filter(|m| !m.is_empty())
+    else {
         eprintln!("audio_live: speech test skipped (set OATS_WHISPER_MODEL; build with --features oats-core/whisper)");
         return;
     };
@@ -272,17 +324,26 @@ fn speech_played_into_the_sinks_becomes_live_and_final_transcripts() {
     eprintln!("audio_live[speech]: stop -> {v}");
     let t = &v["data"]["transcription"];
     assert_eq!(t["state"], "done", "{t}");
-    assert_eq!((t["live"].as_str(), t["final"].as_str()), (Some("ok"), Some("ok")), "{t}");
-    assert!(t["live_utterances"].as_u64().unwrap() >= 2 && t["final_utterances"].as_u64().unwrap() >= 2, "{t}");
+    assert_eq!(
+        (t["live"].as_str(), t["final"].as_str()),
+        (Some("ok"), Some("ok")),
+        "{t}"
+    );
+    assert!(
+        t["live_utterances"].as_u64().unwrap() >= 2 && t["final_utterances"].as_u64().unwrap() >= 2,
+        "{t}"
+    );
 
     let dir = std::path::Path::new(&e.data).join("sessions/speech");
-    let expected: Value = serde_json::from_str(&std::fs::read_to_string(fixture("expected.json")).unwrap()).unwrap();
+    let expected: Value =
+        serde_json::from_str(&std::fs::read_to_string(fixture("expected.json")).unwrap()).unwrap();
     for kind in ["live", "final"] {
-        let lines: Vec<Value> = std::fs::read_to_string(dir.join(format!("transcript.{kind}.jsonl")))
-            .unwrap_or_default()
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let lines: Vec<Value> =
+            std::fs::read_to_string(dir.join(format!("transcript.{kind}.jsonl")))
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
         assert!(!lines.is_empty(), "{kind} transcript is empty");
         for (speaker, file) in [("you", "you.wav"), ("remote_1", "them.wav")] {
             let text = lines
@@ -302,6 +363,12 @@ fn speech_played_into_the_sinks_becomes_live_and_final_transcripts() {
     assert_eq!(code, 0, "{tr}");
     assert_eq!(tr["data"]["source"], "final");
     let (_, got) = e.json(&["session", "get", "speech"]);
-    assert!(got["data"]["duration_ms"].as_u64().unwrap() >= 5000, "{got}");
-    assert!(got["data"]["utterance_count"].as_u64().unwrap() >= 2, "{got}");
+    assert!(
+        got["data"]["duration_ms"].as_u64().unwrap() >= 5000,
+        "{got}"
+    );
+    assert!(
+        got["data"]["utterance_count"].as_u64().unwrap() >= 2,
+        "{got}"
+    );
 }

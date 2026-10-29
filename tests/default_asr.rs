@@ -29,10 +29,26 @@ fn rig(auto_download: bool, model_url: &str) -> Rig {
         secrets: None,
     })
     .unwrap();
-    engine.set("sessions.root", &json!(dir.path().join("rec").to_str().unwrap()), "test").unwrap();
-    engine.set("stt.local.models_dir", &json!(dir.path().join("models").to_str().unwrap()), "test").unwrap();
-    engine.set("stt.local.auto_download", &json!(auto_download), "test").unwrap();
-    engine.set("stt.local.model_url", &json!(model_url), "test").unwrap();
+    engine
+        .set(
+            "sessions.root",
+            &json!(dir.path().join("rec").to_str().unwrap()),
+            "test",
+        )
+        .unwrap();
+    engine
+        .set(
+            "stt.local.models_dir",
+            &json!(dir.path().join("models").to_str().unwrap()),
+            "test",
+        )
+        .unwrap();
+    engine
+        .set("stt.local.auto_download", &json!(auto_download), "test")
+        .unwrap();
+    engine
+        .set("stt.local.model_url", &json!(model_url), "test")
+        .unwrap();
     engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
     Rig { dir, engine }
 }
@@ -70,27 +86,51 @@ fn the_default_build_compiles_local_asr_and_names_the_missing_model() {
     assert_eq!(s["local"]["present"], false);
     assert_eq!(s["problem"]["code"], "model_not_found");
     assert_eq!(s["problem"]["fix"], "stt-model-fetch");
-    assert!(s["problem"]["message"].as_str().unwrap().contains("audio only"));
+    assert!(s["problem"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("audio only"));
 }
 
 #[test]
 fn recording_without_a_model_says_so_at_start_and_at_stop_and_keeps_the_audio() {
     let r = rig(false, "http://127.0.0.1:9");
-    let start = r.engine.dispatch(&Action::RecordStart { session: Some("s1".into()), title: None }).unwrap();
+    let start = r
+        .engine
+        .dispatch(&Action::RecordStart {
+            session: Some("s1".into()),
+            title: None,
+        })
+        .unwrap();
     let t = &start["transcription"];
-    assert_eq!((t["state"].as_str(), t["code"].as_str()), (Some("unavailable"), Some("model_not_found")));
-    assert!(t["reason"].as_str().unwrap().contains("stt model fetch"), "{t}");
+    assert_eq!(
+        (t["state"].as_str(), t["code"].as_str()),
+        (Some("unavailable"), Some("model_not_found"))
+    );
+    assert!(
+        t["reason"].as_str().unwrap().contains("stt model fetch"),
+        "{t}"
+    );
     std::thread::sleep(Duration::from_millis(600));
     let stop = r.engine.dispatch(&Action::RecordStop {}).unwrap();
     assert_eq!(stop["transcription"]["state"], "unavailable");
-    assert!(std::path::Path::new(stop["path"].as_str().unwrap()).is_file(), "the audio is kept");
+    assert!(
+        std::path::Path::new(stop["path"].as_str().unwrap()).is_file(),
+        "the audio is kept"
+    );
 }
 
 #[test]
 fn a_failed_download_is_visible_and_leaves_no_file() {
     let (url, _srv) = serve(b"definitely not a model");
     let r = rig(false, &url);
-    let e = r.engine.dispatch(&Action::SttModelFetch { model: None, wait: Some(true) }).unwrap_err();
+    let e = r
+        .engine
+        .dispatch(&Action::SttModelFetch {
+            model: None,
+            wait: Some(true),
+        })
+        .unwrap_err();
     assert_eq!(e.code, "model_checksum_mismatch");
     let s = status(&r);
     assert!(!r.dir.path().join("models/ggml-base.en.bin").exists());
@@ -104,10 +144,24 @@ fn the_first_recording_starts_the_download_and_tells_the_user() {
     let (url, _srv) = serve(b"definitely not a model");
     let r = rig(true, &url);
     let rx = r.engine.bus.subscribe(vec!["model-download".into()]);
-    let start = r.engine.dispatch(&Action::RecordStart { session: Some("s1".into()), title: None }).unwrap();
+    let start = r
+        .engine
+        .dispatch(&Action::RecordStart {
+            session: Some("s1".into()),
+            title: None,
+        })
+        .unwrap();
     assert_eq!(start["transcription"]["state"], "unavailable");
-    assert!(start["transcription"]["reason"].as_str().unwrap().contains("Downloading it now"), "{start}");
-    wait("the download to fail on the bad bytes", || status(&r)["local"]["download"]["state"] == "failed");
+    assert!(
+        start["transcription"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Downloading it now"),
+        "{start}"
+    );
+    wait("the download to fail on the bad bytes", || {
+        status(&r)["local"]["download"]["state"] == "failed"
+    });
     let first: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
     assert_eq!(first["data"]["state"], "downloading");
     r.engine.dispatch(&Action::RecordStop {}).unwrap();
@@ -117,12 +171,26 @@ fn the_first_recording_starts_the_download_and_tells_the_user() {
 fn fetch_without_wait_returns_at_once_and_a_present_model_is_left_alone() {
     let (url, _srv) = serve(b"definitely not a model");
     let r = rig(false, &url);
-    let v = r.engine.dispatch(&Action::SttModelFetch { model: None, wait: None }).unwrap();
+    let v = r
+        .engine
+        .dispatch(&Action::SttModelFetch {
+            model: None,
+            wait: None,
+        })
+        .unwrap();
     assert_eq!(v["state"], "downloading");
-    wait("the download to settle", || status(&r)["local"]["download"]["state"] == "failed");
+    wait("the download to settle", || {
+        status(&r)["local"]["download"]["state"] == "failed"
+    });
     std::fs::create_dir_all(r.dir.path().join("models")).unwrap();
     std::fs::write(r.dir.path().join("models/ggml-base.en.bin"), b"x").unwrap();
-    let v = r.engine.dispatch(&Action::SttModelFetch { model: None, wait: Some(true) }).unwrap();
+    let v = r
+        .engine
+        .dispatch(&Action::SttModelFetch {
+            model: None,
+            wait: Some(true),
+        })
+        .unwrap();
     assert_eq!(v["state"], "present");
     assert_eq!(status(&r)["problem"], Value::Null);
 }
@@ -136,11 +204,19 @@ fn with_a_model_the_default_record_path_turns_transcription_on() {
         return;
     };
     let r = rig(false, "http://127.0.0.1:9");
-    r.engine.set("stt.local.model", &json!("tiny.en"), "test").unwrap();
+    r.engine
+        .set("stt.local.model", &json!("tiny.en"), "test")
+        .unwrap();
     std::fs::create_dir_all(r.dir.path().join("models")).unwrap();
     std::fs::copy(model, r.dir.path().join("models/ggml-tiny.en.bin")).unwrap();
     assert_eq!(status(&r)["problem"], Value::Null);
-    let start = r.engine.dispatch(&Action::RecordStart { session: Some("s1".into()), title: None }).unwrap();
+    let start = r
+        .engine
+        .dispatch(&Action::RecordStart {
+            session: Some("s1".into()),
+            title: None,
+        })
+        .unwrap();
     assert_eq!(start["transcription"]["state"], "on", "{start}");
     r.engine.dispatch(&Action::RecordStop {}).unwrap();
 }

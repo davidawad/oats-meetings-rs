@@ -12,7 +12,11 @@ fn run(args: &[&str]) -> (i32, String, String) {
         .env("OATS_CONFIG", dir.path().join("config.toml"))
         .output()
         .unwrap();
-    (o.status.code().unwrap_or(-1), String::from_utf8_lossy(&o.stdout).into(), String::from_utf8_lossy(&o.stderr).into())
+    (
+        o.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&o.stdout).into(),
+        String::from_utf8_lossy(&o.stderr).into(),
+    )
 }
 
 #[test]
@@ -27,11 +31,19 @@ fn help_prints_usage_and_exits_zero() {
 
 #[test]
 fn unknown_flags_exit_two_with_the_flag_named_and_never_start_the_app() {
-    for args in [&["--frobnicate"][..], &["-x"], &["stray"], &["--headless", "--nope"]] {
+    for args in [
+        &["--frobnicate"][..],
+        &["-x"],
+        &["stray"],
+        &["--headless", "--nope"],
+    ] {
         let (code, out, err) = run(args);
         assert_eq!(code, 2, "{args:?}");
         assert!(out.is_empty(), "{out}");
-        assert!(err.contains(&format!("unknown argument '{}'", args.last().unwrap())), "{err}");
+        assert!(
+            err.contains(&format!("unknown argument '{}'", args.last().unwrap())),
+            "{err}"
+        );
         assert!(err.contains("usage: oats-meetings-rs"), "{err}");
     }
 }

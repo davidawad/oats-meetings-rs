@@ -36,10 +36,18 @@ impl Engine {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let e = Engine { child, rt, cfg, _dir: dir };
+        let e = Engine {
+            child,
+            rt,
+            cfg,
+            _dir: dir,
+        };
         let start = Instant::now();
         while e.ctl(&["ping"]).0 != 0 {
-            assert!(start.elapsed() < Duration::from_secs(30), "engine did not come up");
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "engine did not come up"
+            );
             std::thread::sleep(Duration::from_millis(50));
         }
         e
@@ -82,7 +90,8 @@ fn list_actions_json_equals_committed_manifest() {
     assert_eq!(code, 0);
     let v: Value = serde_json::from_str(out.trim()).unwrap();
     let committed: Value = serde_json::from_str(
-        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config/actions.json")).unwrap(),
+        &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config/actions.json"))
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(v["data"], committed);
@@ -92,7 +101,17 @@ fn list_actions_json_equals_committed_manifest() {
 fn subscribe_sees_setting_changed_after_ctl_config_set() {
     let e = Engine::start();
     let mut sub = cmd(&e.rt, &e.cfg)
-        .args(["ctl", "--json", "subscribe", "--topic", "setting-changed", "--count", "1", "--timeout-ms", "15000"])
+        .args([
+            "ctl",
+            "--json",
+            "subscribe",
+            "--topic",
+            "setting-changed",
+            "--count",
+            "1",
+            "--timeout-ms",
+            "15000",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -111,7 +130,10 @@ fn subscribe_sees_setting_changed_after_ctl_config_set() {
     let text = std::fs::read_to_string(&e.cfg).unwrap();
     assert!(text.contains("menubar = true"), "{text}");
     let (code, out, _) = e.ctl(&["config", "get", "app.menubar"]);
-    assert_eq!((code, out.trim()), (0, "{\"key\":\"app.menubar\",\"value\":true}"));
+    assert_eq!(
+        (code, out.trim()),
+        (0, "{\"key\":\"app.menubar\",\"value\":true}")
+    );
 }
 
 #[cfg(unix)]
@@ -120,7 +142,12 @@ fn garbage_bytes_do_not_kill_the_engine_process() {
     use std::os::unix::net::UnixStream;
     let e = Engine::start();
     let sock = format!("{}/control.sock", e.rt);
-    for payload in [&b"\xff\xfe\x00garbage"[..], b"{\"action\":", &[0u8; 5000][..], b"\n\n\n"] {
+    for payload in [
+        &b"\xff\xfe\x00garbage"[..],
+        b"{\"action\":",
+        &[0u8; 5000][..],
+        b"\n\n\n",
+    ] {
         let mut s = UnixStream::connect(&sock).unwrap();
         let _ = s.write_all(payload);
     }
@@ -165,16 +192,24 @@ fn ctl_without_engine_exits_three() {
 
 fn ids_of(out: &str) -> Vec<String> {
     let v: Value = serde_json::from_str(out.trim()).unwrap();
-    v["data"]["sessions"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap().to_string()).collect()
+    v["data"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_string())
+        .collect()
 }
 
 fn fixture_ids() -> Vec<String> {
-    let mut v: Vec<String> = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats"))
-        .unwrap()
-        .flatten()
-        .filter(|e| e.path().join("session.json").is_file())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
+    let mut v: Vec<String> = std::fs::read_dir(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/openoats"
+    ))
+    .unwrap()
+    .flatten()
+    .filter(|e| e.path().join("session.json").is_file())
+    .map(|e| e.file_name().to_string_lossy().into_owned())
+    .collect();
     v.sort();
     v
 }
@@ -202,9 +237,19 @@ fn ctl_session_delete_needs_confirm() {
     assert!(out.contains("confirmation_required"), "{out}");
     assert_eq!(ids_of(&e.ctl(&["--json", "session", "list"]).1).len(), 2);
     assert_eq!(e.ctl(&["session", "delete", id, "--confirm"]).0, 0);
-    assert_eq!(ids_of(&e.ctl(&["--json", "session", "list"]).1), vec![fixture_ids()[1].clone()]);
-    assert_eq!(e.ctl(&["session", "rename", &fixture_ids()[1], "Budget call"]).0, 0);
-    assert_eq!(e.ctl(&["session", "tag", &fixture_ids()[1], "finance"]).0, 0);
+    assert_eq!(
+        ids_of(&e.ctl(&["--json", "session", "list"]).1),
+        vec![fixture_ids()[1].clone()]
+    );
+    assert_eq!(
+        e.ctl(&["session", "rename", &fixture_ids()[1], "Budget call"])
+            .0,
+        0
+    );
+    assert_eq!(
+        e.ctl(&["session", "tag", &fixture_ids()[1], "finance"]).0,
+        0
+    );
     let (_, out, _) = e.ctl(&["--json", "session", "get", &fixture_ids()[1]]);
     let v: Value = serde_json::from_str(out.trim()).unwrap();
     assert_eq!(v["data"]["title"], "Budget call");
@@ -215,15 +260,31 @@ fn ctl_session_delete_needs_confirm() {
 /// can be run against it from the dotfiles side (see ci/meeting-compat.sh).
 #[test]
 fn engine_store_for_meeting_compat() {
-    let Some(dump) = std::env::var_os("OATS_STORE_DUMP") else { return };
+    let Some(dump) = std::env::var_os("OATS_STORE_DUMP") else {
+        return;
+    };
     let e = Engine::start();
     let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats");
     assert_eq!(e.ctl(&["session", "import", "--from", fixture]).0, 0);
-    assert_eq!(e.ctl(&["session", "rename", &fixture_ids()[0], "Acme sync (renamed)"]).0, 0);
+    assert_eq!(
+        e.ctl(&[
+            "session",
+            "rename",
+            &fixture_ids()[0],
+            "Acme sync (renamed)"
+        ])
+        .0,
+        0
+    );
     assert_eq!(e.ctl(&["session", "tag", &fixture_ids()[0], "sales"]).0, 0);
     let (_, out, _) = e.ctl(&["--json", "session", "list"]);
     let _ = out;
     let store = std::path::Path::new(&e.rt).join("../data/sessions");
-    let status = Command::new("cp").arg("-R").arg(&store).arg(&dump).status().unwrap();
+    let status = Command::new("cp")
+        .arg("-R")
+        .arg(&store)
+        .arg(&dump)
+        .status()
+        .unwrap();
     assert!(status.success());
 }
