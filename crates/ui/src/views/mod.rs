@@ -14,5 +14,9 @@ use crate::view::DIM;
 
 /// Body for a tab whose view has not been built yet.
 pub(crate) fn placeholder(id: &'static str, what: &str) -> AnyElement {
-    div().id(id).text_color(rgb(DIM)).child(format!("{what}: not available yet.")).into_any_element()
+    div()
+        .id(id)
+        .text_color(rgb(DIM))
+        .child(format!("{what}: not available yet."))
+        .into_any_element()
 }

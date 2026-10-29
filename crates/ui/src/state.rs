@@ -23,8 +23,16 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 8] =
-        [Tab::Live, Tab::Sessions, Tab::Notes, Tab::Templates, Tab::Calendar, Tab::Trash, Tab::Models, Tab::Settings];
+    pub const ALL: [Tab; 8] = [
+        Tab::Live,
+        Tab::Sessions,
+        Tab::Notes,
+        Tab::Templates,
+        Tab::Calendar,
+        Tab::Trash,
+        Tab::Models,
+        Tab::Settings,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {

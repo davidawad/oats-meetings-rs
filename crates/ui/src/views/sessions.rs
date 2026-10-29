@@ -5,11 +5,21 @@ use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString};
 use crate::view::{MainWindow, ACCENT, BG, FG, PANEL};
 
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
-    let list = div().id("sessions").flex().flex_col().gap_1().w(px(280.)).overflow_y_scroll().children(
-        w.state.sessions.iter().map(|s| {
+    let list = div()
+        .id("sessions")
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w(px(280.))
+        .overflow_y_scroll()
+        .children(w.state.sessions.iter().map(|s| {
             let id = s.id.clone();
             let sel = w.state.selected.as_deref() == Some(s.id.as_str());
-            let title = if s.title.is_empty() { s.id.clone() } else { s.title.clone() };
+            let title = if s.title.is_empty() {
+                s.id.clone()
+            } else {
+                s.title.clone()
+            };
             div()
                 .id(SharedString::from(format!("session-{}", s.id)))
                 .px_2()
@@ -23,12 +33,26 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                     this.state.select(&this.engine, &id);
                     cx.notify();
                 }))
-        }),
-    );
-    let detail = div().id("transcript").flex_1().min_w_0().overflow_y_scroll().child(MainWindow::lines(
-        &w.state.transcript,
-        if w.state.selected.is_some() { "Empty transcript." } else { "Select a session." },
-        w.speaker_width(),
-    ));
-    div().flex().gap_4().size_full().child(list).child(detail).into_any_element()
+        }));
+    let detail = div()
+        .id("transcript")
+        .flex_1()
+        .min_w_0()
+        .overflow_y_scroll()
+        .child(MainWindow::lines(
+            &w.state.transcript,
+            if w.state.selected.is_some() {
+                "Empty transcript."
+            } else {
+                "Select a session."
+            },
+            w.speaker_width(),
+        ));
+    div()
+        .flex()
+        .gap_4()
+        .size_full()
+        .child(list)
+        .child(detail)
+        .into_any_element()
 }
