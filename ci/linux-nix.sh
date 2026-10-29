@@ -4,6 +4,8 @@ set -euo pipefail
 source "$(dirname "$0")/nix-env.sh"
 [ -z "${SETUP_ONLY:-}" ] || return 0 2>/dev/null || exit 0
 set -x
+# main stays rustfmt-clean so pods' fmt steps are no-ops, not rebase conflicts (dot-4uzgol.42).
+cargo fmt --all --check
 # CROSS_TARGET=<triple>: only `cargo check` that target (no linking, no run).
 if [ -n "${CROSS_TARGET:-}" ]; then
   rustup target add "$CROSS_TARGET"
