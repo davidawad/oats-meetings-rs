@@ -46,6 +46,19 @@ pub struct EngineOpts {
 
 type Stamp = Option<(SystemTime, u64)>;
 
+/// What `privacy-toggle` warns, and the UI shows, where capture hiding cannot take effect.
+pub const CAPTURE_UNSUPPORTED: &str =
+    "hiding from screen capture is not supported on this platform; the window is still capturable";
+
+/// Whether this build's OS implements `privacy.hide_method` = `method`.
+pub fn hide_method_supported(method: &str) -> bool {
+    match method {
+        "sharing_type" => cfg!(target_os = "macos"),
+        "display_affinity" => cfg!(target_os = "windows"),
+        _ => false,
+    }
+}
+
 /// Takes part in config reload for audio: both sources off, or a named device that the backend can
 /// see is not there, vetoes the change. A running recording keeps the devices and layout it started
 /// with; `apply` says so on the bus (`recording-config-deferred`) and the new values take effect at
@@ -586,6 +599,18 @@ impl Engine {
         )
     }
 
+    /// Whether `privacy.hide_from_capture` can take effect: `privacy.hide_method` names a method
+    /// this build's OS implements (`none` never does).
+    pub fn capture_hiding_supported(&self) -> bool {
+        let m = self
+            .snapshot()
+            .resolved
+            .flat
+            .get("privacy.hide_method")
+            .cloned();
+        hide_method_supported(m.as_ref().and_then(Value::as_str).unwrap_or("none"))
+    }
+
     fn get(&self, key: &str) -> Result<Value> {
         self.snapshot()
             .resolved
@@ -652,11 +677,19 @@ impl Engine {
             }
             Action::PrivacyToggle {} => {
                 let cur = matches!(self.get("privacy.hide_from_capture")?, Value::Bool(true));
-                self.set(
+                let mut v = self.set(
                     "privacy.hide_from_capture",
                     &Value::Bool(!cur),
                     "privacy-toggle",
-                )
+                )?;
+                // The preference is stored either way, but say plainly when it does nothing here
+                // (dot-4uzgol.49): a user sharing the screen must not think the window is hidden.
+                let supported = self.capture_hiding_supported();
+                v["supported"] = json!(supported);
+                if !supported {
+                    v["warning"] = json!(CAPTURE_UNSUPPORTED);
+                }
+                Ok(v)
             }
             Action::DevicesList {} => self.recorder.devices(&self.audio_settings()?),
             Action::RecordStart { session, title } => {

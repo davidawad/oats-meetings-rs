@@ -37,13 +37,16 @@ pub struct Do {
     pub id: String,
 }
 
-fn menus() -> Vec<Menu> {
+fn menus(capture_supported: bool) -> Vec<Menu> {
     MENUS
         .iter()
         .map(|m| {
             Menu::new(m.title).items(m.items.iter().map(|e| match e.action {
                 None => MenuItem::separator(),
-                Some(id) => MenuItem::action(e.label, Do { id: id.to_string() }),
+                Some(id) => MenuItem::action(
+                    model::label(e, capture_supported),
+                    Do { id: id.to_string() },
+                ),
             }))
         })
         .collect()
@@ -86,6 +89,10 @@ struct Host {
     /// What the engine says the window should be (from `window-changed`).
     want_visible: bool,
     tray_gate: tray::Gate,
+    /// Tray entries as last shown; labels follow capture-hiding support.
+    tray_entries: Vec<model::Entry>,
+    /// Capture-hiding support the menus were last built for.
+    capture_supported: bool,
 }
 
 type Shared = Rc<RefCell<Host>>;
@@ -190,9 +197,19 @@ fn tick(host: &Shared, cx: &mut App) {
             let _ = w.update(cx, |v, _, cx| v.refresh(cx));
         }
     }
+    let supported = h.engine.capture_hiding_supported();
+    if supported != h.capture_supported {
+        // privacy.hide_method changed at runtime: relabel the menus, and re-show the tray.
+        h.capture_supported = supported;
+        h.tray_entries = model::entries(model::TRAY, supported);
+        cx.set_menus(menus(supported));
+        if h.tray.visible() {
+            h.tray.hide();
+        }
+    }
     let want = h.tray_state.wanted();
     let h = &mut *h;
-    if let Some(why) = h.tray_gate.step(want, &mut *h.tray, model::TRAY) {
+    if let Some(why) = h.tray_gate.step(want, &mut *h.tray, &h.tray_entries) {
         oats_core::elog!("oats-meetings-rs: app.menubar is on but {why}");
     }
     for id in h.tray.take_clicks() {
@@ -211,6 +228,7 @@ pub fn run_with(
     backend: Box<dyn TrayBackend>,
 ) -> i32 {
     let tray_state = Arc::new(TrayState::new(engine.snapshot().config.app.menubar));
+    let capture_supported = engine.capture_hiding_supported();
     engine.register(tray_state.clone());
     let handle = match server::serve(Arc::clone(&engine), runtime_dir) {
         Ok(h) => h,
@@ -232,12 +250,14 @@ pub fn run_with(
         applied_capture: None,
         want_visible: false,
         tray_gate: tray::Gate::default(),
+        tray_entries: model::entries(model::TRAY, capture_supported),
+        capture_supported,
     }));
     let h2 = Rc::clone(&host);
     gpui_platform::application().run(move |cx: &mut App| {
         cx.set_quit_mode(QuitMode::Explicit);
         cx.bind_keys(bindings(cx));
-        cx.set_menus(menus());
+        cx.set_menus(menus(capture_supported));
         let eng = Arc::clone(&h2.borrow().engine);
         cx.on_action(move |a: &Do, cx: &mut App| {
             // Off the UI thread: a record-start loads the ASR model and must not freeze the window.

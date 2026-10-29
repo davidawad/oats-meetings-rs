@@ -128,6 +128,30 @@ pub const TRAY: &[Entry] = &[
     item("Quit", "quit"),
 ];
 
+/// Label of the privacy toggle where `privacy.hide_method` cannot take effect (dot-4uzgol.49): it
+/// says so instead of offering an on/off that changes nothing.
+pub const PRIVACY_UNSUPPORTED_LABEL: &str =
+    "Hide from Screen Capture: not supported on this platform";
+
+/// The label a surface shows for `e`, given whether capture hiding works on this platform.
+pub fn label(e: &Entry, capture_supported: bool) -> &'static str {
+    match e.action {
+        Some("privacy-toggle") if !capture_supported => PRIVACY_UNSUPPORTED_LABEL,
+        _ => e.label,
+    }
+}
+
+/// `entries` with labels for this platform's capture support.
+pub fn entries(entries: &[Entry], capture_supported: bool) -> Vec<Entry> {
+    entries
+        .iter()
+        .map(|e| Entry {
+            label: label(e, capture_supported),
+            action: e.action,
+        })
+        .collect()
+}
+
 /// Actions the views invoke with arguments (buttons and edits in the main window).
 pub const VIEW_ACTIONS: &[&str] = &[
     "session-list",
@@ -238,6 +262,42 @@ pub fn manifest_ids() -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn privacy_toggle_says_unsupported_where_hiding_does_nothing() {
+        for surface in [TRAY, MENUS[0].items] {
+            let off = entries(surface, false);
+            let on = entries(surface, true);
+            let p = surface
+                .iter()
+                .position(|e| e.action == Some("privacy-toggle"))
+                .unwrap();
+            assert_eq!(off[p].label, PRIVACY_UNSUPPORTED_LABEL);
+            assert_eq!(on[p].label, "Hide from Screen Capture");
+            assert_eq!(off[p].action, Some("privacy-toggle"));
+            for (i, e) in surface.iter().enumerate().filter(|(i, _)| *i != p) {
+                assert_eq!((off[i], on[i]), (*e, *e));
+            }
+        }
+    }
+
+    #[test]
+    fn linux_engine_reports_capture_hiding_unsupported() {
+        // config/axes.json resolves hide_method none on Linux; the UI must not claim it works.
+        let (engine, _d) = crate::testutil::engine(&[]);
+        let supported = engine.capture_hiding_supported();
+        assert_eq!(
+            supported,
+            cfg!(any(target_os = "macos", target_os = "windows"))
+        );
+        if !supported {
+            let tray = entries(TRAY, supported);
+            assert!(tray.iter().any(|e| e.label == PRIVACY_UNSUPPORTED_LABEL));
+            let r = dispatch(&engine, "privacy-toggle", json!({})).unwrap();
+            assert_eq!(r["supported"], false);
+            assert!(r["warning"].is_string());
+        }
+    }
 
     #[test]
     fn actions_parity() {

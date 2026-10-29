@@ -361,6 +361,20 @@ fn config_set_persists_validates_and_never_touches_unrelated_files() {
 }
 
 #[test]
+fn privacy_toggle_warns_when_hide_method_is_none() {
+    // A user override of hide_method = none is the unsupported path on every OS (dot-4uzgol.49).
+    let rig = Rig::with_config(Some("[privacy]\nhide_method = \"none\"\n"));
+    let mut c = rig.client();
+    let r = c.call("privacy-toggle", Map::new()).unwrap();
+    assert_eq!(r["data"]["changed"], true);
+    assert_eq!(r["data"]["supported"], false);
+    assert_eq!(
+        r["data"]["warning"],
+        oats_core::control::engine::CAPTURE_UNSUPPORTED
+    );
+}
+
+#[test]
 fn privacy_toggle_and_window_actions() {
     let rig = Rig::new();
     let mut c = rig.client();
@@ -368,6 +382,17 @@ fn privacy_toggle_and_window_actions() {
     assert_eq!(r["data"]["value"], false); // default is true
     let r = c.call("privacy-toggle", Map::new()).unwrap();
     assert_eq!(r["data"]["value"], true);
+    if cfg!(not(any(target_os = "macos", target_os = "windows"))) {
+        // hide_method is none here: the toggle stores the value but warns it does nothing.
+        assert_eq!(r["data"]["supported"], false);
+        assert!(r["data"]["warning"]
+            .as_str()
+            .unwrap()
+            .contains("not supported on this platform"));
+    } else {
+        assert_eq!(r["data"]["supported"], true);
+        assert!(r["data"].get("warning").is_none());
+    }
     assert_eq!(
         c.call("window-toggle", Map::new()).unwrap()["data"]["visible"],
         true
