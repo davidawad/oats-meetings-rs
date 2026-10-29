@@ -589,7 +589,12 @@ mod tests {
         assert_eq!(e.code, "no_window");
         ctl(&host, &mut cx, "window-show", json!({})).unwrap();
         let w = host.borrow().window.expect("window opened");
-        for t in Tab::ALL {
+        if !oats_core::sessions::TRASH_LISTING {
+            let e = ctl(&host, &mut cx, "ui-select", json!({"tab": "trash"})).unwrap_err();
+            assert_eq!(e.code, "unsupported");
+            assert!(e.to_string().contains("Finder"), "{e}");
+        }
+        for t in Tab::shown() {
             let name = t.label().to_lowercase();
             let d = ctl(&host, &mut cx, "ui-select", json!({ "tab": name })).unwrap();
             assert_eq!(d["tab"], t.label());

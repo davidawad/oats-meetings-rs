@@ -779,6 +779,11 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     a == b || canon(a) == canon(b)
 }
 
+/// Whether this OS lets the app list, restore and purge the trash (`trash-list`). Where it is
+/// false (macOS) `delete` still moves sessions to the trash, but only the Finder can put them back,
+/// so the GUI hides its Trash tab there.
+pub const TRASH_LISTING: bool = os_trash::SUPPORTED;
+
 /// OS trash entries that came from `root`, newest first.
 fn trashed(root: &Path) -> Result<Vec<trash::TrashItem>> {
     if !os_trash::SUPPORTED {

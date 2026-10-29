@@ -221,19 +221,23 @@ impl MainWindow {
     }
 
     fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().gap_2().flex_none().children(Tab::ALL.map(|t| {
-            let active = self.state.tab == t;
-            div()
-                .id(SharedString::from(format!("tab-{}", t.label())))
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .bg(rgb(if active { ACCENT } else { PANEL }))
-                .text_color(rgb(if active { BG } else { FG }))
-                .child(t.label())
-                .on_click(cx.listener(move |this, _, _, cx| this.switch_tab(t, cx)))
-        }))
+        div()
+            .flex()
+            .gap_2()
+            .flex_none()
+            .children(Tab::shown().into_iter().map(|t| {
+                let active = self.state.tab == t;
+                div()
+                    .id(SharedString::from(format!("tab-{}", t.label())))
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgb(if active { ACCENT } else { PANEL }))
+                    .text_color(rgb(if active { BG } else { FG }))
+                    .child(t.label())
+                    .on_click(cx.listener(move |this, _, _, cx| this.switch_tab(t, cx)))
+            }))
     }
 
     /// A tab-bar click: views that cache engine reads reload them on entry.

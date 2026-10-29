@@ -131,13 +131,22 @@ fn bad(msg: impl Into<String>) -> ConfigError {
 }
 
 pub fn tab_named(name: &str) -> Result<Tab> {
-    Tab::ALL
-        .into_iter()
+    let shown = Tab::shown();
+    if let Some(t) = shown
+        .iter()
+        .copied()
         .find(|t| t.label().eq_ignore_ascii_case(name.trim()))
-        .ok_or_else(|| {
-            let all: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
-            bad(format!("no tab '{name}'; tabs: {}", all.join(", ")))
-        })
+    {
+        return Ok(t);
+    }
+    if Tab::Trash.label().eq_ignore_ascii_case(name.trim()) {
+        return Err(ConfigError::new(
+            "unsupported",
+            "there is no Trash tab on this OS: trashed sessions are in the Finder Trash (Put Back restores them)",
+        ));
+    }
+    let all: Vec<&str> = shown.iter().map(|t| t.label()).collect();
+    Err(bad(format!("no tab '{name}'; tabs: {}", all.join(", "))))
 }
 
 fn arg<'a>(args: &'a Value, k: &str) -> Option<&'a str> {
@@ -457,6 +466,7 @@ impl MainWindow {
                 "selected": st.selected,
                 "transcript": lines(&st.transcript),
                 "confirm_delete": st.sessions_ui.confirm,
+                "delete_label": sessions::delete_label(self.engine.snapshot().config.sessions.delete_mode),
                 "transcribing": st.sessions_ui.transcribing,
             }),
             Tab::Notes => {
@@ -558,7 +568,7 @@ impl MainWindow {
         };
         json!({
             "tab": st.tab.label(),
-            "tabs": Tab::ALL.map(Tab::label),
+            "tabs": Tab::shown().into_iter().map(Tab::label).collect::<Vec<_>>(),
             "status": st.status,
             "banner": st.stt_problem.as_ref().map(|p| json!({"message": p.message, "fix": p.fix})),
             "recording": {

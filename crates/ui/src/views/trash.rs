@@ -34,7 +34,12 @@ pub struct Trash {
 }
 
 impl Trash {
+    /// Reads `trash-list`. A no-op where the OS trash cannot be listed (macOS): there is no
+    /// Trash tab to show it, and every refresh would only repeat the `unsupported` error.
     pub fn load(&mut self, engine: &Engine) {
+        if !oats_core::sessions::TRASH_LISTING {
+            return;
+        }
         match model::dispatch(engine, "trash-list", json!({})) {
             Ok(v) => {
                 self.items = v["trash"]

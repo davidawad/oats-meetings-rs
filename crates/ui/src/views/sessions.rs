@@ -433,13 +433,20 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         .into_any_element()
 }
 
+/// The delete button's label. Where the app cannot list the OS trash (macOS: no Trash tab) it
+/// names the Finder Trash, the only place a trashed session can be put back from.
+pub fn delete_label(mode: DeleteMode) -> &'static str {
+    match mode {
+        DeleteMode::Trash if oats_core::sessions::TRASH_LISTING => "Move to trash",
+        DeleteMode::Trash => "Move to Finder Trash",
+        DeleteMode::Remove => "Delete",
+    }
+}
+
 /// Title, rename, tags and delete for the selected session.
 fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyElement {
     let cfg = w.engine.snapshot();
-    let del_label = match cfg.config.sessions.delete_mode {
-        DeleteMode::Trash => "Move to trash",
-        DeleteMode::Remove => "Delete",
-    };
+    let del_label = delete_label(cfg.config.sessions.delete_mode);
     let armed = w.state.sessions_ui.confirm.as_deref() == Some(s.id.as_str());
     let (id, id2) = (s.id.clone(), s.id.clone());
     let mut actions = div()
@@ -874,6 +881,22 @@ mod tests {
         });
         cx.run_until_parked();
         assert_eq!(chips(cx), [false, false, false]);
+    }
+
+    #[test]
+    fn delete_label_names_the_finder_trash_where_the_app_has_no_trash_tab() {
+        let trash = delete_label(DeleteMode::Trash);
+        if oats_core::sessions::TRASH_LISTING {
+            assert_eq!(trash, "Move to trash");
+        } else {
+            assert_eq!(trash, "Move to Finder Trash");
+        }
+        assert_eq!(
+            Tab::shown().contains(&Tab::Trash),
+            trash == "Move to trash",
+            "a trash button the app cannot undo has no Trash tab, and vice versa"
+        );
+        assert_eq!(delete_label(DeleteMode::Remove), "Delete");
     }
 
     #[test]

@@ -34,6 +34,15 @@ impl Tab {
         Tab::Settings,
     ];
 
+    /// The tabs in the nav on this OS: without a trash listing API (macOS) there is no Trash
+    /// tab, since sessions moved to the trash can only be put back from the Finder.
+    pub fn shown() -> Vec<Tab> {
+        Tab::ALL
+            .into_iter()
+            .filter(|t| *t != Tab::Trash || oats_core::sessions::TRASH_LISTING)
+            .collect()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Tab::Live => "Live",
@@ -784,6 +793,20 @@ mod tests {
         for t in ["Notes", "Templates", "Calendar", "Trash", "Models"] {
             assert!(labels.contains(t), "{t}");
         }
+    }
+
+    #[test]
+    fn the_trash_tab_is_shown_only_where_the_trash_can_be_listed() {
+        let shown = Tab::shown();
+        assert_eq!(
+            shown.contains(&Tab::Trash),
+            oats_core::sessions::TRASH_LISTING
+        );
+        assert_eq!(
+            shown.len(),
+            Tab::ALL.len() - usize::from(!oats_core::sessions::TRASH_LISTING)
+        );
+        assert_eq!(shown[0], Tab::default());
     }
 
     #[test]
