@@ -571,6 +571,52 @@
       "status": "implemented"
     },
     {
+      "doc": "Create a note template, or edit (and rename) the one named previous; icon \"\" clears it; overwrite replaces a same-named template on create.",
+      "effect": "write",
+      "name": "template-save",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "system_prompt",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "icon",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "previous",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Delete a note template file.",
+      "effect": "write",
+      "name": "template-delete",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Import an OpenOats templates.json into the templates folder.",
       "effect": "write",
       "name": "template-import",

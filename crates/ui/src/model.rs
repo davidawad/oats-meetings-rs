@@ -147,6 +147,9 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "notes-get",
     "notes-set",
     "notes-generate",
+    "template-get",
+    "template-save",
+    "template-delete",
 ];
 
 /// Actions with deliberately no UI surface: protocol plumbing, or batch/automation verbs that need
@@ -172,7 +175,6 @@ pub const EXEMPT: &[(&str, &str)] = &[
         "transcript-search",
         "planned in the engine; search box lands with it",
     ),
-    ("template-get", "agent query (ctl)"),
     ("template-import", "one-shot migration verb (ctl)"),
     ("kb-search", "agent query (ctl)"),
 ];

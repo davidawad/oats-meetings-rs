@@ -743,6 +743,39 @@ fn template_list_get_import() {
 }
 
 #[test]
+fn template_save_and_delete() {
+    let rig = Rig::new("", &[]);
+    let mut c = rig.client();
+    let save = |c: &mut Client, kv: &[(&str, Value)]| c.call("template-save", p(kv)).unwrap();
+    let r = save(&mut c, &[("name", json!("Retro")), ("system_prompt", json!("## Went Well\n## To Improve")), ("icon", json!("star"))]);
+    assert_eq!(r["data"]["created"], true, "{r}");
+    assert!(rig.dir.join("templates/retro.toml").is_file());
+    let g = c.call("template-get", p(&[("name", json!("retro"))])).unwrap();
+    assert_eq!(g["data"]["headings"], json!(["## Went Well", "## To Improve"]));
+    assert_eq!(g["data"]["icon"], "star");
+    // Create over an existing name conflicts; editing it (previous) does not, and keeps the OpenOats id.
+    let dup = save(&mut c, &[("name", json!("Stand-Up")), ("system_prompt", json!("x"))]);
+    assert_eq!(dup["error"]["code"], "conflict");
+    let id = c.call("template-get", p(&[("name", json!("Stand-Up"))])).unwrap()["data"]["openoats_id"].clone();
+    let r = save(&mut c, &[("name", json!("Daily")), ("system_prompt", json!("## Today")), ("previous", json!("stand-up"))]);
+    assert_eq!(r["data"]["created"], false, "{r}");
+    assert!(!rig.dir.join("templates/stand-up.toml").exists());
+    assert_eq!(c.call("template-get", p(&[("name", json!("Daily"))])).unwrap()["data"]["openoats_id"], id);
+    let bad = save(&mut c, &[("name", json!("Z")), ("system_prompt", json!(" "))]);
+    assert_eq!(bad["error"]["code"], "invalid_value");
+    // Delete.
+    assert_eq!(c.call("template-delete", p(&[("name", json!("RETRO"))])).unwrap()["data"]["name"], "Retro");
+    assert_eq!(c.call("template-delete", p(&[("name", json!("Retro"))])).unwrap()["error"]["code"], "not_found");
+    let names: Vec<String> = c.call("template-list", Map::new()).unwrap()["data"]["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names, ["Daily", "Generic", "Sales Prospect Call"]);
+}
+
+#[test]
 fn templates_dir_key_moves_the_template_store() {
     let other = tempfile::tempdir().unwrap();
     let toml = format!(

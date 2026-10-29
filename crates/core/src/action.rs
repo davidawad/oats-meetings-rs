@@ -84,6 +84,8 @@ actions! {
     NotesSet, "notes-set", "Replace a session's notes with edited text (marked edited; template and backend kept).", "implemented", "write", { session: String, notes: String };
     TemplateList, "template-list", "List note templates.", "implemented", "read", {};
     TemplateGet, "template-get", "One note template.", "implemented", "read", { name: String };
+    TemplateSave, "template-save", "Create a note template, or edit (and rename) the one named previous; icon \"\" clears it; overwrite replaces a same-named template on create.", "implemented", "write", { name: String, system_prompt: String, icon: Option<String>, previous: Option<String>, overwrite: Option<bool> };
+    TemplateDelete, "template-delete", "Delete a note template file.", "implemented", "write", { name: String };
     TemplateImport, "template-import", "Import an OpenOats templates.json into the templates folder.", "implemented", "write", { from: String, overwrite: Option<bool> };
     KbSearch, "kb-search", "Search the knowledge base (deterministic ranking).", "implemented", "read", { query: String, limit: Option<u64> };
     KbReindex, "kb-reindex", "Rebuild the knowledge base index.", "implemented", "write", {};

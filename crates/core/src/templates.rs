@@ -63,6 +63,11 @@ pub fn parse(text: &str, origin: &str) -> Result<Template> {
 
 /// All templates in `dir`, sorted by name. A missing directory is an empty list.
 pub fn load_all(dir: &Path) -> Result<Vec<Template>> {
+    Ok(load_files(dir)?.into_iter().map(|(_, t)| t).collect())
+}
+
+/// Like `load_all`, with the file each template was read from (hand-named files keep their name).
+fn load_files(dir: &Path) -> Result<Vec<(PathBuf, Template)>> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Ok(vec![]);
     };
@@ -75,10 +80,15 @@ pub fn load_all(dir: &Path) -> Result<Vec<Template>> {
     let mut out = vec![];
     for p in paths {
         let text = std::fs::read_to_string(&p).map_err(|e| io(&p, e))?;
-        out.push(parse(&text, &p.display().to_string())?);
+        let t = parse(&text, &p.display().to_string())?;
+        out.push((p, t));
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.sort_by(|a, b| a.1.name.cmp(&b.1.name));
     Ok(out)
+}
+
+fn not_found(dir: &Path, name: &str) -> ConfigError {
+    ConfigError::new("not_found", format!("no template named {name:?} in {}", dir.display()))
 }
 
 /// Case-insensitive lookup by name.
@@ -86,12 +96,7 @@ pub fn find(dir: &Path, name: &str) -> Result<Template> {
     load_all(dir)?
         .into_iter()
         .find(|t| t.name.eq_ignore_ascii_case(name))
-        .ok_or_else(|| {
-            ConfigError::new(
-                "not_found",
-                format!("no template named {name:?} in {}", dir.display()),
-            )
-        })
+        .ok_or_else(|| not_found(dir, name))
 }
 
 pub fn slug(name: &str) -> String {
@@ -130,6 +135,51 @@ fn write_template(dir: &Path, t: &Template) -> Result<PathBuf> {
         .and_then(|_| std::fs::rename(&tmp, &path))
         .map_err(|e| io(&path, e))?;
     Ok(path)
+}
+
+/// Create or edit a template. With `previous`, the named template is replaced (renamed when `name`
+/// differs; its file moves and its `openoats_id` is kept); without it this is a create, and a
+/// template already at the same file is a conflict unless `overwrite`. An empty `icon` clears it.
+pub fn save(dir: &Path, name: &str, system_prompt: &str, icon: Option<&str>, previous: Option<&str>, overwrite: bool) -> Result<Value> {
+    let files = load_files(dir)?;
+    let old = match previous {
+        Some(p) => Some(files.iter().find(|(_, t)| t.name.eq_ignore_ascii_case(p)).ok_or_else(|| not_found(dir, p))?),
+        None => None,
+    };
+    let t = Template {
+        schema_version: SCHEMA_VERSION,
+        name: name.trim().to_string(),
+        icon: icon.map(str::trim).filter(|i| !i.is_empty()).map(str::to_string),
+        system_prompt: system_prompt.to_string(),
+        openoats_id: old.and_then(|(_, t)| t.openoats_id.clone()),
+    };
+    // Same validation as reading the file back.
+    parse(&toml::to_string(&t).map_err(|e| ConfigError::new("parse_error", e.to_string()))?, name)?;
+    let clash = files.iter().find(|(p, e)| {
+        old.is_none_or(|(op, _)| op != p) && (e.name.eq_ignore_ascii_case(&t.name) || slug(&e.name) == slug(&t.name))
+    });
+    if let Some((p, e)) = clash {
+        if old.is_some() || !overwrite {
+            return Err(ConfigError::new(
+                "conflict",
+                format!("template {:?} already exists ({}); use overwrite or another name", e.name, p.display()),
+            ));
+        }
+    }
+    let path = write_template(dir, &t)?;
+    // The old file goes when the template moved (renamed, or created over a hand-named file).
+    for gone in old.into_iter().chain(clash).map(|(p, _)| p).filter(|p| **p != path) {
+        std::fs::remove_file(gone).map_err(|e| io(gone, e))?;
+    }
+    Ok(json!({"name": t.name, "path": path, "created": old.is_none() && clash.is_none()}))
+}
+
+/// Delete the named template's file (case-insensitive name).
+pub fn delete(dir: &Path, name: &str) -> Result<Value> {
+    let files = load_files(dir)?;
+    let (p, t) = files.iter().find(|(_, t)| t.name.eq_ignore_ascii_case(name)).ok_or_else(|| not_found(dir, name))?;
+    std::fs::remove_file(p).map_err(|e| io(p, e))?;
+    Ok(json!({"name": t.name, "path": p}))
 }
 
 /// Import an OpenOats `templates.json` (`{"version":1,"templates":[{name,icon,systemPrompt,id,..}]}`).
@@ -307,6 +357,43 @@ mod tests {
             parse(&ok.replace("\"A\"", "\"\""), "t").unwrap_err().code,
             "invalid_value"
         );
+    }
+
+    #[test]
+    fn save_creates_edits_renames_and_deletes() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("t");
+        let r = save(&dir, "Stand-Up", "## Yesterday", Some("person"), None, false).unwrap();
+        assert_eq!(r["created"], true);
+        assert!(dir.join("stand-up.toml").is_file());
+        assert_eq!(find(&dir, "stand-up").unwrap().icon.as_deref(), Some("person"));
+        // Create over an existing one is a conflict until overwrite.
+        assert_eq!(save(&dir, "stand up", "x", None, None, false).unwrap_err().code, "conflict");
+        save(&dir, "Stand-Up", "## Today", None, None, true).unwrap();
+        assert_eq!(find(&dir, "Stand-Up").unwrap().system_prompt, "## Today");
+        // Edit in place keeps openoats_id; an empty icon clears it.
+        std::fs::write(
+            dir.join("hand.toml"),
+            "schema_version = 1\nname = \"1:1\"\nicon = \"i\"\nsystem_prompt = \"p\"\nopenoats_id = \"BBBB\"\n",
+        )
+        .unwrap();
+        let r = save(&dir, "1:1", "## Points", Some(""), Some("1:1"), false).unwrap();
+        assert_eq!(r["created"], false);
+        assert!(!dir.join("hand.toml").exists(), "hand-named file moves to its slug");
+        let t = find(&dir, "1:1").unwrap();
+        assert_eq!((t.icon, t.openoats_id.as_deref()), (None, Some("BBBB")));
+        // Rename moves the file; renaming onto another template is a conflict even with overwrite.
+        save(&dir, "One on One", "## Points", None, Some("1:1"), false).unwrap();
+        assert!(dir.join("one-on-one.toml").is_file() && !dir.join("1-1.toml").exists());
+        assert_eq!(save(&dir, "Stand-Up", "p", None, Some("One on One"), true).unwrap_err().code, "conflict");
+        assert_eq!(save(&dir, "X", "p", None, Some("absent"), false).unwrap_err().code, "not_found");
+        assert_eq!(save(&dir, " ", "p", None, None, false).unwrap_err().code, "invalid_value");
+        assert_eq!(save(&dir, "Y", "", None, None, false).unwrap_err().code, "invalid_value");
+        // Delete.
+        assert_eq!(delete(&dir, "one on one").unwrap()["name"], "One on One");
+        assert_eq!(delete(&dir, "one on one").unwrap_err().code, "not_found");
+        let names: Vec<String> = load_all(&dir).unwrap().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["Stand-Up"]);
     }
 
     #[test]

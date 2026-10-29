@@ -768,6 +768,11 @@ impl Engine {
                 v["headings"] = json!(templates::required_headings(&t.system_prompt));
                 Ok(v)
             }
+            Action::TemplateSave { name, system_prompt, icon, previous, overwrite } => {
+                let tdir = self.templates_dir(&self.snapshot().config);
+                templates::save(&tdir, name, system_prompt, icon.as_deref(), previous.as_deref(), overwrite.unwrap_or(false))
+            }
+            Action::TemplateDelete { name } => templates::delete(&self.templates_dir(&self.snapshot().config), name),
             Action::TemplateImport { from, overwrite } => {
                 let tdir = self.templates_dir(&self.snapshot().config);
                 templates::import_openoats(Path::new(from), &tdir, overwrite.unwrap_or(false))
