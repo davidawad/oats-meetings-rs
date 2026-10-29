@@ -535,6 +535,30 @@ fn quit_stops_the_engine_and_removes_the_socket() {
     assert!(Client::connect(&rig.rt).is_err());
 }
 
+#[test]
+fn quit_removes_engine_lock() {
+    let mut rig = Rig::new();
+    let lock = paths::lock_path(&rig.rt);
+    assert!(lock.exists());
+    let mut c = rig.client();
+    c.call("quit", Map::new()).unwrap();
+    rig.handle.take().unwrap().wait();
+    assert!(!lock.exists(), "engine.lock left on disk after quit");
+}
+
+#[test]
+fn instance_lock_release_removes_engine_lock_and_frees_it() {
+    let mut rig = Rig::new();
+    let lock = paths::lock_path(&rig.rt);
+    let handle = rig.handle.take().unwrap();
+    handle.instance_lock().release();
+    assert!(!lock.exists());
+    // Idempotent, and shutdown after it does not fail.
+    handle.instance_lock().release();
+    handle.shutdown();
+    assert!(!lock.exists());
+}
+
 fn fixture() -> String {
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/openoats").to_string()
 }

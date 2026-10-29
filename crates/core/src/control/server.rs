@@ -34,6 +34,19 @@ pub struct ServerHandle {
     accept: Option<JoinHandle<()>>,
     watcher: Option<JoinHandle<()>>,
     current: Arc<Mutex<PathBuf>>,
+    lock: Arc<LockSubsystem>,
+}
+
+/// The single-instance lock, for a shutdown that cannot wait for `ServerHandle::shutdown` (the GUI
+/// on macOS, where `cx.quit()` ends the process from inside the run loop).
+#[derive(Clone)]
+pub struct InstanceLock(Arc<LockSubsystem>);
+
+impl InstanceLock {
+    /// Remove `engine.lock` and unlock it, if held. Idempotent.
+    pub fn release(&self) {
+        self.0.release();
+    }
 }
 
 impl ServerHandle {
@@ -48,6 +61,10 @@ impl ServerHandle {
 
     pub fn engine(&self) -> &Arc<Engine> {
         &self.engine
+    }
+
+    pub fn instance_lock(&self) -> InstanceLock {
+        InstanceLock(Arc::clone(&self.lock))
     }
 
     /// Block until the engine is told to quit and the accept loop has ended.
@@ -68,7 +85,8 @@ impl ServerHandle {
         if let Some(h) = self.watcher.take() {
             let _ = h.join();
         }
-        // Release the lock and stop taking part in reloads.
+        // Release the lock (removing engine.lock) and stop taking part in reloads.
+        self.lock.release();
         self.engine.unregister("lock");
         self.engine.unregister("control");
     }
@@ -107,6 +125,17 @@ struct LockSubsystem {
     path: PathBuf,
     held: Mutex<Option<File>>,
     pending: Mutex<Option<File>>,
+}
+
+impl LockSubsystem {
+    /// Unlink while still locked, then unlock: no other engine ever sees the file unlocked.
+    fn release(&self) {
+        *self.pending.lock().expect("lock") = None;
+        if let Some(f) = self.held.lock().expect("lock").take() {
+            let _ = std::fs::remove_file(&self.path);
+            drop(f);
+        }
+    }
 }
 
 impl Subsystem for LockSubsystem {
@@ -255,11 +284,12 @@ fn serve_inner(
     let listener = bind(&socket)?;
     let current = Arc::new(Mutex::new(socket.clone()));
     let desired = Arc::new(Mutex::new(socket));
-    engine.register(Arc::new(LockSubsystem {
+    let lock = Arc::new(LockSubsystem {
         path: paths::lock_path(runtime_dir),
         held: Mutex::new(held),
         pending: Mutex::new(None),
-    }));
+    });
+    engine.register(Arc::clone(&lock) as Arc<dyn Subsystem>);
     engine.register(Arc::new(ControlSubsystem {
         default: default_socket,
         desired: Arc::clone(&desired),
@@ -334,6 +364,7 @@ fn serve_inner(
         accept: Some(accept),
         watcher: Some(watcher),
         current,
+        lock,
     })
 }
 

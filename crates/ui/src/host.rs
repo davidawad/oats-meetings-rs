@@ -19,6 +19,7 @@ use gpui::{
 };
 use oats_core::config::ConfigError;
 use oats_core::control::engine::Engine;
+use oats_core::control::server::InstanceLock;
 use oats_core::control::{paths, server};
 use serde_json::{json, Value};
 
@@ -107,6 +108,9 @@ struct Host {
     quitting: bool,
     /// How many times the app took focus (`cx.activate`); only explicit show requests do.
     activations: usize,
+    /// Released at quit, before `cx.quit()`: on macOS the run loop exits the process and the code
+    /// after `run()` never runs (dot-4uzgol.60).
+    lock: Option<InstanceLock>,
 }
 
 /// Ends the process with a code: `std::process::exit`; tests record the call instead.
@@ -250,6 +254,9 @@ fn tick(host: &Shared, cx: &mut App) {
             // Close the window first: a live window must not keep the run loop's terminate waiting.
             if let Some(w) = h.window.take() {
                 let _ = w.update(cx, |_, window, _| window.remove_window());
+            }
+            if let Some(l) = &h.lock {
+                l.release();
             }
             // The watchdog (spawn_quit_watchdog) backs this up if the run loop never ends.
             cx.quit();
@@ -420,6 +427,7 @@ pub fn run_with(
         launch_show: false,
         quitting: false,
         activations: 0,
+        lock: Some(handle.instance_lock()),
     }));
     let h2 = Rc::clone(&host);
     gpui_platform::application().run(move |cx: &mut App| {
@@ -499,6 +507,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            lock: None,
         }));
         let mut cx = TestAppContext::single();
         let step = |action: &str, cx: &mut TestAppContext| {
@@ -543,6 +552,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            lock: None,
         }))
     }
 
@@ -717,6 +727,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            lock: None,
         }));
         let mut cx = TestAppContext::single();
         let tick_n = |n: usize, cx: &mut TestAppContext| {
@@ -758,6 +769,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            lock: None,
         }))
     }
 
@@ -860,6 +872,26 @@ mod tests {
         // Later ticks do not quit again.
         tick_once(&host, &mut cx);
         assert!(host.borrow().quitting);
+    }
+
+    #[test]
+    fn the_quit_tick_removes_engine_lock_before_cx_quit() {
+        let (engine, d) = testutil::engine(&[]);
+        assert!(engine.snapshot().config.app.single_instance);
+        let rt = d.path().join("rt");
+        let handle = server::serve(Arc::clone(&engine), &rt).unwrap();
+        let lock = paths::lock_path(&rt);
+        assert!(lock.exists());
+        let host = plain_host(&engine);
+        host.borrow_mut().lock = Some(handle.instance_lock());
+        let mut cx = TestAppContext::single();
+        model::dispatch(&engine, "quit", json!({})).unwrap();
+        tick_once(&host, &mut cx);
+        assert!(host.borrow().quitting);
+        // The server handle is still alive: on macOS nothing after `cx.quit()` runs.
+        assert!(!lock.exists(), "engine.lock left on disk at quit");
+        handle.shutdown();
+        assert!(!lock.exists());
     }
 
     /// Wait (this thread blocked, the way a wedged main thread is) until `cond` or 10 s.
