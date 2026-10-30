@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Derive every icon format from the vendored 1024px source. Pure function of assets/icon/AppIcon.png.
+# Derive every icon format from the committed 1024px icon A source (blueprint icon, dot-4uzgol.12). Pure function of assets/icon/AppIcon.png.
 # Run in a pod: bin/pod-run <repo> <ref> bash ci/icons.sh   (outputs under assets/icon/derived/)
 # The .icns itself (iconutil -c icns) is macOS-only and is proven by dot-4uzgol.15; this emits the iconset inputs.
 set -euo pipefail
 NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
 nixf=(--extra-experimental-features "nix-command flakes")
 src=assets/icon/AppIcon.png
-want=2a737b79d6e467c72821d648bcb12bf535381d569dde54a291e09c783e45b226
-[ "$(sha256sum "$src" | cut -d' ' -f1)" = "$want" ] || { echo "icons.sh: $src sha256 differs from upstream" >&2; exit 1; }
+want=3ca009ee245f9cf95ac7157a7e860d3156af6e9eb0c43a5012ccc53df65920d5
+[ "$(sha256sum "$src" | cut -d' ' -f1)" = "$want" ] || { echo "icons.sh: $src sha256 differs from the pinned icon A" >&2; exit 1; }
 im=$(nix "${nixf[@]}" build --no-link --print-out-paths "$NIXPKGS#imagemagick" | head -1)
 export PATH="$im/bin:$PATH"
 out=${1:-assets/icon/derived}

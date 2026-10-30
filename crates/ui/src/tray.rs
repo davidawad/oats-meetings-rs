@@ -123,12 +123,11 @@ pub mod native {
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-    /// 16x16 flat placeholder glyph; the real icon is the packaging bead's (dot-4uzgol.10).
+    /// Icon A (assets/icon/AppIcon.png) downscaled to 32x32 raw RGBA (dot-4uzgol.12).
+    const GLYPH_RGBA: &[u8] = include_bytes!("../../../assets/icon/tray-32.rgba");
+
     fn glyph() -> Result<Icon, String> {
-        let px: Vec<u8> = (0..16 * 16)
-            .flat_map(|_| [0x89u8, 0xb4, 0xfa, 0xff])
-            .collect();
-        Icon::from_rgba(px, 16, 16).map_err(|e| e.to_string())
+        Icon::from_rgba(GLYPH_RGBA.to_vec(), 32, 32).map_err(|e| e.to_string())
     }
 
     #[derive(Default)]

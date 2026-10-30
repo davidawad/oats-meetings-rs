@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="1024"
+   height="1024"
+   viewBox="0 0 1024 1024"
+   version="1.1"
+   id="svg49"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs4">
+    <linearGradient
+       id="bg"
+       x1="0"
+       y1="0"
+       x2="0"
+       y2="1">
+      <stop
+         offset="0"
+         stop-color="#2A5FA8"
+         id="stop1" />
+      <stop
+         offset="1"
+         stop-color="#1E4D8C"
+         id="stop2" />
+    </linearGradient>
+    <clipPath
+       id="sq">
+      <rect
+         x="40"
+         y="40"
+         width="944"
+         height="944"
+         rx="208"
+         id="rect2" />
+    </clipPath>
+    <clipPath
+       id="cap">
+      <rect
+         x="270"
+         y="150"
+         width="140"
+         height="270"
+         rx="70"
+         id="rect3" />
+    </clipPath>
+    <filter
+       id="rough"
+       x="-5%"
+       y="-5%"
+       width="110%"
+       height="110%">
+      <feTurbulence
+         type="fractalNoise"
+         baseFrequency="0.035"
+         numOctaves="2"
+         seed="7"
+         id="feTurbulence3" />
+      <feDisplacementMap
+         in="SourceGraphic"
+         scale="7"
+         id="feDisplacementMap3" />
+    </filter>
+    <filter
+       id="sh"
+       x="-0.1464"
+       y="-0.07787234"
+       width="1.2928"
+       height="1.1770213">
+      <feGaussianBlur
+         in="SourceAlpha"
+         stdDeviation="9"
+         id="feGaussianBlur3" />
+      <feOffset
+         dy="10"
+         id="feOffset3" />
+      <feComponentTransfer
+         id="feComponentTransfer3">
+        <feFuncA
+           type="linear"
+           slope=".35"
+           id="feFuncA3" />
+      </feComponentTransfer>
+      <feMerge
+         id="feMerge4">
+        <feMergeNode
+           id="feMergeNode3" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode4" />
+      </feMerge>
+    </filter>
+  </defs>
+  <rect
+     x="40"
+     y="40"
+     width="944"
+     height="944"
+     rx="208"
+     fill="url(#bg)"
+     id="rect4" />
+  <g
+     clip-path="url(#sq)"
+     id="g36">
+    <path
+       d="M0 0V1024M0 0H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path4" />
+    <path
+       d="M32 0V1024M0 32H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path5" />
+    <path
+       d="M64 0V1024M0 64H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path6" />
+    <path
+       d="M96 0V1024M0 96H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path7" />
+    <path
+       d="M128 0V1024M0 128H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path8" />
+    <path
+       d="M160 0V1024M0 160H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path9" />
+    <path
+       d="M192 0V1024M0 192H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path10" />
+    <path
+       d="M224 0V1024M0 224H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path11" />
+    <path
+       d="M256 0V1024M0 256H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path12" />
+    <path
+       d="M288 0V1024M0 288H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path13" />
+    <path
+       d="M320 0V1024M0 320H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path14" />
+    <path
+       d="M352 0V1024M0 352H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path15" />
+    <path
+       d="M384 0V1024M0 384H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path16" />
+    <path
+       d="M416 0V1024M0 416H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path17" />
+    <path
+       d="M448 0V1024M0 448H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path18" />
+    <path
+       d="M480 0V1024M0 480H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path19" />
+    <path
+       d="M512 0V1024M0 512H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path20" />
+    <path
+       d="M544 0V1024M0 544H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path21" />
+    <path
+       d="M576 0V1024M0 576H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path22" />
+    <path
+       d="M608 0V1024M0 608H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path23" />
+    <path
+       d="M640 0V1024M0 640H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path24" />
+    <path
+       d="M672 0V1024M0 672H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path25" />
+    <path
+       d="M704 0V1024M0 704H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path26" />
+    <path
+       d="M736 0V1024M0 736H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path27" />
+    <path
+       d="M768 0V1024M0 768H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path28" />
+    <path
+       d="M800 0V1024M0 800H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path29" />
+    <path
+       d="M832 0V1024M0 832H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path30" />
+    <path
+       d="M864 0V1024M0 864H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path31" />
+    <path
+       d="M896 0V1024M0 896H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path32" />
+    <path
+       d="M928 0V1024M0 928H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path33" />
+    <path
+       d="M960 0V1024M0 960H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path34" />
+    <path
+       d="M992 0V1024M0 992H1024"
+       stroke="#fff"
+       stroke-opacity="0.12"
+       stroke-width="1.5"
+       id="path35" />
+    <path
+       d="M1024 0V1024M0 1024H1024"
+       stroke="#fff"
+       stroke-opacity="0.25"
+       stroke-width="2.5"
+       id="path36" />
+  </g>
+  <!-- construction lines -->
+  <g
+     fill="none"
+     stroke="#fff"
+     stroke-linecap="round"
+     stroke-opacity=".45"
+     stroke-width="3"
+     stroke-dasharray="14 10"
+     id="g39">
+    <path
+       d="M340 110V690"
+       id="path37" />
+    <path
+       d="M150 285H560"
+       id="path38" />
+    <path
+       d="M150 480H560"
+       id="path39" />
+    <circle
+       cx="340"
+       cy="285"
+       r="60"
+       id="circle39" />
+  </g>
+  <!-- dimension arrow -->
+  <g
+     fill="none"
+     stroke="#fff"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     stroke-opacity=".8"
+     stroke-width="4"
+     id="g40">
+    <path
+       d="M640 150V690M624 168L640 146L656 168M624 672L640 694L656 672M600 150H680M600 690H680"
+       id="path40" />
+  </g>
+  <g
+     fill="none"
+     stroke="#fff"
+     stroke-linecap="round"
+     stroke-width="12"
+     stroke-opacity=".6"
+     id="g42">
+    <path
+       d="M500 250Q530 300 500 350"
+       id="path41" />
+    <path
+       d="M535 220Q585 300 535 380"
+       id="path42" />
+  </g>
+  <g
+     transform="translate(340 150) scale(1) translate(-340 -150)"
+     fill="none"
+     stroke="#fff"
+     stroke-width="30"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     filter="url(#sh)"
+     id="g49">
+    <rect
+       x="265"
+       y="150"
+       width="150"
+       height="280"
+       rx="75"
+       fill="#fff"
+       fill-opacity=".12"
+       id="rect42" />
+    <path
+       d="M306 225H374"
+       stroke-width="16"
+       stroke-opacity=".75"
+       id="path43" />
+    <path
+       d="M306 268H374"
+       stroke-width="16"
+       stroke-opacity=".75"
+       id="path44" />
+    <path
+       d="M306 311H374"
+       stroke-width="16"
+       stroke-opacity=".75"
+       id="path45" />
+    <path
+       d="M306 354H374"
+       stroke-width="16"
+       stroke-opacity=".75"
+       id="path46" />
+    <path
+       d="M215 320V420A125 125 0 0 0 465 420V320"
+       id="path47" />
+    <path
+       d="M340 545V620"
+       id="path48" />
+    <path
+       d="M265 620H415"
+       id="path49" />
+  </g>
+  <path
+     d="m 322.99988,903.92 c 29.92,0 43.68,-21.28 43.68,-57.76 0,-36.48 -13.76,-57.76 -43.68,-57.76 -29.92,0 -43.68,21.28 -43.68,57.76 0,36.48 13.76,57.76 43.68,57.76 z m 0,-19.36 c -13.6,0 -18.08,-10.72 -18.08,-28.64 V 836.4 c 0,-17.92 4.48,-28.64 18.08,-28.64 13.6,0 18.08,10.72 18.08,28.64 v 19.36 c 0,18.08 -4.48,28.8 -18.08,28.8 z m 173.20006,17.44 -30.24,-111.68 h -33.92 l -30.24,111.68 h 24.32 l 6.88,-26.88 h 30.56 l 7.04,26.88 z m -36.32,-46.24 h -23.04 l 10.88,-42.24 h 1.28 z M 619.16,810 V 790.32 H 530.84 V 810 H 563 v 92 h 24 v -92 z m 80.08006,93.92 c 28,0 42.72,-15.36 42.72,-36.32 0,-17.6 -10.4,-28.16 -28.32,-31.36 l -11.68,-2.08 c -10.88,-1.92 -15.36,-5.28 -15.36,-12.96 0,-8.8 5.44,-13.28 16.16,-13.28 10.08,0 18.4,4 24.32,10.56 l 13.6,-15.2 c -7.84,-9.12 -20.96,-14.88 -38.08,-14.88 -25.28,0 -40.16,12.48 -40.16,33.92 0,16.32 8.48,28.64 28.48,32 l 11.68,1.92 c 10.88,1.76 15.04,5.44 15.04,13.28 0,9.6 -6.24,14.88 -17.6,14.88 -9.92,0 -20,-4.16 -28.16,-13.12 l -13.92,15.36 c 8.48,10.56 22.72,17.28 41.28,17.28 z"
+     id="text49"
+     style="font-weight:700;font-size:160px;font-family:'IBM Plex Mono';letter-spacing:30;text-anchor:middle;fill:#ffffff"
+     aria-label="OATS" />
+</svg>

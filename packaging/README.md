@@ -1,8 +1,8 @@
 # Packaging
 
-Icon: `assets/icon/AppIcon.png` is the upstream OpenOats icon, vendored unmodified (see
-`assets/icon/LICENSE-icon` for the pinned commit and MIT notice). `ci/icons.sh` verifies its
-sha256 and derives hicolor PNGs, the macOS iconset inputs and a Windows `.ico` into
+Icon: `assets/icon/AppIcon.png` (1024px) and `AppIcon.svg` are the blueprint "icon A" (David, 2026-10-30;
+the upstream OpenOats icon is gone). Committed `assets/icon/hicolor/` holds sips-made Linux PNGs. `ci/icons.sh`
+verifies the PNG sha256 and derives hicolor PNGs, the macOS iconset inputs and a Windows `.ico` into
 `assets/icon/derived/` (gitignored).
 
     bin/pod-run git@gitlab.com:davidawad/oats-meetings-rs.git <ref> bash ci/icons.sh

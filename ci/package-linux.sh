@@ -27,7 +27,6 @@ d=$(mktemp -d)/pkg
 install -Dm755 "$bin" "$d/usr/bin/oats-meetings-rs"
 install -Dm644 packaging/linux/oats-meetings-rs.desktop "$d/usr/share/applications/oats-meetings-rs.desktop"
 mkdir -p "$d/usr/share/icons" && cp -r "$icons" "$d/usr/share/icons/hicolor"
-install -Dm644 assets/icon/LICENSE-icon "$d/usr/share/doc/oats-meetings-rs/LICENSE-icon"
 mkdir -p "$d/DEBIAN"
 cat > "$d/DEBIAN/control" << CTL
 Package: oats-meetings-rs

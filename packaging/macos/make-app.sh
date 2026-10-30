@@ -13,8 +13,15 @@ plutil -lint "$app/Contents/Info.plist"
 for k in NSMicrophoneUsageDescription NSScreenCaptureUsageDescription NSAudioCaptureUsageDescription; do
   plutil -extract "$k" raw "$app/Contents/Info.plist" >/dev/null || { echo "make-app: Info.plist lacks $k" >&2; exit 1; }
 done
-[ -d assets/icon/derived/icon.iconset ] || bash ci/icons.sh
-iconutil -c icns assets/icon/derived/icon.iconset -o "$app/Contents/Resources/AppIcon.icns"
+# Icon A (assets/icon/AppIcon.png, 1024px): iconset sizes 16..512 at @1x/@2x via sips, then iconutil.
+iconset="$(mktemp -d)/AppIcon.iconset"
+mkdir -p "$iconset"
+for s in 16 32 128 256 512; do
+  sips -z "$s" "$s" assets/icon/AppIcon.png --out "$iconset/icon_${s}x${s}.png" >/dev/null
+  sips -z "$((s*2))" "$((s*2))" assets/icon/AppIcon.png --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist" | grep -qx AppIcon || { echo "make-app: Info.plist CFBundleIconFile is not AppIcon" >&2; exit 1; }
 # Round trip: the icns must reopen as an iconset.
 iconutil -c iconset "$app/Contents/Resources/AppIcon.icns" -o "$out/roundtrip.iconset"
 ls "$out/roundtrip.iconset"
