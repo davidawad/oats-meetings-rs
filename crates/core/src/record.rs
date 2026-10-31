@@ -131,6 +131,18 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
                 )
             })
     };
+    let int = |k: &str| flat.get(k).and_then(Value::as_u64).unwrap_or_default() as u32;
+    let echo = if b("audio.echo_cancel") {
+        Some(oats_audio::aec::EchoSettings {
+            tail: dur("audio.echo_tail")?,
+            delay: dur("audio.echo_delay")?,
+            block: int("audio.echo_block") as usize,
+            step_permille: int("audio.echo_step"),
+            divergence_percent: int("audio.echo_divergence"),
+        })
+    } else {
+        None
+    };
     Ok(AudioSettings {
         backend: BackendChoice::parse(&s("audio.backend")).map_err(audio_err)?,
         layout: Layout::parse(&s("audio.layout")).map_err(audio_err)?,
@@ -142,6 +154,7 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
             open_timeout: dur("audio.open_timeout")?,
             poll: dur("audio.poll_interval")?,
         },
+        echo,
     })
 }
 
@@ -168,6 +181,13 @@ pub fn settings_of(c: &Config) -> AudioSettings {
             open_timeout: c.audio.open_timeout.as_duration(),
             poll: c.audio.poll_interval.as_duration(),
         },
+        echo: c.audio.echo_cancel.then(|| oats_audio::aec::EchoSettings {
+            tail: c.audio.echo_tail.as_duration(),
+            delay: c.audio.echo_delay.as_duration(),
+            block: c.audio.echo_block as usize,
+            step_permille: c.audio.echo_step,
+            divergence_percent: c.audio.echo_divergence,
+        }),
     }
 }
 

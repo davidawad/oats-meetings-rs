@@ -7,6 +7,12 @@
     "backend": "auto",
     "devices_timeout": "3s",
     "devices_ttl": "30s",
+    "echo_block": 256,
+    "echo_cancel": true,
+    "echo_delay": "40ms",
+    "echo_divergence": 200,
+    "echo_step": 500,
+    "echo_tail": "200ms",
     "layout": "split",
     "mic": {
       "device": "",
@@ -111,6 +117,8 @@
       "timeout": "1m",
       "url": "https://api.openai.com/v1"
     },
+    "echo_overlap": 60,
+    "echo_window": "1s",
     "feed": "500ms",
     "final": {
       "enabled": true

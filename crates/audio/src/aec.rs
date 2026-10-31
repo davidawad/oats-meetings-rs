@@ -1,0 +1,398 @@
+//! Acoustic echo cancellation of the mic channel (dot-4uzgol.65).
+//!
+//! Remote speech played through the speakers reaches the mic and would be transcribed a second
+//! time as the local speaker. The system-audio channel is exactly what the speakers played, so it
+//! is the far-end reference: a partitioned-block frequency-domain NLMS filter (overlap-save, one
+//! FFT per block, the gradient constrained to the linear part) learns the speaker-to-mic path and
+//! subtracts its estimate from the mic. Two filters run side by side: the background one always
+//! adapts, the foreground one (the output) copies it only when it does clearly better, and a background
+//! that local speech (double talk) has pulled off course is reset, so talking over the far end
+//! does not detune the output.
+//!
+//! Pure Rust and the same on every OS (no webrtc build, no VoiceProcessingIO). The capture
+//! streams are not sample-synchronous: the mic is delayed by `delay` inside the canceller so a
+//! reference that arrives a little after its echo still precedes it. Both outputs stay on the
+//! input timeline (the delay is latency, not a shift), so the channels stay aligned in the WAV.
+
+use std::collections::VecDeque;
+use std::time::Duration;
+
+use crate::SAMPLE_RATE;
+
+/// `audio.echo_*`, filled by `oats-core` from the key table (no defaults here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EchoSettings {
+    /// Longest speaker-to-mic echo the filter models (`audio.echo_tail`).
+    pub tail: Duration,
+    /// Mic delay that lets a late reference still precede its echo (`audio.echo_delay`).
+    pub delay: Duration,
+    /// Samples per block, rounded up to a power of two (`audio.echo_block`).
+    pub block: usize,
+    /// NLMS step size in per-mille (`audio.echo_step`).
+    pub step_permille: u32,
+    /// The adapting filter is reset to the output filter when its residual exceeds this
+    /// percentage of the output filter's (`audio.echo_divergence`).
+    pub divergence_percent: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct C {
+    re: f32,
+    im: f32,
+}
+
+impl C {
+    fn mul(self, o: C) -> C {
+        C {
+            re: self.re * o.re - self.im * o.im,
+            im: self.re * o.im + self.im * o.re,
+        }
+    }
+    fn conj_mul(self, o: C) -> C {
+        // conj(self) * o
+        C {
+            re: self.re * o.re + self.im * o.im,
+            im: self.re * o.im - self.im * o.re,
+        }
+    }
+    fn norm(self) -> f32 {
+        self.re * self.re + self.im * self.im
+    }
+}
+
+/// In-place iterative radix-2 FFT of one power-of-two size.
+struct Fft {
+    n: usize,
+    rev: Vec<usize>,
+    tw: Vec<C>,
+}
+
+impl Fft {
+    fn new(n: usize) -> Fft {
+        let bits = n.trailing_zeros();
+        let rev = (0..n)
+            .map(|i| i.reverse_bits() >> (usize::BITS - bits))
+            .collect();
+        let tw = (0..n / 2)
+            .map(|k| {
+                let a = -2.0 * std::f64::consts::PI * k as f64 / n as f64;
+                C {
+                    re: a.cos() as f32,
+                    im: a.sin() as f32,
+                }
+            })
+            .collect();
+        Fft { n, rev, tw }
+    }
+
+    /// Forward transform, or the inverse (conjugate twiddles, scaled by 1/n).
+    fn run(&self, x: &mut [C], inverse: bool) {
+        let n = self.n;
+        for i in 0..n {
+            let j = self.rev[i];
+            if i < j {
+                x.swap(i, j);
+            }
+        }
+        let mut len = 2;
+        while len <= n {
+            let step = n / len;
+            for start in (0..n).step_by(len) {
+                for k in 0..len / 2 {
+                    let mut w = self.tw[k * step];
+                    if inverse {
+                        w.im = -w.im;
+                    }
+                    let a = x[start + k];
+                    let b = x[start + k + len / 2].mul(w);
+                    x[start + k] = C {
+                        re: a.re + b.re,
+                        im: a.im + b.im,
+                    };
+                    x[start + k + len / 2] = C {
+                        re: a.re - b.re,
+                        im: a.im - b.im,
+                    };
+                }
+            }
+            len *= 2;
+        }
+        if inverse {
+            let s = 1.0 / n as f32;
+            for v in x.iter_mut() {
+                v.re *= s;
+                v.im *= s;
+            }
+        }
+    }
+}
+
+fn samples(d: Duration) -> usize {
+    (d.as_millis() * u128::from(SAMPLE_RATE) / 1000) as usize
+}
+
+/// Streaming canceller: push equal-length mic and reference runs, get the echo-free mic and the
+/// matching reference back, sample for sample. Output lags input by up to one block plus
+/// `delay`; `flush` returns the rest so the totals match.
+pub struct EchoCanceller {
+    b: usize,
+    fft: Fft,
+    step: f32,
+    divergence: f32,
+    /// The last 2b reference samples (overlap-save input).
+    x_time: Vec<f32>,
+    /// Reference spectra, newest first, one per partition.
+    xf: VecDeque<Vec<C>>,
+    /// Output (foreground) and adapting (background) filter partitions, frequency domain.
+    fg: Vec<Vec<C>>,
+    bg: Vec<Vec<C>>,
+    /// Tail-averaged residual energy of each path.
+    s_fg: f32,
+    s_bg: f32,
+    ref_in: VecDeque<f32>,
+    mic_in: VecDeque<f32>,
+    ref_out: VecDeque<f32>,
+    pushed: usize,
+    emitted: usize,
+    /// Output samples still to drop: the silence the delay line was primed with.
+    skip: usize,
+}
+
+impl EchoCanceller {
+    pub fn new(s: &EchoSettings) -> EchoCanceller {
+        let b = s.block.max(2).next_power_of_two();
+        let n = 2 * b;
+        let parts = samples(s.tail).div_ceil(b).max(1);
+        let delay = samples(s.delay);
+        EchoCanceller {
+            b,
+            fft: Fft::new(n),
+            step: s.step_permille as f32 / 1000.0,
+            divergence: s.divergence_percent as f32 / 100.0,
+            x_time: vec![0.0; n],
+            xf: (0..parts).map(|_| vec![C::default(); n]).collect(),
+            fg: (0..parts).map(|_| vec![C::default(); n]).collect(),
+            bg: (0..parts).map(|_| vec![C::default(); n]).collect(),
+            s_fg: 0.0,
+            s_bg: 0.0,
+            ref_in: VecDeque::new(),
+            mic_in: std::iter::repeat_n(0.0, delay).collect(),
+            ref_out: std::iter::repeat_n(0.0, delay).collect(),
+            pushed: 0,
+            emitted: 0,
+            skip: delay,
+        }
+    }
+
+    /// Feed `mic` and `reference` (same length, same instants) and append whatever is ready.
+    pub fn process(
+        &mut self,
+        mic: &[f32],
+        reference: &[f32],
+        mic_out: &mut Vec<f32>,
+        ref_out: &mut Vec<f32>,
+    ) {
+        debug_assert_eq!(mic.len(), reference.len());
+        self.mic_in.extend(mic);
+        self.ref_in.extend(reference);
+        self.ref_out.extend(reference);
+        self.pushed += mic.len();
+        while self.ref_in.len() >= self.b && self.mic_in.len() >= self.b {
+            self.block(mic_out, ref_out);
+        }
+    }
+
+    /// Pad with silence until every pushed sample has come out.
+    pub fn flush(&mut self, mic_out: &mut Vec<f32>, ref_out: &mut Vec<f32>) {
+        let target = self.pushed;
+        let zeros = vec![0.0; self.b];
+        while self.emitted < target {
+            self.process(&zeros, &zeros, mic_out, ref_out);
+        }
+        let extra = self.emitted - target;
+        mic_out.truncate(mic_out.len() - extra);
+        ref_out.truncate(ref_out.len() - extra);
+        self.pushed = self.emitted;
+    }
+
+    /// The echo `w` predicts for the current block: the last b samples of IFFT(sum W_p X_p).
+    fn estimate(&self, w: &[Vec<C>], y: &mut [C]) {
+        y.iter_mut().for_each(|c| *c = C::default());
+        for (w, x) in w.iter().zip(&self.xf) {
+            for ((yk, wk), xk) in y.iter_mut().zip(w).zip(x) {
+                let p = wk.mul(*xk);
+                yk.re += p.re;
+                yk.im += p.im;
+            }
+        }
+        self.fft.run(y, true);
+    }
+
+    fn block(&mut self, mic_out: &mut Vec<f32>, ref_out: &mut Vec<f32>) {
+        let (b, n) = (self.b, 2 * self.b);
+        // Slide the reference window and transform it into the newest partition.
+        self.x_time.copy_within(b.., 0);
+        for i in 0..b {
+            self.x_time[b + i] = self.ref_in.pop_front().unwrap_or(0.0);
+        }
+        let mut x0 = self.xf.pop_back().unwrap_or_else(|| vec![C::default(); n]);
+        for (c, &v) in x0.iter_mut().zip(&self.x_time) {
+            *c = C { re: v, im: 0.0 };
+        }
+        self.fft.run(&mut x0, false);
+        self.xf.push_front(x0);
+
+        let d: Vec<f32> = self.mic_in.drain(..b).collect();
+        let (mut yf, mut yb) = (vec![C::default(); n], vec![C::default(); n]);
+        self.estimate(&self.fg, &mut yf);
+        self.estimate(&self.bg, &mut yb);
+        let e_fg: Vec<f32> = d.iter().zip(&yf[b..]).map(|(d, y)| d - y.re).collect();
+        let e_bg: Vec<f32> = d.iter().zip(&yb[b..]).map(|(d, y)| d - y.re).collect();
+        let k = self.skip.min(b);
+        self.skip -= k;
+        mic_out.extend_from_slice(&e_fg[k..]);
+        ref_out.extend(self.ref_out.drain(..b).skip(k));
+        self.emitted += b - k;
+
+        // Two paths: the background filter always adapts; the foreground (the output) takes its
+        // coefficients when it does better by the `divergence` factor, and a background that
+        // local speech has pulled worse by that factor is reset to the foreground. Residual
+        // energies are averaged over the tail.
+        let energy = |e: &[f32]| e.iter().map(|v| v * v).sum::<f32>();
+        let a = 1.0 / self.fg.len() as f32;
+        self.s_fg += a * (energy(&e_fg) - self.s_fg);
+        self.s_bg += a * (energy(&e_bg) - self.s_bg);
+        if self.s_bg * self.divergence < self.s_fg {
+            self.fg.clone_from(&self.bg);
+            self.s_fg = self.s_bg;
+        } else if self.s_bg > self.s_fg * self.divergence {
+            self.bg.clone_from(&self.fg);
+            self.s_bg = self.s_fg;
+            return;
+        }
+
+        let mut ef = vec![C::default(); n];
+        for (c, &v) in ef[b..].iter_mut().zip(&e_bg) {
+            c.re = v;
+        }
+        self.fft.run(&mut ef, false);
+        // Per-bin normalisation, regularised by the mean over bins: a bin where the reference
+        // has only leakage (a narrowband far end) must not get a huge step and learn to predict
+        // unrelated local sound. The epsilon term keeps a silent reference from dividing by zero.
+        let mut norm = vec![0.0f32; n];
+        for x in &self.xf {
+            for (nk, xk) in norm.iter_mut().zip(x) {
+                *nk += xk.norm();
+            }
+        }
+        let mean = norm.iter().sum::<f32>() / n as f32 + n as f32 * f32::EPSILON;
+        norm.iter_mut().for_each(|v| *v += mean);
+        let g = &mut yb;
+        for (w, x) in self.bg.iter_mut().zip(&self.xf) {
+            for k in 0..n {
+                let mu = self.step / norm[k];
+                let v = x[k].conj_mul(ef[k]);
+                g[k] = C {
+                    re: v.re * mu,
+                    im: v.im * mu,
+                };
+            }
+            // Constrain the update to a causal b-tap partition (drop the circular half).
+            self.fft.run(g, true);
+            g[b..].iter_mut().for_each(|c| *c = C::default());
+            self.fft.run(g, false);
+            for (wk, gk) in w.iter_mut().zip(g.iter()) {
+                wk.re += gk.re;
+                wk.im += gk.im;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(tail_ms: u64, delay_ms: u64) -> EchoSettings {
+        EchoSettings {
+            tail: Duration::from_millis(tail_ms),
+            delay: Duration::from_millis(delay_ms),
+            block: 256,
+            step_permille: 500,
+            divergence_percent: 200,
+        }
+    }
+
+    /// Deterministic noise in [-a, a] (xorshift).
+    fn noise(len: usize, a: f32, mut s: u32) -> Vec<f32> {
+        (0..len)
+            .map(|_| {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                (s as f32 / u32::MAX as f32 * 2.0 - 1.0) * a
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fft_round_trips() {
+        let f = Fft::new(64);
+        let x: Vec<C> = noise(64, 1.0, 7)
+            .into_iter()
+            .map(|re| C { re, im: 0.0 })
+            .collect();
+        let mut y = x.clone();
+        f.run(&mut y, false);
+        f.run(&mut y, true);
+        for (a, b) in x.iter().zip(&y) {
+            assert!((a.re - b.re).abs() < 1e-5 && b.im.abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn output_length_matches_input_and_channels_stay_aligned() {
+        let mut c = EchoCanceller::new(&settings(20, 7));
+        let (mut m, mut r) = (vec![], vec![]);
+        let refr: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        for chunk in refr.chunks(333) {
+            c.process(&vec![0.0; chunk.len()], chunk, &mut m, &mut r);
+        }
+        c.flush(&mut m, &mut r);
+        // Sample for sample: the 7 ms mic delay is latency, not a shift.
+        assert_eq!(r, refr);
+        assert_eq!(m.len(), 1000);
+    }
+
+    fn tone(hz: f32, len: usize) -> Vec<f32> {
+        (0..len)
+            .map(|i| (i as f32 / SAMPLE_RATE as f32 * hz * std::f32::consts::TAU).sin() * 0.5)
+            .collect()
+    }
+
+    #[test]
+    fn local_sound_unrelated_to_the_reference_is_kept() {
+        // A far-end tone the mic does not hear and a local tone: nothing to cancel.
+        let mut c = EchoCanceller::new(&settings(200, 40));
+        let (mic, far) = (tone(880.0, 96_000), tone(440.0, 96_000));
+        let (mut m, mut r) = (vec![], vec![]);
+        c.process(&mic, &far, &mut m, &mut r);
+        c.flush(&mut m, &mut r);
+        let err: f32 = m.iter().zip(&mic).map(|(o, i)| (o - i) * (o - i)).sum();
+        let sig: f32 = mic.iter().map(|v| v * v).sum();
+        assert!(
+            err < sig / 100.0,
+            "local tone changed: error {err} vs {sig}"
+        );
+    }
+
+    #[test]
+    fn silent_reference_leaves_the_mic_alone() {
+        let mut c = EchoCanceller::new(&settings(20, 7));
+        let mic = noise(48_000, 0.3, 3);
+        let (mut m, mut r) = (vec![], vec![]);
+        c.process(&mic, &vec![0.0; mic.len()], &mut m, &mut r);
+        c.flush(&mut m, &mut r);
+        assert_eq!(m, mic);
+    }
+}

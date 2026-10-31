@@ -33,7 +33,7 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Config, Stt, SttAdapter, SttBackend, SttEngine};
+use crate::config::typed::{Config, SttAdapter, SttBackend, SttEngine};
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
 use crate::control::engine::Engine;
@@ -66,7 +66,7 @@ pub struct Utt {
 }
 
 /// The audio-shaping tunables (`stt.speech_peak`, `stt.pad`, `stt.final_piece`, `stt.feed`),
-/// converted to samples at the recogniser's rate.
+/// converted to samples at the recogniser's rate, and the echo dedupe.
 #[derive(Clone, Copy, Debug)]
 pub struct Tuning {
     /// A 10 ms frame whose peak is below this is silence.
@@ -74,6 +74,18 @@ pub struct Tuning {
     pub pad_samples: usize,
     pub final_piece_samples: usize,
     pub feed_samples: usize,
+    /// `None` when `audio.echo_cancel` is off.
+    pub echo: Option<EchoDedupe>,
+}
+
+/// Speaker echo the canceller left behind (dot-4uzgol.65): a "you" utterance that says what
+/// remote speech said at nearly the same time is the speakers heard by the mic, not the user.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EchoDedupe {
+    /// `stt.echo_window`, seconds.
+    pub window: f64,
+    /// `stt.echo_overlap` as a fraction of the "you" utterance's words.
+    pub overlap: f32,
 }
 
 fn samples_of(d: crate::config::typed::Dur) -> usize {
@@ -81,14 +93,47 @@ fn samples_of(d: crate::config::typed::Dur) -> usize {
 }
 
 impl Tuning {
-    pub fn from_config(c: &Stt) -> Tuning {
+    pub fn from_config(cfg: &Config) -> Tuning {
+        let c = &cfg.stt;
         Tuning {
             speech_peak: c.speech_peak as f32 / 1000.0,
             pad_samples: samples_of(c.pad),
             final_piece_samples: samples_of(c.final_piece).max(1),
             feed_samples: samples_of(c.feed).max(1),
+            echo: cfg.audio.echo_cancel.then(|| EchoDedupe {
+                window: c.echo_window.0 as f64 / 1000.0,
+                overlap: c.echo_overlap as f32 / 100.0,
+            }),
         }
     }
+}
+
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// Enough of `you`'s words are in the `them` utterances within the window around it.
+fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
+    let near: std::collections::HashSet<String> = them
+        .iter()
+        .filter(|t| t.start <= you.end + d.window && t.end >= you.start - d.window)
+        .flat_map(|t| words(&t.text))
+        .collect();
+    let w = words(&you.text);
+    let hits = w.iter().filter(|x| near.contains(*x)).count();
+    !w.is_empty() && hits as f32 >= d.overlap * w.len() as f32
+}
+
+/// Drop every `you` utterance that is echo of remote speech (no-op when `d` is `None`).
+fn drop_echoes(utts: Vec<Utt>, you: &str, d: Option<EchoDedupe>) -> Vec<Utt> {
+    let Some(d) = d else { return utts };
+    let them: Vec<Utt> = utts.iter().filter(|u| u.speaker != you).cloned().collect();
+    utts.into_iter()
+        .filter(|u| u.speaker != you || !is_echo(u, &them, &d))
+        .collect()
 }
 
 // ---- settings ------------------------------------------------------------------------------
@@ -189,7 +234,7 @@ impl Settings {
             max_key_len: cfg.secrets.max_key_len as usize,
             error_snippet: cfg.network.error_snippet as usize,
             max_response: c.cloud.max_response,
-            tuning: Tuning::from_config(c),
+            tuning: Tuning::from_config(cfg),
         })
     }
 
@@ -393,7 +438,9 @@ struct ChanBuf {
 
 /// Streaming transcription: push audio per channel as it arrives, get utterances back as each
 /// window fills. Windows are cut at the quietest 10 ms frame in the last fifth of the window so
-/// words are not split mid-way.
+/// words are not split mid-way. With echo dedupe on, a "you" utterance is held until the remote
+/// channel has been transcribed past it (or is far behind, or silent from the start), then
+/// dropped if it repeats remote speech.
 pub struct Live {
     asr: Arc<dyn Asr>,
     language: String,
@@ -401,6 +448,10 @@ pub struct Live {
     tuning: Tuning,
     names: [String; 2],
     bufs: [ChanBuf; 2],
+    /// "you" utterances waiting for the remote channel to catch up.
+    held: Vec<Utt>,
+    /// Recent remote utterances, to check the held ones against.
+    heard: Vec<Utt>,
 }
 
 fn quiet_cut(x: &[f32], window: usize) -> usize {
@@ -434,20 +485,54 @@ impl Live {
             tuning,
             names: [you.to_string(), them.to_string()],
             bufs: [ChanBuf::default(), ChanBuf::default()],
+            held: Vec::new(),
+            heard: Vec::new(),
         }
+    }
+
+    fn secs(samples: usize) -> f64 {
+        samples as f64 / f64::from(SAMPLE_RATE)
+    }
+
+    /// Route fresh utterances of channel `ch`, then release the held ones that are decided.
+    fn settle(&mut self, ch: usize, fresh: Vec<Utt>, all: bool) -> Vec<Utt> {
+        let Some(d) = self.tuning.echo else {
+            return fresh;
+        };
+        let mut out = Vec::new();
+        if ch == 0 {
+            self.held.extend(fresh);
+        } else {
+            self.heard.extend(fresh.iter().cloned());
+            out = fresh;
+        }
+        let them_at = Self::secs(self.bufs[1].base);
+        let them_silent = self.bufs[1].base + self.bufs[1].pcm.len() == 0;
+        let you_at = Self::secs(self.bufs[0].base);
+        let max_lag = 2.0 * Self::secs(self.window) + d.window;
+        let (ready, wait): (Vec<Utt>, Vec<Utt>) =
+            std::mem::take(&mut self.held).into_iter().partition(|u| {
+                all || them_silent || u.end + d.window <= them_at || you_at - u.end > max_lag
+            });
+        self.held = wait;
+        out.extend(ready.into_iter().filter(|u| !is_echo(u, &self.heard, &d)));
+        // Later "you" utterances start at or after `you_at`.
+        let horizon = self.held.iter().map(|u| u.start).fold(you_at, f64::min) - d.window;
+        self.heard.retain(|t| t.end >= horizon);
+        out
     }
 
     /// `channel` 0 = you, 1 = them. Returns the utterances of every window this push completed.
     pub fn push(&mut self, channel: usize, samples: &[f32]) -> Result<Vec<Utt>> {
         let ch = channel.min(1);
         self.bufs[ch].pcm.extend_from_slice(samples);
-        let mut out = Vec::new();
+        let mut fresh = Vec::new();
         while self.bufs[ch].pcm.len() >= self.window {
             let cut = quiet_cut(&self.bufs[ch].pcm, self.window);
             let chunk: Vec<f32> = self.bufs[ch].pcm.drain(..cut).collect();
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += cut;
-            out.extend(run_asr(
+            fresh.extend(run_asr(
                 &*self.asr,
                 &chunk,
                 offset,
@@ -456,24 +541,26 @@ impl Live {
                 &self.tuning,
             )?);
         }
-        Ok(out)
+        Ok(self.settle(ch, fresh, false))
     }
 
     /// Transcribe whatever is left in both channels.
     pub fn flush(&mut self) -> Result<Vec<Utt>> {
         let mut out = Vec::new();
-        for ch in 0..2 {
+        // Remote first, so the last "you" utterances are checked against all of it.
+        for ch in [1, 0] {
             let chunk = std::mem::take(&mut self.bufs[ch].pcm);
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += chunk.len();
-            out.extend(run_asr(
+            let fresh = run_asr(
                 &*self.asr,
                 &chunk,
                 offset,
                 &self.names[ch],
                 &self.language,
                 &self.tuning,
-            )?);
+            )?;
+            out.extend(self.settle(ch, fresh, ch == 0));
         }
         Ok(out)
     }
@@ -669,7 +756,7 @@ fn passes(
             &s.language,
             &s.tuning,
         )?);
-        let all = by_time(all);
+        let all = by_time(drop_echoes(all, &s.speaker_you, s.tuning.echo));
         let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
         store.write_transcript(id, "final", &lines)?;
         all.iter().for_each(|u| emit("final", u));
@@ -1123,7 +1210,7 @@ mod tests {
             c.insert((*k).into(), v.clone());
         }
         let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
-        Tuning::from_config(&cfg.stt)
+        Tuning::from_config(&cfg)
     }
 
     /// stt.speech_peak at its bounds and either side of the threshold; stt.pad in samples.
@@ -1146,6 +1233,114 @@ mod tests {
         assert_eq!(speech_bounds(&x, &t), Some((8 * frame, 13 * frame)));
         let t = tuning_with(&[("stt.speech_peak", json!(50)), ("stt.pad", json!("10s"))]);
         assert_eq!(speech_bounds(&x, &t), Some((0, 20 * frame)));
+    }
+
+    /// Says the same sentence for any audio: what the mic hears of the speakers.
+    struct Parrot;
+
+    impl Asr for Parrot {
+        fn name(&self) -> &'static str {
+            "parrot"
+        }
+        fn transcribe(&self, pcm: &[f32], _l: &str) -> Result<Vec<Segment>> {
+            Ok(vec![Segment {
+                start: 0.0,
+                end: pcm.len() as f64 / f64::from(SAMPLE_RATE),
+                text: "We ship on Friday.".into(),
+            }])
+        }
+    }
+
+    fn utt(speaker: &str, text: &str, start: f64) -> Utt {
+        Utt {
+            speaker: speaker.into(),
+            text: text.into(),
+            start,
+            end: start + 2.0,
+        }
+    }
+
+    #[test]
+    fn final_drops_you_utterances_that_repeat_near_simultaneous_remote_speech() {
+        let echo = tuning_with(&[]).echo;
+        assert_eq!(
+            echo,
+            Some(EchoDedupe {
+                window: 1.0,
+                overlap: 0.6
+            })
+        );
+        let all = vec![
+            utt("remote_1", "We ship on Friday, right?", 10.0),
+            // The speakers, heard by the mic a moment later (a fragment, other punctuation).
+            utt("you", "we ship on friday", 10.3),
+            // The same words long after: the user repeating them, kept.
+            utt("you", "We ship on Friday.", 30.0),
+            // Talking over the remote speaker with other words, kept.
+            utt("you", "Not before the review.", 11.0),
+        ];
+        let kept = drop_echoes(all.clone(), "you", echo);
+        let texts: Vec<&str> = kept.iter().map(|u| u.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "We ship on Friday, right?",
+                "We ship on Friday.",
+                "Not before the review."
+            ]
+        );
+        assert_eq!(drop_echoes(all.clone(), "you", None), all);
+        let off = tuning_with(&[("audio.echo_cancel", json!(false))]).echo;
+        assert_eq!(off, None);
+        // stt.echo_overlap 100: every word must be in the remote speech.
+        let strict = tuning_with(&[("stt.echo_overlap", json!(100))]).echo;
+        let partial = vec![
+            utt("remote_1", "We ship on Friday", 0.0),
+            utt("you", "we ship on monday", 0.0),
+        ];
+        assert_eq!(drop_echoes(partial.clone(), "you", strict).len(), 2);
+        assert_eq!(drop_echoes(partial, "you", echo).len(), 1); // 3 of 4 words >= 60%
+    }
+
+    fn live_run(tuning: Tuning, them: &[f32]) -> Vec<Utt> {
+        let mut live = Live::new(Arc::new(Parrot), "en", 2.0, tuning, "you", "remote_1");
+        let you = tone(5.0);
+        let step = SAMPLE_RATE as usize / 2;
+        let mut out = Vec::new();
+        for i in (0..you.len()).step_by(step) {
+            out.extend(live.push(0, &you[i..(i + step).min(you.len())]).unwrap());
+            if i < them.len() {
+                out.extend(live.push(1, &them[i..(i + step).min(them.len())]).unwrap());
+            }
+        }
+        out.extend(live.flush().unwrap());
+        out
+    }
+
+    #[test]
+    fn live_holds_you_until_remote_catches_up_then_drops_the_echo() {
+        let on = tuning_with(&[]);
+        let speakers = |us: &[Utt]| {
+            let mut v: Vec<String> = us.iter().map(|u| u.speaker.clone()).collect();
+            v.dedup();
+            v
+        };
+        // Both channels say the same thing at the same time: only the remote speaker is kept.
+        let us = live_run(on, &tone(5.0));
+        assert!(!us.is_empty());
+        assert_eq!(speakers(&us), ["remote_1"]);
+        // Remote silent (but flowing): every "you" utterance comes out.
+        let us = live_run(on, &vec![0.0; 5 * SAMPLE_RATE as usize]);
+        assert!(!us.is_empty());
+        assert_eq!(speakers(&us), ["you"]);
+        // No remote channel at all: nothing is held back until flush.
+        let mut live = Live::new(Arc::new(Parrot), "en", 2.0, on, "you", "remote_1");
+        assert_eq!(live.push(0, &tone(3.0)).unwrap().len(), 1);
+        // Echo cancel off: both.
+        let off = tuning_with(&[("audio.echo_cancel", json!(false))]);
+        let us = live_run(off, &tone(5.0));
+        assert!(us.iter().any(|u| u.speaker == "you"));
+        assert!(us.iter().any(|u| u.speaker == "remote_1"));
     }
 
     #[test]

@@ -68,6 +68,68 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "echo_block": {
+          "default": 256,
+          "description": "Samples per echo-canceller block (rounded up to a power of two): smaller adapts faster, larger costs less.",
+          "maximum": 4096,
+          "minimum": 32,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_cancel": {
+          "default": true,
+          "description": "Cancel speaker echo in the mic using system audio as the reference, and drop local-speaker utterances that repeat near-simultaneous remote speech, so remote speech is not transcribed twice.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "echo_delay": {
+          "default": "40ms",
+          "description": "Mic delay inside the echo canceller, so system audio that is captured a little after its echo reached the mic is still cancelled; both channels are shifted by it.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "500ms",
+          "x-max-ms": 500,
+          "x-min": "0s",
+          "x-min-ms": 0,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_divergence": {
+          "default": 200,
+          "description": "Percent: the echo canceller's output filter takes the adapting filter when its residual is this many times smaller, and resets it when it is this many times larger (double talk).",
+          "maximum": 1000,
+          "minimum": 101,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_step": {
+          "default": 500,
+          "description": "Echo-canceller adaptation step in per-mille (500 = 0.5): larger converges faster, smaller is steadier.",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_tail": {
+          "default": "200ms",
+          "description": "Longest speaker-to-mic echo the echo canceller models (audio.echo_cancel).",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1s",
+          "x-max-ms": 1000,
+          "x-min": "10ms",
+          "x-min-ms": 10,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "layout": {
           "default": "split",
           "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",
@@ -852,6 +914,29 @@
             }
           },
           "type": "object"
+        },
+        "echo_overlap": {
+          "default": 60,
+          "description": "Percent of a local-speaker utterance's words that must appear in near-simultaneous remote speech for it to be dropped as echo (stt.echo_window).",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_window": {
+          "default": "1s",
+          "description": "With audio.echo_cancel, a local-speaker utterance within this time of remote speech that says the same words is dropped as speaker echo.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "0s",
+          "x-min-ms": 0,
+          "x-reload": "live",
+          "x-ui": false
         },
         "feed": {
           "default": "500ms",

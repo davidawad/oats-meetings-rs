@@ -12,6 +12,7 @@ use std::thread::JoinHandle;
 
 use serde::Serialize;
 
+use crate::aec::EchoCanceller;
 use crate::backend::{Capture, CaptureBackend, DeviceKind};
 
 /// Which input a sample came from.
@@ -21,8 +22,9 @@ pub enum Source {
     Mic,
 }
 
-/// Per-source tap: called with every live (non-paused) sample block of that source, at
-/// `SAMPLE_RATE`, from the capture thread. It must not block (queue the work).
+/// Per-source tap: called with every block of that source as it is written to the WAV (live,
+/// non-paused audio; the mic after echo cancellation), at `SAMPLE_RATE`, from the writer thread.
+/// It must not block (queue the work).
 pub type TapFactory<'a> = &'a dyn Fn(Source) -> Box<dyn FnMut(&[f32]) + Send>;
 use crate::error::{AudioError, Result};
 use crate::settings::{AudioSettings, Layout};
@@ -72,14 +74,9 @@ fn ms(frames: u64) -> u64 {
     frames * 1000 / u64::from(SAMPLE_RATE)
 }
 
-fn drain_into(
-    w: &mut WavWriter,
-    q: &mut Queues,
-    sys: bool,
-    mic: bool,
-    layout: Layout,
-    flush_all: bool,
-) -> Result<()> {
+/// Pop the frames ready to write: every enabled source's samples in lock step (all of both,
+/// padded with silence, when `flush_all`); a disabled source is silence.
+fn take(q: &mut Queues, sys: bool, mic: bool, flush_all: bool) -> (Vec<f32>, Vec<f32>) {
     let n = match (sys, mic) {
         (true, true) if flush_all => q.system.len().max(q.mic.len()),
         (true, true) => q.system.len().min(q.mic.len()),
@@ -87,18 +84,23 @@ fn drain_into(
         (false, true) => q.mic.len(),
         (false, false) => 0,
     };
-    let mut buf = Vec::with_capacity(n * 2);
-    for _ in 0..n {
-        let s = if sys {
-            q.system.pop_front().unwrap_or(0.0)
+    let pop = |enabled: bool, from: &mut VecDeque<f32>| -> Vec<f32> {
+        let mut v: Vec<f32> = if enabled {
+            from.drain(..n.min(from.len())).collect()
         } else {
-            0.0
+            vec![]
         };
-        let m = if mic {
-            q.mic.pop_front().unwrap_or(0.0)
-        } else {
-            0.0
-        };
+        v.resize(n, 0.0);
+        v
+    };
+    let s = pop(sys, &mut q.system);
+    let m = pop(mic, &mut q.mic);
+    (m, s)
+}
+
+fn write_frames(w: &mut WavWriter, m: &[f32], s: &[f32], layout: Layout) -> Result<()> {
+    let mut buf = Vec::with_capacity(m.len() * 2);
+    for (&m, &s) in m.iter().zip(s) {
         match layout {
             // Left = mic, right = system: the same convention `stt-transcribe` reads (left "you").
             Layout::Split => {
@@ -148,7 +150,6 @@ pub fn start(
     });
     let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Box<dyn Capture>> {
         let sh = Arc::clone(&shared);
-        let mut tap_fn = tap.map(|f| f(if is_sys { Source::System } else { Source::Mic }));
         backend.open(
             kind,
             device,
@@ -164,10 +165,6 @@ pub fn start(
                 } else {
                     q.mic.extend(samples);
                     sh.mic_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
-                }
-                drop(q);
-                if let Some(t) = tap_fn.as_mut() {
-                    t(samples);
                 }
             }),
         )
@@ -191,12 +188,30 @@ pub fn start(
     let sh = Arc::clone(&shared);
     let (out_path, channels) = (path.to_path_buf(), layout.channels());
     let poll = settings.timing.poll;
+    // The system channel is what the speakers played: the far-end reference for the mic.
+    let mut aec = settings
+        .echo
+        .filter(|_| sys && mic)
+        .map(|e| EchoCanceller::new(&e));
+    let mut tap_sys = tap.filter(|_| sys).map(|f| f(Source::System));
+    let mut tap_mic = tap.filter(|_| mic).map(|f| f(Source::Mic));
     let writer = std::thread::spawn(move || -> Result<Summary> {
         loop {
             let stopping = sh.stop.load(Ordering::SeqCst);
-            {
-                let mut q = sh.q.lock().expect("queues");
-                drain_into(&mut w, &mut q, sys, mic, layout, stopping)?;
+            let (mut m, mut s) = take(&mut sh.q.lock().expect("queues"), sys, mic, stopping);
+            if let Some(c) = aec.as_mut() {
+                let (mut mo, mut so) = (Vec::with_capacity(m.len()), Vec::with_capacity(s.len()));
+                c.process(&m, &s, &mut mo, &mut so);
+                if stopping {
+                    c.flush(&mut mo, &mut so);
+                }
+                (m, s) = (mo, so);
+            }
+            write_frames(&mut w, &m, &s, layout)?;
+            for (t, x) in [(tap_sys.as_mut(), &s), (tap_mic.as_mut(), &m)] {
+                if let (Some(t), false) = (t, x.is_empty()) {
+                    t(x);
+                }
             }
             sh.frames.store(w.frames(), Ordering::SeqCst);
             if stopping {
@@ -280,9 +295,17 @@ mod tests {
     use std::time::Duration;
 
     fn record(settings: &AudioSettings, secs: f64) -> (Summary, wav::WavData) {
+        record_with(&FakeBackend::default(), settings, secs)
+    }
+
+    fn record_with(
+        backend: &FakeBackend,
+        settings: &AudioSettings,
+        secs: f64,
+    ) -> (Summary, wav::WavData) {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("nested/a.wav");
-        let r = start(&FakeBackend::default(), settings, &p, None).unwrap();
+        let r = start(backend, settings, &p, None).unwrap();
         // Wait for the audio itself (not wall time): poll until `secs` have been written.
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while r.duration_ms() < (secs * 1000.0) as u64 {
@@ -314,6 +337,34 @@ mod tests {
             d.tone_hz(1)
         );
         assert!(d.rms(0) > 0.3 && d.rms(1) > 0.3);
+    }
+
+    #[test]
+    fn echo_cancel_takes_the_system_audio_out_of_the_mic() {
+        // The mic hears exactly what the speakers play (same tone, its own phase).
+        let echoing = FakeBackend {
+            mic_hz: 440.0,
+            ..FakeBackend::default()
+        };
+        let last_second = |d: &wav::WavData, ch: usize| {
+            let x = &d.samples[ch];
+            let tail = &x[x.len() - SAMPLE_RATE as usize..];
+            (tail.iter().map(|v| v * v).sum::<f32>() / tail.len() as f32).sqrt()
+        };
+        let (_, on) = record_with(&echoing, &crate::settings::test_settings(), 2.5);
+        let off_settings = AudioSettings {
+            echo: None,
+            ..crate::settings::test_settings()
+        };
+        let (_, off) = record_with(&echoing, &off_settings, 2.5);
+        assert!(last_second(&off, 0) > 0.3, "mic without echo cancel");
+        assert!(last_second(&on, 1) > 0.3, "system channel is left alone");
+        assert!(
+            last_second(&on, 0) < last_second(&off, 0) / 10.0,
+            "mic residual {} vs {} without echo cancel",
+            last_second(&on, 0),
+            last_second(&off, 0)
+        );
     }
 
     #[test]

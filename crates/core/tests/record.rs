@@ -441,6 +441,11 @@ fn lines(r: &Rig, id: &str, kind: &str) -> Vec<Value> {
 #[test]
 fn recording_writes_live_and_final_transcripts_with_the_stt_speakers() {
     let r = rig();
+    // ToneAsr says "tone" on both channels at once, which is what speaker echo looks like: the
+    // dedupe is off here so both speakers stay (it has its own test below).
+    r.engine
+        .set("audio.echo_cancel", &json!(false), "test")
+        .unwrap();
     let s = start(&r, "t1");
     assert_eq!(s["transcription"]["state"], "on");
     // Live utterances arrive while still recording.
@@ -483,6 +488,33 @@ fn recording_writes_live_and_final_transcripts_with_the_stt_speakers() {
         })
         .unwrap();
     assert_eq!(tr["source"], "final");
+}
+
+/// audio.echo_cancel (default on, dot-4uzgol.65): the mic channel saying what the system
+/// channel says at the same time is speaker echo, so neither transcript attributes it to "you".
+#[test]
+fn echo_cancel_drops_the_you_copy_of_simultaneous_remote_speech() {
+    let r = rig();
+    start(&r, "e1");
+    wait_until("a live transcript before stop", || {
+        std::fs::read_to_string(r.dir.path().join("rec/e1/transcript.live.jsonl"))
+            .is_ok_and(|t| t.contains('\n'))
+    });
+    let done = stop(&r);
+    let t = &done["transcription"];
+    assert_eq!(
+        (t["live"].as_str(), t["final"].as_str()),
+        (Some("ok"), Some("ok")),
+        "{t}"
+    );
+    for kind in ["live", "final"] {
+        let l = lines(&r, "e1", kind);
+        assert!(!l.is_empty(), "{kind}");
+        assert!(
+            l.iter().all(|u| u["speaker"] == "remote_1"),
+            "{kind}: {l:?}"
+        );
+    }
 }
 
 #[test]

@@ -13,6 +13,18 @@ backend = "auto"
 devices_timeout = "3s"
 # How long a device listing is reused before the audio backend is asked again.
 devices_ttl = "30s"
+# Samples per echo-canceller block (rounded up to a power of two): smaller adapts faster, larger costs less.
+echo_block = 256
+# Cancel speaker echo in the mic using system audio as the reference, and drop local-speaker utterances that repeat near-simultaneous remote speech, so remote speech is not transcribed twice.
+echo_cancel = true
+# Mic delay inside the echo canceller, so system audio that is captured a little after its echo reached the mic is still cancelled; both channels are shifted by it.
+echo_delay = "40ms"
+# Percent: the echo canceller's output filter takes the adapting filter when its residual is this many times smaller, and resets it when it is this many times larger (double talk).
+echo_divergence = 200
+# Echo-canceller adaptation step in per-mille (500 = 0.5): larger converges faster, smaller is steadier.
+echo_step = 500
+# Longest speaker-to-mic echo the echo canceller models (audio.echo_cancel).
+echo_tail = "200ms"
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"
 # How long a capture backend waits for audio to start flowing before giving up.
@@ -177,6 +189,10 @@ search_snippet_chars = 40
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
+# Percent of a local-speaker utterance's words that must appear in near-simultaneous remote speech for it to be dropped as echo (stt.echo_window).
+echo_overlap = 60
+# With audio.echo_cancel, a local-speaker utterance within this time of remote speech that says the same words is dropped as speaker echo.
+echo_window = "1s"
 # Window used to feed a recorded file to the live pass as if it were arriving.
 feed = "500ms"
 # Longest stretch sent in one request in the final pass (cloud uploads are size-limited).

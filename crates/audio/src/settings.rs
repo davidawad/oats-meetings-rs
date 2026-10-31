@@ -84,6 +84,9 @@ pub struct AudioSettings {
     /// Empty means the platform default microphone.
     pub mic_device: String,
     pub timing: Timing,
+    /// Echo cancellation of the mic against system audio (`audio.echo_cancel`); `None` is off.
+    /// Only applies while both sources are recorded.
+    pub echo: Option<crate::aec::EchoSettings>,
 }
 
 impl AudioSettings {
@@ -97,16 +100,26 @@ impl AudioSettings {
             mic_enabled: true,
             mic_device: String::new(),
             timing,
+            echo: None,
         }
     }
 }
 
 #[cfg(test)]
 pub(crate) fn test_settings() -> AudioSettings {
-    AudioSettings::new(Timing {
-        open_timeout: Duration::from_secs(15),
-        poll: Duration::from_millis(25),
-    })
+    AudioSettings {
+        echo: Some(crate::aec::EchoSettings {
+            tail: Duration::from_millis(50),
+            delay: Duration::from_millis(20),
+            block: 256,
+            step_permille: 500,
+            divergence_percent: 200,
+        }),
+        ..AudioSettings::new(Timing {
+            open_timeout: Duration::from_secs(15),
+            poll: Duration::from_millis(25),
+        })
+    }
 }
 
 #[cfg(test)]

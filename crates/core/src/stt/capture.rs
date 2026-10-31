@@ -14,7 +14,7 @@ use oats_audio::resample::Decimate3;
 use oats_audio::Source;
 use serde_json::{json, Value};
 
-use super::{by_time, final_channel, utterance_json, wav, Asr, Live, Settings, Utt};
+use super::{by_time, drop_echoes, final_channel, utterance_json, wav, Asr, Live, Settings, Utt};
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
 use crate::sessions::Store;
@@ -201,7 +201,7 @@ impl Transcriber {
             &s.language,
             &s.tuning,
         )?);
-        let all = by_time(all);
+        let all = by_time(drop_echoes(all, &s.speaker_you, s.tuning.echo));
         let lines: Vec<Value> = all
             .iter()
             .map(|u| utterance_json(u, self.started))
