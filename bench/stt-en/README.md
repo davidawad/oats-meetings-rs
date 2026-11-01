@@ -18,6 +18,9 @@ is a PM live check (see the end).
 
 - `bash bench/stt-en/run.sh <model>...` (or `bench.py run <LibriSpeech dir> <model>`), one model per
   process. A killed run resumes from `hyps/<model>.partial.tsv` (peak RSS is then the last pass's). Each utterance is decoded whole, greedy decoding, English forced where the model asks.
+- The PyTorch models (Qwen3-ASR, Kyutai, Granite, Nemotron) run from a second venv with the CPU torch
+  wheel plus the model's own package (`qwen-asr`, `moshi`, `transformers`, `nemo_toolkit[asr]`), then
+  `<venv>/bin/python bench.py run <LibriSpeech dir> <model>`; each loader names its package.
 - WER: corpus-level per split (word edits / reference words). Both sides are lower-cased, plain
   integers spelled out, hyphens split, punctuation dropped, mr/mrs/dr expanded. Years written as digits
   (1999) still count against a model ("one thousand nine hundred ninety nine" vs "nineteen ninety nine").
@@ -35,6 +38,7 @@ is a PM live check (see the end).
 | parakeet-tdt-0.6b-v2 | 2.25% | 4.53% | 661 MB (int8) | CC-BY-4.0 | 0.149 (8 thr) | 1253 | sherpa-onnx 2.0.1 int8, catalog files |
 | moonshine-base-en | 3.81% | 10.92% | 287 MB (int8) | MIT | 0.331 (14 thr) | 558 (last resumed pass) | sherpa-onnx 2.0.1 int8, catalog files |
 | whisper-large-v3-turbo | 2.40% | 5.31% | 1.62 GB fp16 CT2 (int8 at load) | MIT | 1.04 (12, 8 then 4 thr over 5 resumed passes, partly throttled) | 1659 (last resumed pass) | faster-whisper (CTranslate2 int8), greedy, English forced |
+| qwen3-asr-0.6b | 2.40% | 6.98% | 1.88 GB (bf16 checkpoint) | Apache-2.0 | 0.67 (4 thr) | 6017 (fp32, last resumed pass) | qwen-asr 0.0.6 (torch 2.9 CPU, transformers 4.57) backend, fp32 CPU, language forced to English |
 
 ## Candidates: size, licence, Mac runtime, what Rust can drive
 
@@ -47,7 +51,7 @@ gated licence.
 | Parakeet TDT 0.6B v2 | nvidia/parakeet-tdt-0.6b-v2 (ae9ad07) | CC-BY-4.0 | 2.47 GB fp32; 661 MB int8 ONNX | measured | CoreML/ANE (FluidAudio, FluidInference/parakeet-tdt-0.6b-v2-coreml); MLX (mlx-community/parakeet-tdt-0.6b-v2); sherpa-onnx (CPU, CoreML EP) | yes: sherpa-onnx (in the app today); CoreML model via objc2 |
 | Whisper large-v3-turbo | openai/whisper-large-v3-turbo (41f01f3) | MIT | 1.62 GB fp16; 574 MB ggml q5_0 | measured | whisper.cpp Metal (+ CoreML encoder); MLX (mlx-community/whisper-large-v3-turbo, mlx-audio) | yes: whisper.cpp via whisper-rs (in the app today) |
 | Moonshine base (en) | moonshine-ai/moonshine-base (7a73d8d) | MIT | 0.25 GB | measured | sherpa-onnx (CPU) | yes: sherpa-onnx (in the app today) |
-| Qwen3-ASR 0.6B | Qwen/Qwen3-ASR-0.6B (5eb1441) | Apache-2.0 | 1.88 GB | pending | MLX (qwen3-asr-mlx, mlx-audio, mlx-community/Qwen3-ASR-0.6B-8bit); speech-swift | MLX sidecar only |
+| Qwen3-ASR 0.6B | Qwen/Qwen3-ASR-0.6B (5eb1441) | Apache-2.0 | 1.88 GB | measured | MLX (qwen3-asr-mlx, mlx-audio, mlx-community/Qwen3-ASR-0.6B-8bit); speech-swift | MLX sidecar only |
 | Kyutai STT 1B (en/fr) | kyutai/stt-1b-en_fr (1c34c6b) | CC-BY-4.0 | 2.36 GB | pending | MLX (moshi-mlx; aufklarer/Kyutai-STT-1B-MLX-8bit); candle Metal | yes: kyutai's own Rust/candle stack (moshi-server) or an MLX sidecar |
 | Nemotron speech streaming en 0.6B | nvidia/nemotron-speech-streaming-en-0.6b (ebe59e5) | NVIDIA Open Model License (`license:other`) | 4.95 GB repo files | pending | MLX (animaslabs/nemotron-speech-streaming-en-0.6b-mlx) | MLX sidecar; sherpa-onnx only if an ONNX export is published |
 | Granite Speech 4.0 1B | ibm-granite/granite-4.0-1b-speech (bd87ab8) | Apache-2.0 | 4.63 GB repo files | pending | MLX (mlx-audio, if supported) | MLX sidecar |
