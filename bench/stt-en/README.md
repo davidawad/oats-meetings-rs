@@ -65,6 +65,16 @@ benchmark adds the measured WER below (same files, same hashes):
 | parakeet-tdt-0.6b-v2 | sherpa-onnx | catalog (csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 @ 1ab9323) | 2.25% / 4.53% |
 | moonshine-base-en | sherpa-onnx | catalog (sherpa-onnx moonshine-base-en int8 files) | 3.81% / 10.92% |
 
+## Remaining
+
+- Whisper large-v3-turbo: CTranslate2 int8 on 14 pod threads decodes about 45 utterances per 9 min
+  (RTF near 1), so the 300-utterance pass needs about an hour of pod time. Resume with
+  `BENCH_THREADS=14 bench.py run <dir> whisper-large-v3-turbo`, or run on a GPU pod.
+- Qwen3-ASR 0.6B / 1.7B, Kyutai STT 1B, Nemotron streaming 0.6B, Granite Speech 4.0 1B: need a
+  PyTorch stack (qwen-asr, moshi, NeMo, transformers); a loader per model goes into `MODELS`, in the
+  bead thread's order. None has a runtime the app ships, so none can be a catalog entry yet.
+- AMI meeting subset: last in the order, not started.
+
 ## PM live check (Mac)
 
 Real-time factor, CPU % and peak memory on one 60 s clip per model with a Mac runtime (FluidAudio
