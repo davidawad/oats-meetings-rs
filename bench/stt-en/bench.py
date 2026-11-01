@@ -286,7 +286,8 @@ def kyutai_stt(models_dir, threads, repo):
     torch.set_num_threads(threads)
     d, size = hf_snapshot(models_dir, repo)
     proc = KyutaiSpeechToTextProcessor.from_pretrained(d)
-    m = KyutaiSpeechToTextForConditionalGeneration.from_pretrained(d, dtype=torch.float32)
+    # bf16 (the checkpoint's dtype): same hypotheses as fp32 on a smoke set, half the pod CPU time.
+    m = KyutaiSpeechToTextForConditionalGeneration.from_pretrained(d, dtype=torch.bfloat16)
 
     def decode(samples):
         # Mimi takes 24 kHz; the processor appends the model's 0.5 s text delay as silence.
@@ -323,7 +324,8 @@ def granite_speech(models_dir, threads, repo):
     torch.set_num_threads(threads)
     d, size = hf_snapshot(models_dir, repo)
     proc = AutoProcessor.from_pretrained(d)
-    m = AutoModelForSpeechSeq2Seq.from_pretrained(d, dtype=torch.float32)
+    # bf16: same hypotheses as fp32 on a smoke set, half the pod CPU time.
+    m = AutoModelForSpeechSeq2Seq.from_pretrained(d, dtype=torch.bfloat16)
     chat = [{"role": "user", "content": "<|audio|>can you transcribe the speech into a written format?"}]
     prompt = proc.tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
 
@@ -349,14 +351,14 @@ MODELS = {
     "qwen3-asr-1.7b": (qwen3_asr, "Qwen/Qwen3-ASR-1.7B", "Apache-2.0",
                        "PyTorch fp32 CPU (qwen-asr, transformers backend), language forced to English"),
     "kyutai-stt-1b-en_fr": (kyutai_stt, "kyutai/stt-1b-en_fr-trfs", "CC-BY-4.0",
-                            "PyTorch fp32 CPU (transformers 5.22.1 port of kyutai/stt-1b-en_fr), "
+                            "PyTorch bf16 CPU (transformers 5.22.1 port of kyutai/stt-1b-en_fr), "
                             "audio resampled to 24 kHz, greedy"),
     "nemotron-speech-streaming-en-0.6b": (
         nemotron_rnnt, "nvidia/nemotron-speech-streaming-en-0.6b", "NVIDIA Open Model License",
         "PyTorch fp32 CPU (transformers 5.22.1), whole utterance, 1.12 s chunk attention "
         "(13-frame lookahead), greedy RNN-T"),
     "granite-speech-4.0-1b": (granite_speech, "ibm-granite/granite-4.0-1b-speech", "Apache-2.0",
-                              "PyTorch fp32 CPU (transformers 5.22.1), model-card transcription "
+                              "PyTorch bf16 CPU (transformers 5.22.1), model-card transcription "
                               "prompt, greedy"),
 }
 
