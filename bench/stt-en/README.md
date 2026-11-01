@@ -12,19 +12,31 @@ is a PM live check (see the end).
 - Licence: LibriSpeech is CC BY 4.0 (https://www.openslr.org/12/), so the reference text is committed.
   The audio is not: `run.sh` downloads `test-clean.tar.gz` / `test-other.tar.gz` and checks them
   against OpenSLR's `md5sum.txt`.
-- AMI (meeting audio) was last in the order and is not done yet; see "Remaining".
+- AMI meeting subset (dot-4uzgol.70): 120 segments from the AMI SDM test split (single distant
+  microphone, the AMI channel closest to a laptop on a meeting table), 3-30 s each, picked by an even
+  stride over the sorted segment ids; all 16 test meetings appear. About 11.5 min of audio, 2027
+  reference words. Source: the `edinburghcstr/ami` parquet at revision 46f28f2 (CC BY 4.0, Kaldi
+  segmentation); `ami-subset.tsv` lists each segment with its wav sha256 and reference text, and
+  `bench.py ami-subset` extracts the wavs from the downloaded parquet.
 
 ## Method
 
 - `bash bench/stt-en/run.sh <model>...` (or `bench.py run <LibriSpeech dir> <model>`), one model per
   process. A killed run resumes from `hyps/<model>.partial.tsv` (peak RSS is then the last pass's). Each utterance is decoded whole, greedy decoding, English forced where the model asks.
-- The PyTorch models (Qwen3-ASR, Kyutai, Granite, Nemotron) run from a second venv with the CPU torch
-  wheel plus the model's own package (`qwen-asr`, `moshi`, `transformers`, `nemo_toolkit[asr]`), then
-  `<venv>/bin/python bench.py run <LibriSpeech dir> <model>`; each loader names its package.
+- The PyTorch models run from their own venvs with the CPU torch 2.9 wheel: Qwen3-ASR with
+  `qwen-asr` 0.0.6 (which pins transformers 4.57); Kyutai, Nemotron and Granite with
+  `transformers==5.22.1` (plus `torchaudio`, `librosa`), whose native ports load
+  `kyutai/stt-1b-en_fr-trfs`, the Nemotron safetensors and Granite directly (no `moshi` or NeMo
+  install). Then `<venv>/bin/python bench.py run <LibriSpeech dir> <model>` and
+  `bench.py run-ami <ami dir> <model>`; each loader names its packages.
 - WER: corpus-level per split (word edits / reference words). Both sides are lower-cased, plain
   integers spelled out, hyphens split, punctuation dropped, mr/mrs/dr expanded. Years written as digits
   (1999) still count against a model ("one thousand nine hundred ninety nine" vs "nineteen ninety nine").
-- 300 utterances: differences under about 1 point (test-clean) or 2 points (test-other) are noise.
+  AMI only: hesitations (um, uh, hmm, mm, mhm, er, erm, ah) are also dropped from both sides, since the
+  AMI references mark them and most models omit them. AMI references keep partial words and
+  repetitions, so AMI WER is higher than published AMI figures that use a full text normaliser.
+- 300 utterances: differences under about 1 point (test-clean) or 2 points (test-other) are noise;
+  on the 120 AMI segments, under about 3 points.
 - Speed columns are pod CPU (shared AMD EPYC, `BENCH_THREADS`): RTF = decode wall time / audio time.
   The pod's cgroup allows 4 CPUs (`cpu.max` 400000/100000), so runs with more threads than 4, or two
   models at once, were throttled and their RTF is pessimistic. Order of magnitude only; they are not
@@ -39,6 +51,7 @@ is a PM live check (see the end).
 | moonshine-base-en | 3.81% | 10.92% | 287 MB (int8) | MIT | 0.331 (14 thr) | 558 (last resumed pass) | sherpa-onnx 2.0.1 int8, catalog files |
 | whisper-large-v3-turbo | 2.40% | 5.31% | 1.62 GB fp16 CT2 (int8 at load) | MIT | 1.04 (12, 8 then 4 thr over 5 resumed passes, partly throttled) | 1659 (last resumed pass) | faster-whisper (CTranslate2 int8), greedy, English forced |
 | qwen3-asr-0.6b | 2.40% | 6.98% | 1.88 GB (bf16 checkpoint) | Apache-2.0 | 0.67 (4 thr) | 6017 (fp32, last resumed pass) | qwen-asr 0.0.6 (torch 2.9 CPU, transformers 4.57) backend, fp32 CPU, language forced to English |
+| qwen3-asr-1.7b | 1.83% | 5.31% | 4.70 GB (bf16 checkpoint) | Apache-2.0 | 1.69 (4 thr) | 11787 (fp32) | qwen-asr 0.0.6 (torch 2.9 CPU, transformers 4.57) backend, fp32 CPU, language forced to English |
 
 ## Candidates: size, licence, Mac runtime, what Rust can drive
 
@@ -55,7 +68,7 @@ gated licence.
 | Kyutai STT 1B (en/fr) | kyutai/stt-1b-en_fr (1c34c6b) | CC-BY-4.0 | 2.36 GB | pending | MLX (moshi-mlx; aufklarer/Kyutai-STT-1B-MLX-8bit); candle Metal | yes: kyutai's own Rust/candle stack (moshi-server) or an MLX sidecar |
 | Nemotron speech streaming en 0.6B | nvidia/nemotron-speech-streaming-en-0.6b (ebe59e5) | NVIDIA Open Model License (`license:other`) | 4.95 GB repo files | pending | MLX (animaslabs/nemotron-speech-streaming-en-0.6b-mlx) | MLX sidecar; sherpa-onnx only if an ONNX export is published |
 | Granite Speech 4.0 1B | ibm-granite/granite-4.0-1b-speech (bd87ab8) | Apache-2.0 | 4.63 GB repo files | pending | MLX (mlx-audio, if supported) | MLX sidecar |
-| Qwen3-ASR 1.7B | Qwen/Qwen3-ASR-1.7B (7278e1e) | Apache-2.0 | 4.70 GB | pending | MLX (qwen3-asr-mlx, mlx-audio); speech-swift | MLX sidecar only |
+| Qwen3-ASR 1.7B | Qwen/Qwen3-ASR-1.7B (7278e1e) | Apache-2.0 | 4.70 GB | measured | MLX (qwen3-asr-mlx, mlx-audio); speech-swift | MLX sidecar only |
 | Canary-Qwen 2.5B | nvidia/canary-qwen-2.5b (b1469e1) | CC-BY-4.0 | 5.12 GB | skipped: weights over 5 GB | none native (NeMo/PyTorch; community GGUF) | no |
 | Cohere Transcribe 2B | CohereLabs/cohere-transcribe-03-2026 (d552dad) | Apache-2.0, but the HF repo is gated (`gated: auto`) | 4.13 GB | skipped: gated | CoreML (community 6-bit export) | objc2 CoreML, if the community export is trusted |
 
@@ -75,10 +88,9 @@ benchmark adds the measured WER below (same files, same hashes):
 
 ## Remaining
 
-- Qwen3-ASR 0.6B / 1.7B, Kyutai STT 1B, Nemotron streaming 0.6B, Granite Speech 4.0 1B: need a
-  PyTorch stack (qwen-asr, moshi, NeMo, transformers); a loader per model goes into `MODELS`, in the
-  bead thread's order. None has a runtime the app ships, so none can be a catalog entry yet.
-- AMI meeting subset: last in the order, not started.
+- Kyutai STT 1B, Nemotron streaming 0.6B, Granite Speech 4.0 1B (dot-4uzgol.70, in this order):
+  loaders are in `MODELS`. None has a runtime the app ships, so none can be a catalog entry yet.
+- AMI meeting subset across all measured models (dot-4uzgol.70): subset and `run-ami` in place.
 
 ## PM live check (Mac)
 

@@ -4,10 +4,13 @@
 Accuracy on a fixed public subset: 200 LibriSpeech test-clean + 100 test-other
 utterances, picked by an even stride over the sorted utterance ids (see subset.tsv).
 One model per invocation; writes results/<model>.json and hyps/<model>.tsv.
+The AMI meeting subset (ami-subset.tsv) writes results/<model>.ami.json and hyps/<model>.ami.tsv.
 
-    bench.py subset   <librispeech-dir>        # (re)write subset.tsv
-    bench.py run      <librispeech-dir> <model> [--models-dir D] [--threads N]
-    bench.py table                             # print the results table from results/*.json
+    bench.py subset     <librispeech-dir>      # (re)write subset.tsv
+    bench.py run        <librispeech-dir> <model>
+    bench.py ami-subset <ami-dir>              # extract the AMI segments (writes ami-subset.tsv if absent)
+    bench.py run-ami    <ami-dir> <model>
+    bench.py table                             # print the results tables from results/*.json
 
 Speed here is pod CPU (shared AMD EPYC, N threads): an order-of-magnitude figure only.
 Apple Neural Engine / MLX speed is a PM live check on a Mac.
@@ -73,6 +76,55 @@ def load_audio(path):
     return samples
 
 
+# AMI meeting subset: SDM (single distant microphone, the closest AMI channel to a laptop on a
+# meeting table) test segments of 3-30 s from the edinburghcstr/ami parquet (CC BY 4.0), picked
+# by an even stride over the sorted segment ids. <ami-dir> holds sdm/test-*.parquet at AMI_REV.
+AMI_REV = "46f28f2503e2ec48f8867a84eef356c70476beab"
+AMI_N = 120
+
+
+def ami_subset(ami):
+    import pyarrow.parquet as pq
+    tsv = HERE / "ami-subset.tsv"
+    files = sorted(Path(ami).glob("test-*.parquet"))
+    keep = None
+    if tsv.exists():
+        keep = {line.split("\t")[1] for line in tsv.read_text().splitlines()[1:]}
+    else:
+        segs = []
+        for f in files:
+            t = pq.read_table(f, columns=["audio_id", "begin_time", "end_time", "text"])
+            segs += [r["audio_id"] for r in t.to_pylist() if 3 <= r["end_time"] - r["begin_time"] <= 30]
+        segs.sort()
+        keep = set(segs[::len(segs) // AMI_N][:AMI_N])
+    rows = []
+    (Path(ami) / "segments").mkdir(exist_ok=True)
+    for f in files:
+        for batch in pq.ParquetFile(f).iter_batches(batch_size=256):
+            for r in batch.to_pylist():
+                if r["audio_id"] in keep:
+                    wav = r["audio"]["bytes"]
+                    (Path(ami) / "segments" / f"{r['audio_id']}.wav").write_bytes(wav)
+                    rows.append((r["audio_id"], hashlib.sha256(wav).hexdigest(), r["text"]))
+    if not tsv.exists():
+        with open(tsv, "w") as f:
+            f.write("split\tutterance\twav_sha256\tlicence\ttext\n")
+            for uid, sha, text in sorted(rows):
+                f.write(f"ami-sdm\t{uid}\t{sha}\tCC-BY-4.0\t{text}\n")
+    print(f"extracted {len(rows)} segments")
+
+
+def load_ami_subset(ami):
+    rows = []
+    for line in (HERE / "ami-subset.tsv").read_text().splitlines()[1:]:
+        split, uid, sha, _lic, text = line.split("\t")
+        path = Path(ami) / "segments" / f"{uid}.wav"
+        if hashlib.sha256(path.read_bytes()).hexdigest() != sha:
+            sys.exit(f"sha256 mismatch: {path}")
+        rows.append((split, uid, path, text))
+    return rows
+
+
 # ---------------------------------------------------------------- WER
 
 _ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen " \
@@ -107,6 +159,15 @@ def normalize(text):
     t = re.sub(r"\bmrs\b", "missus", t)
     t = re.sub(r"\bdr\b", "doctor", t)
     return " ".join(t.split())
+
+
+# AMI transcripts mark hesitations ("UM", "UH", "MM-HMM") that most models drop; they are
+# removed from both sides for AMI only (the LibriSpeech scoring is unchanged).
+_FILLERS = {"uh", "um", "uhm", "hmm", "hm", "mm", "mhm", "er", "erm", "ah"}
+
+
+def drop_fillers(text):
+    return " ".join(w for w in text.split() if w not in _FILLERS)
 
 
 def edits(ref, hyp):
@@ -215,6 +276,65 @@ def qwen3_asr(models_dir, threads, repo):
     return decode, size
 
 
+# Kyutai, Nemotron and Granite run from a transformers 5 venv (README Method):
+# pip install torch (CPU wheel) torchaudio transformers==5.22.1 soundfile
+
+def kyutai_stt(models_dir, threads, repo):
+    import torch
+    import torchaudio.functional as F
+    from transformers import KyutaiSpeechToTextForConditionalGeneration, KyutaiSpeechToTextProcessor
+    torch.set_num_threads(threads)
+    d, size = hf_snapshot(models_dir, repo)
+    proc = KyutaiSpeechToTextProcessor.from_pretrained(d)
+    m = KyutaiSpeechToTextForConditionalGeneration.from_pretrained(d, dtype=torch.float32)
+
+    def decode(samples):
+        # Mimi takes 24 kHz; the processor appends the model's 0.5 s text delay as silence.
+        audio = F.resample(torch.from_numpy(samples), 16000, 24000).numpy()
+        with torch.inference_mode():
+            out = m.generate(**proc(audio=audio, return_tensors="pt"))
+        return proc.batch_decode(out, skip_special_tokens=True)[0]
+    return decode, size
+
+
+def nemotron_rnnt(models_dir, threads, repo):
+    import torch
+    from transformers import AutoProcessor, NemotronAsrStreamingForRNNT
+    torch.set_num_threads(threads)
+    d, size = hf_snapshot(models_dir, repo)
+    # The repo also carries the .nemo archive and a q8_0 GGUF; only the safetensors are loaded.
+    size = sum(f.stat().st_size for f in Path(d).rglob("*")
+               if f.is_file() and f.suffix not in (".nemo", ".gguf", ".png"))
+    proc = AutoProcessor.from_pretrained(d)
+    m = NemotronAsrStreamingForRNNT.from_pretrained(d, dtype=torch.float32)
+
+    def decode(samples):
+        # Whole utterance in one pass; the processor sets the model's default right context
+        # (13 frames = 1.12 s chunks), its most accurate streaming setting.
+        with torch.inference_mode():
+            out = m.generate(**proc(audio=samples, sampling_rate=16000, return_tensors="pt"))
+        return proc.batch_decode(out.sequences, skip_special_tokens=True)[0]
+    return decode, size
+
+
+def granite_speech(models_dir, threads, repo):
+    import torch
+    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+    torch.set_num_threads(threads)
+    d, size = hf_snapshot(models_dir, repo)
+    proc = AutoProcessor.from_pretrained(d)
+    m = AutoModelForSpeechSeq2Seq.from_pretrained(d, dtype=torch.float32)
+    chat = [{"role": "user", "content": "<|audio|>can you transcribe the speech into a written format?"}]
+    prompt = proc.tokenizer.apply_chat_template(chat, tokenize=False, add_generation_prompt=True)
+
+    def decode(samples):
+        inputs = proc(prompt, torch.from_numpy(samples)[None], return_tensors="pt")
+        with torch.inference_mode():
+            out = m.generate(**inputs, max_new_tokens=256, do_sample=False, num_beams=1)
+        return proc.tokenizer.decode(out[0, inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
+    return decode, size
+
+
 # id -> (loader, arg, licence, note)
 MODELS = {
     "parakeet-tdt-0.6b-v2": (sherpa_parakeet, "parakeet-tdt-0.6b-v2", "CC-BY-4.0",
@@ -228,18 +348,29 @@ MODELS = {
                        "PyTorch fp32 CPU (qwen-asr, transformers backend), language forced to English"),
     "qwen3-asr-1.7b": (qwen3_asr, "Qwen/Qwen3-ASR-1.7B", "Apache-2.0",
                        "PyTorch fp32 CPU (qwen-asr, transformers backend), language forced to English"),
+    "kyutai-stt-1b-en_fr": (kyutai_stt, "kyutai/stt-1b-en_fr-trfs", "CC-BY-4.0",
+                            "PyTorch fp32 CPU (transformers 5.22.1 port of kyutai/stt-1b-en_fr), "
+                            "audio resampled to 24 kHz, greedy"),
+    "nemotron-speech-streaming-en-0.6b": (
+        nemotron_rnnt, "nvidia/nemotron-speech-streaming-en-0.6b", "NVIDIA Open Model License",
+        "PyTorch fp32 CPU (transformers 5.22.1), whole utterance, 1.12 s chunk attention "
+        "(13-frame lookahead), greedy RNN-T"),
+    "granite-speech-4.0-1b": (granite_speech, "ibm-granite/granite-4.0-1b-speech", "Apache-2.0",
+                              "PyTorch fp32 CPU (transformers 5.22.1), model-card transcription "
+                              "prompt, greedy"),
 }
 
 
-def run(libri, model, models_dir, threads):
+def run(corpus, model, models_dir, threads, ami=False):
     loader, arg, licence, note = MODELS[model]
-    rows = load_subset(libri)
+    rows = load_ami_subset(corpus) if ami else load_subset(corpus)
+    tag = f"{model}.ami" if ami else model
     t0 = time.time()
     decode, size = loader(models_dir, threads, arg)
     load_s = time.time() - t0
-    # Each decoded utterance is appended to hyps/<model>.partial.tsv, so a killed run resumes.
+    # Each decoded utterance is appended to hyps/<tag>.partial.tsv, so a killed run resumes.
     (HERE / "hyps").mkdir(exist_ok=True)
-    partial = HERE / "hyps" / f"{model}.partial.tsv"
+    partial = HERE / "hyps" / f"{tag}.partial.tsv"
     done = {}
     if partial.exists():
         for line in partial.read_text().splitlines():
@@ -263,7 +394,10 @@ def run(libri, model, models_dir, threads):
         w, a, hyp = done[uid]
         wall += w
         audio_s += a
-        e, n = edits(normalize(ref), normalize(hyp))
+        r, h = normalize(ref), normalize(hyp)
+        if ami:
+            r, h = drop_fillers(r), drop_fillers(h)
+        e, n = edits(r, h)
         acc = per.setdefault(split, [0, 0])
         acc[0] += e
         acc[1] += n
@@ -279,8 +413,8 @@ def run(libri, model, models_dir, threads):
         "peak_rss_mb_last_pass": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
     }
     (HERE / "results").mkdir(exist_ok=True)
-    (HERE / "results" / f"{model}.json").write_text(json.dumps(out, indent=1) + "\n")
-    with open(HERE / "hyps" / f"{model}.tsv", "w") as f:
+    (HERE / "results" / f"{tag}.json").write_text(json.dumps(out, indent=1) + "\n")
+    with open(HERE / "hyps" / f"{tag}.tsv", "w") as f:
         f.write("split\tutterance\tedits\tref_words\thypothesis\n")
         for r in hyps:
             f.write("\t".join(map(str, r)) + "\n")
@@ -291,10 +425,20 @@ def run(libri, model, models_dir, threads):
 def table():
     print("| model | test-clean WER | test-other WER | size MB | licence | RTF pod CPU | peak RSS MB |")
     print("|---|---|---|---|---|---|---|")
-    for f in sorted((HERE / "results").glob("*.json")):
+    results = sorted((HERE / "results").glob("*.json"))
+    for f in results:
+        if f.name.endswith(".ami.json"):
+            continue
         r = json.loads(f.read_text())
         print(f"| {r['model']} | {r['wer'].get('test-clean')}% | {r['wer'].get('test-other')}% | "
               f"{r['bytes'] / 1e6:.0f} | {r['licence']} | {r['rtf_pod_cpu']} | {r.get('peak_rss_mb', r.get('peak_rss_mb_last_pass'))} |")
+    print()
+    print("| model | AMI SDM WER | RTF pod CPU |")
+    print("|---|---|---|")
+    for f in results:
+        if f.name.endswith(".ami.json"):
+            r = json.loads(f.read_text())
+            print(f"| {r['model']} | {r['wer']['ami-sdm']}% | {r['rtf_pod_cpu']} |")
 
 
 if __name__ == "__main__":
@@ -306,5 +450,12 @@ if __name__ == "__main__":
         md = os.environ.get("BENCH_MODELS_DIR", "/tmp/stt-bench-models")
         th = int(os.environ.get("BENCH_THREADS", "8"))
         run(args[0], args[1], md, th)
+    elif cmd == "ami-subset":
+        ami_subset(sys.argv[2])
+    elif cmd == "run-ami":
+        args = sys.argv[2:]
+        md = os.environ.get("BENCH_MODELS_DIR", "/tmp/stt-bench-models")
+        th = int(os.environ.get("BENCH_THREADS", "8"))
+        run(args[0], args[1], md, th, ami=True)
     elif cmd == "table":
         table()

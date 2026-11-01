@@ -1,0 +1,20 @@
+{
+ "model": "qwen3-asr-1.7b",
+ "licence": "Apache-2.0",
+ "note": "PyTorch fp32 CPU (qwen-asr, transformers backend), language forced to English",
+ "bytes": 4703114308,
+ "wer": {
+  "test-clean": 1.83,
+  "test-other": 5.31
+ },
+ "ref_words": {
+  "test-clean": 3993,
+  "test-other": 1676
+ },
+ "utterances": 300,
+ "audio_s": 2126.2,
+ "rtf_pod_cpu": 1.6903,
+ "threads": 4,
+ "load_s": 17.8,
+ "peak_rss_mb_last_pass": 11787
+}
