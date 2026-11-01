@@ -1,0 +1,20 @@
+{
+ "model": "parakeet-tdt-0.6b-v2",
+ "licence": "CC-BY-4.0",
+ "note": "sherpa-onnx int8 export, catalog files",
+ "bytes": 661190513,
+ "wer": {
+  "test-clean": 2.25,
+  "test-other": 4.53
+ },
+ "ref_words": {
+  "test-clean": 3993,
+  "test-other": 1676
+ },
+ "utterances": 300,
+ "audio_s": 2126.2,
+ "rtf_pod_cpu": 0.1488,
+ "threads": 8,
+ "load_s": 6.9,
+ "peak_rss_mb": 1253
+}
