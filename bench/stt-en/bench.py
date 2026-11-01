@@ -195,6 +195,26 @@ def whisper_ct2(models_dir, threads, repo):
     return decode, size
 
 
+def hf_snapshot(models_dir, repo):
+    from huggingface_hub import snapshot_download
+    d = snapshot_download(repo, cache_dir=str(models_dir))
+    return d, sum(f.stat().st_size for f in Path(d).rglob("*") if f.is_file())
+
+
+def qwen3_asr(models_dir, threads, repo):
+    # PyTorch venv: pip install torch (CPU wheel) qwen-asr
+    import torch
+    from qwen_asr import Qwen3ASRModel
+    torch.set_num_threads(threads)
+    d, size = hf_snapshot(models_dir, repo)
+    m = Qwen3ASRModel.from_pretrained(d, dtype=torch.float32, device_map="cpu",
+                                      max_inference_batch_size=1, max_new_tokens=256)
+
+    def decode(samples):
+        return m.transcribe(audio=(samples, 16000), language="English")[0].text
+    return decode, size
+
+
 # id -> (loader, arg, licence, note)
 MODELS = {
     "parakeet-tdt-0.6b-v2": (sherpa_parakeet, "parakeet-tdt-0.6b-v2", "CC-BY-4.0",
@@ -204,6 +224,10 @@ MODELS = {
                                "catalog's whisper.cpp large-v3-turbo-q5_0 but a different quantisation"),
     "moonshine-base-en": (sherpa_moonshine, "moonshine-base-en", "MIT",
                           "sherpa-onnx int8 export, catalog files"),
+    "qwen3-asr-0.6b": (qwen3_asr, "Qwen/Qwen3-ASR-0.6B", "Apache-2.0",
+                       "PyTorch fp32 CPU (qwen-asr, transformers backend), language forced to English"),
+    "qwen3-asr-1.7b": (qwen3_asr, "Qwen/Qwen3-ASR-1.7B", "Apache-2.0",
+                       "PyTorch fp32 CPU (qwen-asr, transformers backend), language forced to English"),
 }
 
 

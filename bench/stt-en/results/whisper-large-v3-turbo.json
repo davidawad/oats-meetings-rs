@@ -1,0 +1,20 @@
+{
+ "model": "whisper-large-v3-turbo",
+ "licence": "MIT",
+ "note": "CTranslate2 int8 (faster-whisper), greedy; same weights as the catalog's whisper.cpp large-v3-turbo-q5_0 but a different quantisation",
+ "bytes": 1621668947,
+ "wer": {
+  "test-clean": 2.4,
+  "test-other": 5.31
+ },
+ "ref_words": {
+  "test-clean": 3993,
+  "test-other": 1676
+ },
+ "utterances": 300,
+ "audio_s": 2126.2,
+ "rtf_pod_cpu": 1.0412,
+ "threads": 4,
+ "load_s": 4.0,
+ "peak_rss_mb_last_pass": 1659
+}

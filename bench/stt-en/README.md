@@ -22,8 +22,10 @@ is a PM live check (see the end).
   integers spelled out, hyphens split, punctuation dropped, mr/mrs/dr expanded. Years written as digits
   (1999) still count against a model ("one thousand nine hundred ninety nine" vs "nineteen ninety nine").
 - 300 utterances: differences under about 1 point (test-clean) or 2 points (test-other) are noise.
-- Speed columns are pod CPU (shared AMD EPYC, 8-12 threads, `BENCH_THREADS`): RTF = decode wall time
-  / audio time. Order of magnitude only; they are not laptop or ANE figures.
+- Speed columns are pod CPU (shared AMD EPYC, `BENCH_THREADS`): RTF = decode wall time / audio time.
+  The pod's cgroup allows 4 CPUs (`cpu.max` 400000/100000), so runs with more threads than 4, or two
+  models at once, were throttled and their RTF is pessimistic. Order of magnitude only; they are not
+  laptop or ANE figures.
 - Per-utterance hypotheses and edit counts: `hyps/<model>.tsv`; raw numbers: `results/<model>.json`.
 
 ## Results (measured)
@@ -32,6 +34,7 @@ is a PM live check (see the end).
 |---|---|---|---|---|---|---|---|
 | parakeet-tdt-0.6b-v2 | 2.25% | 4.53% | 661 MB (int8) | CC-BY-4.0 | 0.149 (8 thr) | 1253 | sherpa-onnx 2.0.1 int8, catalog files |
 | moonshine-base-en | 3.81% | 10.92% | 287 MB (int8) | MIT | 0.331 (14 thr) | 558 (last resumed pass) | sherpa-onnx 2.0.1 int8, catalog files |
+| whisper-large-v3-turbo | 2.40% | 5.31% | 1.62 GB fp16 CT2 (int8 at load) | MIT | 1.04 (12, 8 then 4 thr over 5 resumed passes, partly throttled) | 1659 (last resumed pass) | faster-whisper (CTranslate2 int8), greedy, English forced |
 
 ## Candidates: size, licence, Mac runtime, what Rust can drive
 
@@ -42,7 +45,7 @@ gated licence.
 | candidate | upstream (revision) | licence | weights | status | Mac runtimes | Rust can drive |
 |---|---|---|---|---|---|---|
 | Parakeet TDT 0.6B v2 | nvidia/parakeet-tdt-0.6b-v2 (ae9ad07) | CC-BY-4.0 | 2.47 GB fp32; 661 MB int8 ONNX | measured | CoreML/ANE (FluidAudio, FluidInference/parakeet-tdt-0.6b-v2-coreml); MLX (mlx-community/parakeet-tdt-0.6b-v2); sherpa-onnx (CPU, CoreML EP) | yes: sherpa-onnx (in the app today); CoreML model via objc2 |
-| Whisper large-v3-turbo | openai/whisper-large-v3-turbo (41f01f3) | MIT | 1.62 GB fp16; 574 MB ggml q5_0 | pending | whisper.cpp Metal (+ CoreML encoder); MLX (mlx-community/whisper-large-v3-turbo, mlx-audio) | yes: whisper.cpp via whisper-rs (in the app today) |
+| Whisper large-v3-turbo | openai/whisper-large-v3-turbo (41f01f3) | MIT | 1.62 GB fp16; 574 MB ggml q5_0 | measured | whisper.cpp Metal (+ CoreML encoder); MLX (mlx-community/whisper-large-v3-turbo, mlx-audio) | yes: whisper.cpp via whisper-rs (in the app today) |
 | Moonshine base (en) | moonshine-ai/moonshine-base (7a73d8d) | MIT | 0.25 GB | measured | sherpa-onnx (CPU) | yes: sherpa-onnx (in the app today) |
 | Qwen3-ASR 0.6B | Qwen/Qwen3-ASR-0.6B (5eb1441) | Apache-2.0 | 1.88 GB | pending | MLX (qwen3-asr-mlx, mlx-audio, mlx-community/Qwen3-ASR-0.6B-8bit); speech-swift | MLX sidecar only |
 | Kyutai STT 1B (en/fr) | kyutai/stt-1b-en_fr (1c34c6b) | CC-BY-4.0 | 2.36 GB | pending | MLX (moshi-mlx; aufklarer/Kyutai-STT-1B-MLX-8bit); candle Metal | yes: kyutai's own Rust/candle stack (moshi-server) or an MLX sidecar |
@@ -64,12 +67,10 @@ benchmark adds the measured WER below (same files, same hashes):
 |---|---|---|---|
 | parakeet-tdt-0.6b-v2 | sherpa-onnx | catalog (csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 @ 1ab9323) | 2.25% / 4.53% |
 | moonshine-base-en | sherpa-onnx | catalog (sherpa-onnx moonshine-base-en int8 files) | 3.81% / 10.92% |
+| whisper-large-v3-turbo | whisper.cpp | catalog (ggml large-v3-turbo q5_0) | 2.40% / 5.31% (measured with CTranslate2 int8, same weights; q5_0 may differ slightly) |
 
 ## Remaining
 
-- Whisper large-v3-turbo: CTranslate2 int8 on 14 pod threads decodes about 45 utterances per 9 min
-  (RTF near 1), so the 300-utterance pass needs about an hour of pod time. Resume with
-  `BENCH_THREADS=14 bench.py run <dir> whisper-large-v3-turbo`, or run on a GPU pod.
 - Qwen3-ASR 0.6B / 1.7B, Kyutai STT 1B, Nemotron streaming 0.6B, Granite Speech 4.0 1B: need a
   PyTorch stack (qwen-asr, moshi, NeMo, transformers); a loader per model goes into `MODELS`, in the
   bead thread's order. None has a runtime the app ships, so none can be a catalog entry yet.
