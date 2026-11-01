@@ -1,0 +1,20 @@
+{
+ "model": "nemotron-speech-streaming-en-0.6b",
+ "licence": "NVIDIA Open Model License",
+ "note": "PyTorch fp32 CPU (transformers 5.22.1), whole utterance, 1.12 s chunk attention (13-frame lookahead), greedy RNN-T",
+ "bytes": 2472849434,
+ "wer": {
+  "test-clean": 2.55,
+  "test-other": 6.26
+ },
+ "ref_words": {
+  "test-clean": 3993,
+  "test-other": 1676
+ },
+ "utterances": 300,
+ "audio_s": 2126.2,
+ "rtf_pod_cpu": 0.3569,
+ "threads": 1,
+ "load_s": 11.4,
+ "peak_rss_mb_last_pass": 3274
+}
