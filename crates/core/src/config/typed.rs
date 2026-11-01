@@ -258,9 +258,20 @@ pub enum SttBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum SttEngine {
-    Whisper,
-    Parakeet,
+pub enum SttProvider {
+    Auto,
+    Cpu,
+    Coreml,
+}
+
+impl SttProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SttProvider::Auto => "auto",
+            SttProvider::Cpu => "cpu",
+            SttProvider::Coreml => "coreml",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -284,8 +295,9 @@ pub struct SttCloud {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttLocal {
-    pub engine: SttEngine,
     pub model: String,
+    pub piece: Dur,
+    pub provider: SttProvider,
     pub model_path: String,
     pub models_dir: String,
     pub model_url: String,

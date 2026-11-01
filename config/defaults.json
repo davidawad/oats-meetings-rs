@@ -131,11 +131,12 @@
     },
     "local": {
       "auto_download": true,
-      "engine": "whisper",
-      "model": "base.en",
+      "model": "parakeet-tdt-0.6b-v2",
       "model_path": "",
-      "model_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main",
+      "model_url": "",
       "models_dir": "",
+      "piece": "30s",
+      "provider": "auto",
       "threads": 4
     },
     "pad": "250ms",

@@ -7,6 +7,12 @@ ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app="$out/Oats Meetings.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/oats-meetings-rs"
+# sherpa-onnx (Parakeet / Moonshine, CoreML) is linked as dylibs on macOS (rpath @loader_path): ship them beside the binary.
+for lib in libsherpa-onnx-c-api.dylib libonnxruntime.dylib; do
+  [ -f "$(dirname "$bin")/$lib" ] || { echo "make-app: $lib not found beside $bin (build with the parakeet feature)" >&2; exit 1; }
+  cp "$(dirname "$bin")/$lib" "$app/Contents/MacOS/"
+done
+otool -l "$app/Contents/MacOS/oats-meetings-rs" | grep -q "@loader_path" || { echo "make-app: binary lacks the @loader_path rpath" >&2; exit 1; }
 sed "s/@VERSION@/$ver/" packaging/macos/Info.plist.in > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 # TCC needs these strings or macOS kills the app on first capture (dot-4uzgol.6).

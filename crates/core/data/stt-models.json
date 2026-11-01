@@ -1,0 +1,138 @@
+{
+  "_doc": "Local speech-to-text model catalog (dot-4uzgol.66). One entry per model `stt.local.model` accepts; the runtime (whisper.cpp or sherpa-onnx) comes from here, not from config. Files are fetched from `url` (or `<stt.local.model_url>/<dir>/<name>` when a mirror is set) and must match `sha256`. `dir` empty: the single file sits directly in the models directory; otherwise the files go into <models_dir>/<dir>. `arch` picks the sherpa-onnx model config (transducer, moonshine). `benchmark` is the published average WER (percent, lower is better) and inverse real-time factor (RTFx, higher is faster) with where each number comes from; null when no published figure fits the model as shipped. RTFx from the Open ASR Leaderboard is measured on a datacentre GPU, so it ranks models but is not laptop speed. Keep crates/core/src/config/keys.rs STT_LOCAL_MODELS in the same order (a test checks).",
+  "models": [
+    {
+      "id": "parakeet-tdt-0.6b-v2",
+      "name": "Parakeet TDT 0.6B v2 (English)",
+      "family": "parakeet",
+      "runtime": "sherpa-onnx",
+      "arch": "transducer",
+      "languages": ["en"],
+      "dir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+      "files": [
+        {"role": "encoder", "name": "encoder.int8.onnx", "bytes": 652184296, "sha256": "a32b12d17bbbc309d0686fbbcc2987b5e9b8333a7da83fa6b089f0a2acd651ab", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/encoder.int8.onnx"},
+        {"role": "decoder", "name": "decoder.int8.onnx", "bytes": 7257753, "sha256": "b6bb64963457237b900e496ee9994b59294526439fbcc1fecf705b31a15c6b4e", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/decoder.int8.onnx"},
+        {"role": "joiner", "name": "joiner.int8.onnx", "bytes": 1739080, "sha256": "7946164367946e7f9f29a122407c3252b680dbae9a51343eb2488d057c3c43d2", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/joiner.int8.onnx"},
+        {"role": "tokens", "name": "tokens.txt", "bytes": 9384, "sha256": "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/tokens.txt"}
+      ],
+      "benchmark": {"wer": 6.02, "rtfx": 6000, "source": "Open ASR Leaderboard (hf-audio/open_asr_leaderboard), nvidia/parakeet-tdt-0.6b-v2, Oct 2026, as cited in dot-4uzgol.66; fp32 checkpoint, this entry is the int8 export"}
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v3",
+      "name": "Parakeet TDT 0.6B v3 (25 European languages)",
+      "family": "parakeet",
+      "runtime": "sherpa-onnx",
+      "arch": "transducer",
+      "languages": ["bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"],
+      "dir": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+      "files": [
+        {"role": "encoder", "name": "encoder.int8.onnx", "bytes": 652184281, "sha256": "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/encoder.int8.onnx"},
+        {"role": "decoder", "name": "decoder.int8.onnx", "bytes": 11845275, "sha256": "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/decoder.int8.onnx"},
+        {"role": "joiner", "name": "joiner.int8.onnx", "bytes": 6355277, "sha256": "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/joiner.int8.onnx"},
+        {"role": "tokens", "name": "tokens.txt", "bytes": 93939, "sha256": "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/tokens.txt"}
+      ],
+      "benchmark": {"wer": 6.34, "rtfx": 749, "source": "Open ASR Leaderboard (English sets), nvidia/parakeet-tdt-0.6b-v3; fp32 checkpoint, this entry is the int8 export"}
+    },
+    {
+      "id": "large-v3-turbo-q5_0",
+      "name": "Whisper large-v3 turbo (q5_0)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["multilingual"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-large-v3-turbo-q5_0.bin", "bytes": 574041195, "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"}
+      ],
+      "benchmark": {"wer": 7.83, "rtfx": 216, "source": "Open ASR Leaderboard, openai/whisper-large-v3-turbo (fp16; the q5_0 quantisation is not measured there)"}
+    },
+    {
+      "id": "small.en",
+      "name": "Whisper small (English)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["en"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-small.en.bin", "bytes": 487614201, "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"}
+      ],
+      "benchmark": {"wer": 8.59, "rtfx": null, "source": "Open ASR Leaderboard, openai/whisper-small.en"}
+    },
+    {
+      "id": "small",
+      "name": "Whisper small (multilingual)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["multilingual"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-small.bin", "bytes": 487601967, "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin"}
+      ],
+      "benchmark": {"wer": null, "rtfx": null, "source": "no published Open ASR Leaderboard figure; see docs/stt-benchmark.md for this repo's own runs"}
+    },
+    {
+      "id": "base.en",
+      "name": "Whisper base (English)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["en"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-base.en.bin", "bytes": 147964211, "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"}
+      ],
+      "benchmark": {"wer": 10.32, "rtfx": null, "source": "Moonshine paper (arXiv:2410.15608) Table 2, Open ASR Leaderboard sets, openai/whisper-base.en"}
+    },
+    {
+      "id": "base",
+      "name": "Whisper base (multilingual)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["multilingual"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-base.bin", "bytes": 147951465, "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"}
+      ],
+      "benchmark": {"wer": null, "rtfx": null, "source": "no published Open ASR Leaderboard figure; see docs/stt-benchmark.md for this repo's own runs"}
+    },
+    {
+      "id": "tiny.en",
+      "name": "Whisper tiny (English)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["en"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-tiny.en.bin", "bytes": 77704715, "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"}
+      ],
+      "benchmark": {"wer": 12.81, "rtfx": null, "source": "Moonshine paper (arXiv:2410.15608) Table 2, Open ASR Leaderboard sets, openai/whisper-tiny.en"}
+    },
+    {
+      "id": "tiny",
+      "name": "Whisper tiny (multilingual)",
+      "family": "whisper",
+      "runtime": "whisper.cpp",
+      "languages": ["multilingual"],
+      "dir": "",
+      "files": [
+        {"role": "model", "name": "ggml-tiny.bin", "bytes": 77691713, "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"}
+      ],
+      "benchmark": {"wer": null, "rtfx": null, "source": "no published Open ASR Leaderboard figure; see docs/stt-benchmark.md for this repo's own runs"}
+    },
+    {
+      "id": "moonshine-base-en",
+      "name": "Moonshine base (English, light CPU)",
+      "family": "moonshine",
+      "runtime": "sherpa-onnx",
+      "arch": "moonshine",
+      "languages": ["en"],
+      "dir": "sherpa-onnx-moonshine-base-en-int8",
+      "files": [
+        {"role": "preprocessor", "name": "preprocess.onnx", "bytes": 14077290, "sha256": "ffa630d395c5ccf76f5d4954be5b882df76aaf6491519ec01fd82ea7a3819fb2", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/052b0798ad1bf046a140fdd4efcd9426530fa3f5/preprocess.onnx"},
+        {"role": "encoder", "name": "encode.int8.onnx", "bytes": 50311494, "sha256": "7e38770f776f2e5583a53b052936005df2ba5c833d7e09c2a5fd796b94bf73e2", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/052b0798ad1bf046a140fdd4efcd9426530fa3f5/encode.int8.onnx"},
+        {"role": "uncached_decoder", "name": "uncached_decode.int8.onnx", "bytes": 122120451, "sha256": "c01f4b35093bcac20d352d23a75a539e772964579f9d024a90e5e6f09cae9987", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/052b0798ad1bf046a140fdd4efcd9426530fa3f5/uncached_decode.int8.onnx"},
+        {"role": "cached_decoder", "name": "cached_decode.int8.onnx", "bytes": 99983837, "sha256": "2db74e51cedf64a8b1be3c8192e0bb5e4923af0e90bd9e87f8e8771873f8ea03", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/052b0798ad1bf046a140fdd4efcd9426530fa3f5/cached_decode.int8.onnx"},
+        {"role": "tokens", "name": "tokens.txt", "bytes": 436688, "sha256": "1165c2aeb9f72f457a83be2d459a09054f27490acd9b41bd43794dfd25e296ea", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-moonshine-base-en-int8/resolve/052b0798ad1bf046a140fdd4efcd9426530fa3f5/tokens.txt"}
+      ],
+      "benchmark": {"wer": 10.07, "rtfx": null, "source": "Moonshine paper (arXiv:2410.15608) Table 2, Open ASR Leaderboard sets, UsefulSensors/moonshine-base"}
+    }
+  ]
+}

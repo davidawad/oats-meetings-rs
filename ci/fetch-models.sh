@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download the local-ASR test models and verify each SHA-256. Sourced by ci scripts; never committed.
-# Fetches every value stt.local.model allows (keep in sync with STT_LOCAL_MODELS in
-# crates/core/src/config/keys.rs; a test enforces it). Restrict with OATS_FETCH_MODELS="tiny.en base.en".
+# Fetches the small whisper models of the model catalog crates/core/data/stt-models.json (each pin must equal the
+# catalog's sha256; a test enforces it) and Parakeet v2. Restrict with OATS_FETCH_MODELS="tiny.en base.en".
 # Exports OATS_WHISPER_MODELS_DIR (holds ggml-<name>.bin) and OATS_WHISPER_MODEL (the tiny.en file).
 # Cache dir: $OATS_MODELS_DIR.
 set -euo pipefail

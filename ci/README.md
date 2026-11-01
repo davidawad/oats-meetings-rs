@@ -7,4 +7,4 @@ No hosted CI (GitHub or GitLab). CI = `bin/pod-run` running `ci/linux-nix.sh`.
 
 The first builds, tests and runs `--headless --version` on Linux (with and without the GUI feature). The second type-checks Windows. macOS is tracked in dot-4uzgol.15.
 
-Local ASR: `whisper` is a default feature of the root package, so a stock build transcribes; the first recording downloads the configured `stt.local.model` (default base.en, `ctl stt model fetch` does it on demand). Parakeet stays opt-in (`--features oats-core/parakeet`). Windows builds pass `--no-default-features --features gui` (no local ASR there yet).
+Local ASR: `whisper` (whisper.cpp) and `parakeet` (sherpa-onnx: Parakeet, Moonshine) are default features of the root package, so a stock build transcribes; app launch (or the first recording) downloads the configured `stt.local.model` from the model catalog `crates/core/data/stt-models.json` (default parakeet-tdt-0.6b-v2; `ctl stt model fetch` does it on demand). sherpa-onnx links statically on Linux and as dylibs on macOS (the static macOS onnxruntime has no CoreML provider). Windows builds pass `--no-default-features --features gui` (no local ASR there yet).

@@ -19,7 +19,7 @@ if [ -n "${CROSS_TARGET:-}" ]; then
 fi
 # Local ASR (whisper.cpp) is built and tested here; the model is fetched and checksummed, not committed.
 source "$(dirname "$0")/fetch-models.sh"
-# whisper is a default feature of the root package (dot-4uzgol.26); parakeet stays opt-in.
+# whisper (dot-4uzgol.26) and parakeet (dot-4uzgol.66) are default features of the root package; oats-core's are named here.
 cargo build --workspace --locked --features oats-core/parakeet
 cargo test --workspace --locked --features oats-core/parakeet
 # One WER pass per allowed stt.local.model value, printed as WER_ROW lines (the recorded table).

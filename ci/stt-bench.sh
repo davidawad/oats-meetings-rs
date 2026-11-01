@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# STT benchmark (dot-4uzgol.22): every stt.local.engine x stt.local.model, WER / real-time factor / peak memory, live and final
+# STT benchmark (dot-4uzgol.22): every runtime x catalog model ci/fetch-models.sh fetches, WER / real-time factor / peak memory, live and final
 # passes, clean + noise + crosstalk mixes of the LibriSpeech corpus. Pod only (cargo never runs on carbon):
 #   bin/pod-run git@gitlab.com:davidawad/oats-meetings-rs.git <ref> bash ci/stt-bench.sh
 # Prints BENCH_HOST, BENCH_ROW and BENCH_MEM lines; ci/stt-bench-table.sh turns a saved log into docs/stt-benchmark.md tables.

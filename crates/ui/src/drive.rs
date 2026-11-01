@@ -120,8 +120,13 @@ pub const OPS: &[(&str, &str, &str)] = &[
         "session?",
         "Delete one (or every) trashed session for good (arms first)",
     ),
-    ("models.use", "model", "Use a whisper model"),
-    ("models.download", "model", "Download a whisper model"),
+    (
+        "models.select",
+        "model",
+        "Pick a catalog model in the dropdown (sets the default; downloads it when auto_download and network.allow)",
+    ),
+    ("models.use", "model", "Use a catalog model (the row's Use button)"),
+    ("models.download", "model", "Download a catalog model"),
     ("models.delete", "model", "Delete a downloaded model"),
     ("settings.set", "key, value", "change one setting row"),
 ];
@@ -361,6 +366,11 @@ impl MainWindow {
                 };
                 self.trash.purge(&self.engine, what);
             }
+            "models.select" => {
+                let model = need(args, op, "model")?.to_string();
+                cx.default_global::<models::Picker>().open = false;
+                models::select(self, &model);
+            }
             "models.use" | "models.download" | "models.delete" => {
                 let model = need(args, op, "model")?.to_string();
                 let o = match op {
@@ -547,8 +557,12 @@ impl MainWindow {
                 json!({
                     "header": l.header,
                     "note": l.note,
+                    "selected": l.selected().map(|r| r.id.clone()),
+                    "auto_fetch": l.auto_fetch,
                     "rows": l.rows.iter().map(|r| json!({
+                        "id": r.id,
                         "name": r.name,
+                        "facts": r.facts,
                         "status": r.status,
                         "selected": r.selected,
                         "can_use": r.can_use,

@@ -1,7 +1,9 @@
 //! Transcription engine (dot-4uzgol.8). One trait, `Asr`, two backends chosen by `stt.backend`:
 //!
-//! - `local`: whisper.cpp through whisper-rs (cargo feature `whisper`; model file downloaded and
-//!   checksummed by `ci/fetch-models.sh`, never committed).
+//! - `local`: the model `stt.local.model` names in the catalog (`catalog`), run by whisper.cpp
+//!   (cargo feature `whisper`) or sherpa-onnx (Parakeet, Moonshine; cargo feature `parakeet`).
+//!   Model files are downloaded and checksummed by `models` (or `ci/fetch-models.sh`), never
+//!   committed.
 //! - `cloud`: an OpenAI-compatible HTTP adapter (`stt.cloud.adapter`), gated by `network.allow`,
 //!   its key a `secret:` reference resolved by the secrets module.
 //!
@@ -17,12 +19,13 @@
 //! `nothing_enabled`.
 
 pub mod capture;
+pub mod catalog;
 pub mod cloud;
 #[cfg(feature = "whisper")]
 pub mod local;
 pub mod models;
 #[cfg(feature = "parakeet")]
-pub mod parakeet;
+pub mod sherpa;
 pub mod wav;
 pub mod wer;
 
@@ -33,7 +36,7 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Config, SttAdapter, SttBackend, SttEngine};
+use crate::config::typed::{Config, SttAdapter, SttBackend, SttProvider};
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
 use crate::control::engine::Engine;
@@ -53,6 +56,10 @@ pub struct Segment {
 /// the audio passed in.
 pub trait Asr: Send + Sync {
     fn name(&self) -> &'static str;
+    /// Where inference runs (`cpu`, `coreml`).
+    fn provider(&self) -> &str {
+        "cpu"
+    }
     fn transcribe(&self, pcm: &[f32], language: &str) -> Result<Vec<Segment>>;
 }
 
@@ -148,16 +155,22 @@ pub struct Settings {
     pub live_enabled: bool,
     pub chunk_secs: f64,
     pub final_enabled: bool,
-    pub engine: SttEngine,
+    /// The catalog entry for `stt.local.model`; its runtime runs it.
+    pub entry: &'static catalog::Entry,
     pub model: String,
+    /// The model file (whisper.cpp) or directory (sherpa-onnx).
     pub model_file: PathBuf,
     /// Where downloaded models live (`stt.local.models_dir`, else `<data>/models`).
     pub models_dir: PathBuf,
     /// `stt.local.model_path` is set: the file is the user's to provide.
     pub explicit_model_path: bool,
+    /// Download mirror (`stt.local.model_url`); empty means the catalog URLs.
     pub model_url: String,
     pub auto_download: bool,
     pub threads: u32,
+    pub provider: SttProvider,
+    /// `stt.local.piece` in samples: the longest stretch a sherpa-onnx model decodes at once.
+    pub piece_samples: usize,
     pub cloud_url: String,
     pub cloud_model: String,
     pub cloud_key: String,
@@ -187,26 +200,19 @@ impl Settings {
             ));
         }
         let model = c.local.model.trim();
-        if model.is_empty()
-            || !model
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
-        {
-            return Err(invalid(
+        let entry = catalog::get(model).ok_or_else(|| {
+            invalid(
                 "local.model",
-                format!("'{model}' is not a model name (letters, digits, '.', '_', '-')"),
-            ));
-        }
+                format!("'{model}' is not in the model catalog (see stt-model-list)"),
+            )
+        })?;
         let models_dir = if c.local.models_dir.trim().is_empty() {
             sessions_dir.parent().unwrap_or(sessions_dir).join("models")
         } else {
             PathBuf::from(c.local.models_dir.trim())
         };
         let model_file = if c.local.model_path.trim().is_empty() {
-            match c.local.engine {
-                SttEngine::Whisper => models_dir.join(format!("ggml-{model}.bin")),
-                SttEngine::Parakeet => models_dir.join(PARAKEET_DIR),
-            }
+            entry.location(&models_dir)
         } else {
             PathBuf::from(c.local.model_path.trim())
         };
@@ -219,7 +225,7 @@ impl Settings {
             live_enabled: c.live.enabled,
             chunk_secs: c.live.chunk.0 as f64 / 1000.0,
             final_enabled: c.final_.enabled,
-            engine: c.local.engine,
+            entry,
             model: model.to_string(),
             model_file,
             models_dir,
@@ -227,6 +233,8 @@ impl Settings {
             model_url: c.local.model_url.trim().to_string(),
             auto_download: c.local.auto_download,
             threads: c.local.threads,
+            provider: c.local.provider,
+            piece_samples: samples_of(c.local.piece).max(1),
             cloud_url: c.cloud.url.trim().to_string(),
             cloud_model: c.cloud.model.trim().to_string(),
             cloud_key: c.cloud.key.trim().to_string(),
@@ -265,10 +273,7 @@ impl Settings {
     /// Engine label for `session.json`.
     pub fn engine_label(&self) -> String {
         match self.backend {
-            SttBackend::Local => match self.engine {
-                SttEngine::Whisper => format!("whisper.cpp:{}", self.model),
-                SttEngine::Parakeet => format!("parakeet:{PARAKEET_DIR}"),
-            },
+            SttBackend::Local => format!("{}:{}", self.entry.runtime.label(), self.model),
             SttBackend::Cloud => format!("{}:{}", "openai-compatible", self.cloud_model),
         }
     }
@@ -312,39 +317,67 @@ pub fn make_asr(
     }
 }
 
-/// Directory (under `stt.local.models_dir`) holding the Parakeet files; ci/fetch-models.sh unpacks it.
-pub const PARAKEET_DIR: &str = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8";
-
 fn local_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
-    match s.engine {
-        SttEngine::Whisper => whisper_asr(s),
-        SttEngine::Parakeet => parakeet_asr(s),
+    match s.entry.runtime {
+        catalog::Runtime::WhisperCpp => whisper_asr(s),
+        catalog::Runtime::SherpaOnnx => sherpa_asr(s),
     }
 }
 
 #[cfg(feature = "parakeet")]
-fn parakeet_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
-    if !s.model_file.is_dir() {
+fn sherpa_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
+    if !s.entry.present(&s.model_file) {
         return Err(ConfigError::new(
             "model_not_found",
             format!(
-                "{} not found; fetch it with ci/fetch-models.sh or set stt.local.model_path",
+                "model {} not found at {}; download it with `ctl stt model fetch` (or the Download button in Models), or set stt.local.model_path",
+                s.model,
                 s.model_file.display()
             ),
         ));
     }
-    Ok(Arc::new(parakeet::ParakeetAsr::load(
-        &s.model_file,
-        s.threads,
-    )?))
+    Ok(Arc::new(
+        sherpa::SherpaAsr::load(s.entry, &s.model_file, s.threads, s.provider)?
+            .with_piece(s.piece_samples),
+    ))
 }
 
 #[cfg(not(feature = "parakeet"))]
-fn parakeet_asr(_s: &Settings) -> Result<Arc<dyn Asr>> {
+fn sherpa_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     Err(ConfigError::new(
         "backend_unavailable",
-        "this build has no Parakeet engine; rebuild with --features oats-core/parakeet",
+        format!(
+            "this build has no sherpa-onnx runtime for {}; rebuild with --features oats-core/parakeet or pick a whisper model",
+            s.model
+        ),
     ))
+}
+
+/// The inference provider `stt-status` reports: the loaded one when the selected model is loaded,
+/// else what loading would try first.
+fn provider_status(s: &Settings) -> Value {
+    let active: Option<String> = match s.entry.runtime {
+        catalog::Runtime::WhisperCpp => Some("cpu".into()),
+        #[cfg(feature = "parakeet")]
+        catalog::Runtime::SherpaOnnx => sherpa::loaded_provider(&s.model_file),
+        #[cfg(not(feature = "parakeet"))]
+        catalog::Runtime::SherpaOnnx => None,
+    };
+    let planned = match s.entry.runtime {
+        catalog::Runtime::WhisperCpp => "cpu",
+        catalog::Runtime::SherpaOnnx => provider_order(s.provider)[0],
+    };
+    json!({"setting": s.provider.as_str(), "active": active, "planned": planned})
+}
+
+/// The onnxruntime providers to try, in order, for `stt.local.provider` (cpu is always last).
+pub fn provider_order(p: SttProvider) -> &'static [&'static str] {
+    match p {
+        SttProvider::Cpu => &["cpu"],
+        SttProvider::Coreml => &["coreml", "cpu"],
+        SttProvider::Auto if cfg!(target_os = "macos") => &["coreml", "cpu"],
+        SttProvider::Auto => &["cpu"],
+    }
 }
 
 #[cfg(feature = "whisper")]
@@ -452,6 +485,54 @@ pub struct Live {
     held: Vec<Utt>,
     /// Recent remote utterances, to check the held ones against.
     heard: Vec<Utt>,
+}
+
+/// `pcm` cut into pieces of at most `max` samples, each cut at the quietest 10 ms frame in the
+/// last fifth of the piece: `(start sample, piece)`.
+pub fn pieces(pcm: &[f32], max: usize) -> Vec<(usize, &[f32])> {
+    let max = max.max(SAMPLE_RATE as usize / 100);
+    let (mut out, mut at) = (Vec::new(), 0);
+    while pcm.len() - at > max {
+        let cut = quiet_cut(&pcm[at..], max);
+        out.push((at, &pcm[at..at + cut]));
+        at += cut;
+    }
+    if at < pcm.len() || out.is_empty() {
+        out.push((at, &pcm[at..]));
+    }
+    out
+}
+
+/// A recogniser's tokens with their start times (seconds) and, when it gives them, durations,
+/// grouped into sentences: a segment ends after a token ending in `.`, `?` or `!`. `end` is where
+/// the audio ends, for the last token when there are no durations. `▁` marks a word start.
+pub fn sentences(tokens: &[String], times: &[f32], durs: Option<&[f32]>, end: f64) -> Vec<Segment> {
+    let n = tokens.len().min(times.len());
+    let mut out = Vec::new();
+    let mut first = 0;
+    for i in 0..n {
+        let t = tokens[i].trim_end();
+        let last = i + 1 == n;
+        if !(last || t.ends_with(['.', '?', '!'])) {
+            continue;
+        }
+        let stop = match durs.and_then(|d| d.get(i)) {
+            Some(d) => f64::from(times[i] + d),
+            None if last => end,
+            None => f64::from(times[i + 1]),
+        };
+        let text: String = tokens[first..=i].concat().replace('\u{2581}', " ");
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() {
+            out.push(Segment {
+                start: f64::from(times[first]),
+                end: stop.max(f64::from(times[first])),
+                text,
+            });
+        }
+        first = i + 1;
+    }
+    out
 }
 
 fn quiet_cut(x: &[f32], window: usize) -> usize {
@@ -811,7 +892,11 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 now,
             )
         }
-        Action::SttModelList {} => Ok(models::list(&s)),
+        Action::SttModelList {} => {
+            let mut v = models::list(&s);
+            v["network_allow"] = json!(cfg.network.allow);
+            Ok(v)
+        }
         Action::SttModelDelete { model } => models::delete(&s, model, Some(&*engine.bus)),
         Action::SttModelFetch { model, wait } => {
             let wait = wait.unwrap_or(false);
@@ -819,18 +904,23 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 Some(m) => models::for_model(&s, m)?,
                 None => s,
             };
-            if !cfg!(feature = "whisper") {
+            if !s.entry.runtime.compiled() {
                 return Err(ConfigError::new(
                     "backend_unavailable",
-                    "this build has no local ASR, so a model would not be used; rebuild with --features oats-core/whisper",
+                    format!(
+                        "this build has no {} runtime, so the {} model would not be used; rebuild with --features oats-core/{}",
+                        s.entry.runtime.label(),
+                        s.model,
+                        s.entry.runtime.feature()
+                    ),
                 ));
             }
             if wait {
-                if s.model_file.is_file() {
+                if s.entry.present(&s.model_file) {
                     return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
                 }
                 models::wait_idle(&s.model_file);
-                if s.model_file.is_file() {
+                if s.entry.present(&s.model_file) {
                     return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
                 }
                 let v = models::run(&s, Some(&*engine.bus))?;
@@ -857,8 +947,10 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 "backend": match s.backend { SttBackend::Local => "local", SttBackend::Cloud => "cloud" },
                 "language": s.language, "live": s.live_enabled, "final": s.final_enabled,
                 "local": {
-                    "model": s.model, "path": s.model_file, "present": s.model_file.is_file(),
-                    "compiled": cfg!(feature = "whisper"), "threads": s.threads,
+                    "model": s.model, "name": s.entry.name, "runtime": s.entry.runtime.label(),
+                    "path": s.model_file, "present": s.entry.present(&s.model_file),
+                    "compiled": s.entry.runtime.compiled(), "threads": s.threads,
+                    "provider": provider_status(&s),
                     "auto_download": s.auto_download, "url": s.model_url,
                     "download": models::progress(&s.model_file).map(|p| p.to_json()),
                 },
@@ -879,17 +971,10 @@ fn problem(s: &Settings) -> Value {
     if s.backend != SttBackend::Local {
         return Value::Null;
     }
-    if s.engine == SttEngine::Whisper && !cfg!(feature = "whisper")
-        || s.engine == SttEngine::Parakeet && !cfg!(feature = "parakeet")
-    {
-        return json!({"code": "backend_unavailable", "message": "This build has no local transcription engine, so recordings are saved as audio only. Use a build with local ASR or set stt.backend to cloud.", "fix": null});
+    if !s.entry.runtime.compiled() {
+        return json!({"code": "backend_unavailable", "message": format!("This build has no {} runtime for the {} model, so recordings are saved as audio only. Pick a model this build can run in Models, use a build with local ASR, or set stt.backend to cloud.", s.entry.runtime.label(), s.entry.name), "fix": null});
     }
-    let present = if s.engine == SttEngine::Whisper {
-        s.model_file.is_file()
-    } else {
-        s.model_file.is_dir()
-    };
-    if present {
+    if s.entry.present(&s.model_file) {
         return Value::Null;
     }
     let fetchable = models::check(s).is_ok();
@@ -943,12 +1028,12 @@ impl Subsystem for SttSubsystem {
     }
 
     fn apply(&self, old: &Config, new: &Config) {
-        #[cfg(feature = "whisper")]
         if old.stt.local != new.stt.local {
+            #[cfg(feature = "whisper")]
             local::clear_cache();
+            #[cfg(feature = "parakeet")]
+            sherpa::clear_cache();
         }
-        #[cfg(not(feature = "whisper"))]
-        let _ = (old, new);
     }
 }
 
@@ -1202,6 +1287,97 @@ mod tests {
             );
         }
         check("stt.live.chunk", json!("10s")).unwrap();
+    }
+
+    #[test]
+    fn pieces_cover_the_audio_and_cut_in_the_quiet() {
+        let sr = SAMPLE_RATE as usize;
+        let mut pcm = tone(25.0);
+        // A quiet stretch at 9.0-9.2 s: the 10 s piece is cut there, inside its last fifth.
+        for v in &mut pcm[9 * sr..9 * sr + sr / 5] {
+            *v = 0.0;
+        }
+        let p = pieces(&pcm, 10 * sr);
+        assert_eq!(p.iter().map(|x| x.1.len()).sum::<usize>(), pcm.len());
+        assert!(p.iter().all(|x| x.1.len() <= 10 * sr));
+        assert!(
+            p[0].1.len() > 9 * sr && p[0].1.len() <= 9 * sr + sr / 5,
+            "{}",
+            p[0].1.len()
+        );
+        assert_eq!(p[1].0, p[0].1.len());
+        assert_eq!(pieces(&pcm[..sr], 10 * sr).len(), 1);
+        assert_eq!(pieces(&[], 10 * sr), vec![(0, &[][..])]);
+    }
+
+    #[test]
+    fn sentences_follow_the_token_times() {
+        let toks: Vec<String> = [
+            " Hello", " there", ".", " How", " are", " you", "?", " Fine",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let times = [0.1, 0.5, 0.9, 2.0, 2.3, 2.6, 2.9, 4.0];
+        let s = sentences(&toks, &times, None, 5.0);
+        let got: Vec<(&str, f64, f64)> = s
+            .iter()
+            .map(|x| (x.text.as_str(), x.start, x.end))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("Hello there.", 0.1f32 as f64, 2.0f32 as f64),
+                ("How are you?", 2.0f32 as f64, 4.0f32 as f64),
+                ("Fine", 4.0f32 as f64, 5.0)
+            ]
+        );
+        let durs = [0.2; 8];
+        let s = sentences(&toks, &times, Some(&durs), 5.0);
+        assert!((s[0].end - 1.1).abs() < 1e-6, "{}", s[0].end);
+        let bpe: Vec<String> = ["\u{2581}Let", "'s", "\u{2581}go", "."]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            sentences(&bpe, &[0.0, 0.1, 0.2, 0.3], None, 1.0)[0].text,
+            "Let's go."
+        );
+        assert!(sentences(&[], &[], None, 1.0).is_empty());
+    }
+
+    #[test]
+    fn the_catalog_entry_decides_runtime_location_and_label() {
+        let base = crate::config::resolve::defaults_flat();
+        let with = |id: &str| {
+            let mut c = base.clone();
+            c.insert("stt.local.model".into(), json!(id));
+            c.insert("stt.local.models_dir".into(), json!("/m"));
+            let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
+            Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).unwrap()
+        };
+        let p = with("parakeet-tdt-0.6b-v2");
+        assert_eq!(p.entry.runtime, catalog::Runtime::SherpaOnnx);
+        assert_eq!(
+            p.model_file,
+            Path::new("/m/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8")
+        );
+        assert_eq!(p.engine_label(), "sherpa-onnx:parakeet-tdt-0.6b-v2");
+        let w = with("large-v3-turbo-q5_0");
+        assert_eq!(w.entry.runtime, catalog::Runtime::WhisperCpp);
+        assert_eq!(w.model_file, Path::new("/m/ggml-large-v3-turbo-q5_0.bin"));
+        assert_eq!(w.engine_label(), "whisper.cpp:large-v3-turbo-q5_0");
+        assert_eq!(provider_status(&w)["active"], "cpu");
+        assert_eq!(provider_order(SttProvider::Cpu), ["cpu"]);
+        assert_eq!(provider_order(SttProvider::Coreml), ["coreml", "cpu"]);
+        assert_eq!(
+            provider_order(SttProvider::Auto)[0],
+            if cfg!(target_os = "macos") {
+                "coreml"
+            } else {
+                "cpu"
+            }
+        );
     }
 
     fn tuning_with(over: &[(&str, Value)]) -> Tuning {

@@ -21,13 +21,13 @@ chrono-tz.workspace = true
 hound.workspace = true
 sha2.workspace = true
 whisper-rs = { workspace = true, optional = true }
-sherpa-onnx = { workspace = true, optional = true }
 
 [features]
 # Local ASR (whisper.cpp). Off here (crate-level default stays lean for the Windows check) but ON in the root package default
 # features; it needs cmake, a C++ compiler and libclang to build.
 whisper = ["dep:whisper-rs"]
-# Local ASR (NVIDIA Parakeet TDT through sherpa-onnx). Off by default: the build fetches a prebuilt onnxruntime library.
+# Local ASR through sherpa-onnx (Parakeet TDT, Moonshine). Off here, ON in the root package default features; the build
+# fetches a prebuilt sherpa-onnx + onnxruntime library.
 parakeet = ["dep:sherpa-onnx"]
 
 [dev-dependencies]
@@ -41,3 +41,12 @@ ureq = { workspace = true, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
 ureq = { workspace = true, features = ["native-tls"] }
+
+# sherpa-onnx (feature parakeet): static everywhere but macOS. On macOS the prebuilt static onnxruntime has no CoreML
+# execution provider, the shared one does (dot-4uzgol.66), so link libsherpa-onnx-c-api / libonnxruntime dylibs there;
+# the build copies them beside the binary (rpath @loader_path) and packaging/macos/make-app.sh bundles them.
+[target.'cfg(target_os = "macos")'.dependencies]
+sherpa-onnx = { workspace = true, optional = true, features = ["shared"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sherpa-onnx = { workspace = true, optional = true, features = ["static"] }

@@ -113,10 +113,22 @@ pub struct Key {
     pub reload: Reload,
 }
 
-/// Whisper model names `stt.local.model` accepts; ci/fetch-models.sh pins and fetches each one.
-pub const STT_LOCAL_MODELS: &[&str] = &["tiny.en", "tiny", "base.en", "base", "small.en", "small"];
-/// Local recognisers behind the `Asr` trait: whisper.cpp, or NVIDIA Parakeet TDT through sherpa-onnx.
-pub const STT_ENGINES: &[&str] = &["whisper", "parakeet"];
+/// Model ids `stt.local.model` accepts: the entries of crates/core/data/stt-models.json, in its
+/// order (a test keeps them equal). The catalog entry says which runtime runs the model.
+pub const STT_LOCAL_MODELS: &[&str] = &[
+    "parakeet-tdt-0.6b-v2",
+    "parakeet-tdt-0.6b-v3",
+    "large-v3-turbo-q5_0",
+    "small.en",
+    "small",
+    "base.en",
+    "base",
+    "tiny.en",
+    "tiny",
+    "moonshine-base-en",
+];
+/// onnxruntime execution providers for sherpa-onnx models: auto is coreml on macOS, cpu elsewhere.
+pub const STT_PROVIDERS: &[&str] = &["auto", "cpu", "coreml"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
@@ -992,10 +1004,18 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "stt.local.engine",
-        kind: Kind::Enum(STT_ENGINES),
-        default: Def::S("whisper"),
-        doc: "Local recogniser: whisper.cpp (uses stt.local.model) or parakeet (NVIDIA Parakeet TDT 0.6b v2 through sherpa-onnx; needs the parakeet cargo feature).",
+        path: "stt.local.piece",
+        kind: Kind::Duration { min_ms: 5 * SEC, max_ms: 10 * MIN },
+        default: Def::D(30 * SEC),
+        doc: "Longest stretch a sherpa-onnx model (Parakeet, Moonshine) decodes at once; longer audio is cut at the quietest point near this length, which bounds memory on long recordings. Each piece is split into sentences by the model's token times.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.local.provider",
+        kind: Kind::Enum(STT_PROVIDERS),
+        default: Def::S("auto"),
+        doc: "Where sherpa-onnx models (Parakeet, Moonshine) run: auto uses CoreML (Apple Neural Engine / GPU) on macOS and the CPU elsewhere; coreml falls back to the CPU when it cannot load the model. stt-status reports the provider in use. whisper.cpp models always run on the CPU.",
         ui: true,
         reload: Reload::Live,
     },
@@ -1003,7 +1023,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.local.model_path",
         kind: Kind::Str,
         default: Def::S(""),
-        doc: "Explicit path to the local model file; empty means <models_dir>/ggml-<stt.local.model>.bin (whisper) or <models_dir>/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 (parakeet, a directory).",
+        doc: "Explicit path to the local model; empty means where the model catalog puts stt.local.model under models_dir (a ggml-*.bin file for whisper.cpp models, a directory of files for sherpa-onnx models). Nothing is downloaded for an explicit path.",
         ui: false,
         reload: Reload::Live,
     },
@@ -1018,8 +1038,8 @@ pub const KEYS: &[Key] = &[
     Key {
         path: "stt.local.model_url",
         kind: Kind::Str,
-        default: Def::S("https://huggingface.co/ggerganov/whisper.cpp/resolve/main"),
-        doc: "Base URL the whisper model is downloaded from (<url>/ggml-<stt.local.model>.bin). The file is checked against a pinned SHA-256, so a mirror must serve the same bytes.",
+        default: Def::S(""),
+        doc: "Mirror for model downloads: empty fetches each file from the URL in the model catalog; set, a file comes from <url>/<file> (whisper.cpp) or <url>/<model dir>/<file> (sherpa-onnx). Every file is checked against the catalog's SHA-256, so a mirror must serve the same bytes.",
         ui: false,
         reload: Reload::Live,
     },
@@ -1027,7 +1047,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.local.auto_download",
         kind: Kind::Bool,
         default: Def::B(true),
-        doc: "When the local whisper model is missing at app launch (or when a recording starts), download it in the background (about 142 MB for base.en); recordings saved as audio only meanwhile are transcribed when it finishes. Off means transcription stays unavailable until you run `ctl stt model fetch`. A download you ask for with stt-model-fetch is not gated by this or by network.allow.",
+        doc: "When the selected local model is missing at app launch (or when a recording starts), download it in the background (about 660 MB for the default Parakeet v2); recordings saved as audio only meanwhile are transcribed when it finishes. Picking a model in the Models tab also downloads it when this and network.allow are both on. Off means transcription stays unavailable until you run `ctl stt model fetch` or press Download. A download you ask for with stt-model-fetch is not gated by this or by network.allow.",
         ui: true,
         reload: Reload::Live,
     },
@@ -1058,8 +1078,8 @@ pub const KEYS: &[Key] = &[
     Key {
         path: "stt.local.model",
         kind: Kind::Enum(STT_LOCAL_MODELS),
-        default: Def::S("base.en"),
-        doc: "Local ASR model name.",
+        default: Def::S("parakeet-tdt-0.6b-v2"),
+        doc: "Local ASR model: an id from the model catalog (stt-model-list shows each with its size, WER and speed). The catalog entry decides the runtime: whisper.cpp for the Whisper models, sherpa-onnx for Parakeet and Moonshine.",
         ui: true,
         reload: Reload::Live,
     },

@@ -12,7 +12,7 @@ use oats_core::control::engine::{Engine, EngineOpts};
 #[cfg(feature = "whisper")]
 use oats_core::stt::local::WhisperAsr;
 use oats_core::stt::wer::wer;
-use oats_core::stt::{wav, Asr};
+use oats_core::stt::{catalog, wav, Asr};
 use serde_json::Value;
 
 /// Agreed acceptance threshold: word error rate per channel with ggml-tiny.en on clean TTS.
@@ -39,32 +39,43 @@ fn only() -> Option<String> {
         .filter(|m| !m.is_empty())
 }
 
+fn fetch_script() -> String {
+    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ci/fetch-models.sh"))
+        .unwrap()
+}
+
+/// The whisper.cpp catalog models ci/fetch-models.sh fetches (OATS_ONLY_MODEL narrows it).
 #[cfg(feature = "whisper")]
 fn models() -> Vec<&'static str> {
-    STT_LOCAL_MODELS
+    let sh = fetch_script();
+    catalog::all()
         .iter()
-        .copied()
+        .filter(|e| e.runtime == catalog::Runtime::WhisperCpp)
+        .map(|e| e.id.as_str())
+        .filter(|m| sh.contains(&format!("[{m}]=")))
         .filter(|m| only().as_deref().is_none_or(|o| o == *m))
         .collect()
 }
 
 #[test]
-fn fetch_script_pins_exactly_the_allowed_models() {
-    let sh = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ci/fetch-models.sh"),
-    )
-    .unwrap();
-    for m in STT_LOCAL_MODELS {
-        assert!(
-            sh.contains(&format!("[{m}]=")),
-            "ci/fetch-models.sh has no sha pin for {m}"
-        );
-    }
+fn fetch_script_pins_only_whisper_catalog_models() {
+    let sh = fetch_script();
+    let whisper: Vec<&str> = catalog::all()
+        .iter()
+        .filter(|e| e.runtime == catalog::Runtime::WhisperCpp)
+        .map(|e| e.id.as_str())
+        .collect();
+    let pinned = whisper
+        .iter()
+        .filter(|m| sh.contains(&format!("[{m}]=")))
+        .count();
+    assert!(pinned > 0, "ci/fetch-models.sh pins no whisper model");
     assert_eq!(
         sh.matches("]=").count(),
-        STT_LOCAL_MODELS.len(),
-        "ci/fetch-models.sh pins a model stt.local.model does not allow"
+        pinned,
+        "ci/fetch-models.sh pins a model the catalog does not have"
     );
+    assert!(STT_LOCAL_MODELS.iter().all(|m| catalog::get(m).is_some()));
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -124,8 +135,15 @@ fn engine_local_backend_transcribes_a_two_channel_call_into_a_session() {
 #[cfg(feature = "parakeet")]
 #[test]
 fn parakeet_meets_the_wer_threshold_on_each_fixture() {
-    let dir = models_dir().join(oats_core::stt::PARAKEET_DIR);
-    let asr = oats_core::stt::parakeet::ParakeetAsr::load(&dir, 4).unwrap();
+    let e = oats_core::stt::catalog::get("parakeet-tdt-0.6b-v2").unwrap();
+    let asr = oats_core::stt::sherpa::SherpaAsr::load(
+        e,
+        &e.location(&models_dir()),
+        4,
+        oats_core::config::typed::SttProvider::Cpu,
+    )
+    .unwrap();
+    assert_eq!(asr.provider(), "cpu");
     for name in ["you.wav", "them.wav"] {
         let pcm = wav::read(&fixture(name)).unwrap().you;
         let segs = asr.transcribe(&pcm, "en").unwrap();
@@ -136,6 +154,16 @@ fn parakeet_meets_the_wer_threshold_on_each_fixture() {
             .join(" ");
         let w = wer(&expected(name), &text);
         eprintln!("WER_ROW model=parakeet-tdt-0.6b-v2 stage=asr file={name} wer={w:.3} :: {text}");
+        // One segment per sentence, from the model's token times, in order inside the audio.
+        let secs = pcm.len() as f64 / 16_000.0;
+        assert!(segs.len() >= 2, "{name}: {segs:?}");
+        assert!(
+            segs.windows(2).all(|p| p[0].end <= p[1].start + 1e-3),
+            "{segs:?}"
+        );
+        assert!(segs
+            .iter()
+            .all(|s| s.start >= 0.0 && s.end <= secs + 1e-3 && s.start <= s.end));
         assert!(
             w <= MAX_WER,
             "parakeet {name}: WER {w:.3} > {MAX_WER} :: {text}"
@@ -148,8 +176,8 @@ fn parakeet_meets_the_wer_threshold_on_each_fixture() {
 fn engine_parakeet_transcribes_a_two_channel_call_into_a_session() {
     engine_case(
         "parakeet-tdt-0.6b-v2",
-        "engine = \"parakeet\"\n",
-        "parakeet",
+        "model = \"parakeet-tdt-0.6b-v2\"\n",
+        "sherpa-onnx",
     );
 }
 

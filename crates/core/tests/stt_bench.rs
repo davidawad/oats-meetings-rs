@@ -153,14 +153,22 @@ fn load() -> (String, Arc<dyn Asr>) {
             .unwrap();
             (m, Arc::new(asr))
         }
+        // Any sherpa-onnx catalog model (OATS_BENCH_MODEL = its id; `-` means Parakeet v2).
         #[cfg(feature = "parakeet")]
-        "parakeet" => {
-            let asr = oats_core::stt::parakeet::ParakeetAsr::load(
-                &models.join(oats_core::stt::PARAKEET_DIR),
+        "parakeet" | "sherpa" => {
+            let m = std::env::var("OATS_BENCH_MODEL")
+                .ok()
+                .filter(|m| m != "-")
+                .unwrap_or_else(|| "parakeet-tdt-0.6b-v2".into());
+            let e = oats_core::stt::catalog::get(&m).expect("a catalog model id");
+            let asr = oats_core::stt::sherpa::SherpaAsr::load(
+                e,
+                &e.location(&models),
                 THREADS,
+                oats_core::config::typed::SttProvider::Cpu,
             )
             .unwrap();
-            ("tdt-0.6b-v2-int8".into(), Arc::new(asr))
+            (m, Arc::new(asr))
         }
         e => panic!("engine {e} not built in"),
     }

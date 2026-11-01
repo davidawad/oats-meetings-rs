@@ -738,7 +738,7 @@ fn a_recording_made_while_the_model_is_missing_is_transcribed_once_it_arrives() 
     let m = meta(&r, "first");
     assert!(m["utterance_count"].as_u64().unwrap() > 0, "{m}");
     assert!(m["metadata"].get("transcribePending").is_none(), "{m}");
-    assert_eq!(m["metadata"]["engine"], "whisper.cpp:base.en");
+    assert_eq!(m["metadata"]["engine"], "sherpa-onnx:parakeet-tdt-0.6b-v2");
     assert_eq!(m["ended_at"], ended);
     assert!(!lines(&r, "first", "final").is_empty());
     assert!(lines(&r, "first", "live")

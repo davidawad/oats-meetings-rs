@@ -53,6 +53,12 @@ fn rig(auto_download: bool, model_url: &str) -> Rig {
     Rig { dir, engine }
 }
 
+/// Where the default model (`stt.local.model`'s default catalog entry) lives in the rig.
+fn default_model(r: &Rig) -> (&'static oats_core::stt::catalog::Entry, std::path::PathBuf) {
+    let e = oats_core::stt::catalog::get(&r.engine.snapshot().config.stt.local.model).unwrap();
+    (e, e.location(&r.dir.path().join("models")))
+}
+
 fn status(r: &Rig) -> Value {
     r.engine.dispatch(&Action::SttStatus {}).unwrap()
 }
@@ -133,7 +139,7 @@ fn a_failed_download_is_visible_and_leaves_no_file() {
         .unwrap_err();
     assert_eq!(e.code, "model_checksum_mismatch");
     let s = status(&r);
-    assert!(!r.dir.path().join("models/ggml-base.en.bin").exists());
+    assert!(!default_model(&r).1.exists());
     assert_eq!(s["local"]["download"]["state"], "failed");
     assert_eq!(s["problem"]["code"], "model_download_failed");
     assert_eq!(s["problem"]["fix"], "stt-model-fetch");
@@ -182,8 +188,11 @@ fn fetch_without_wait_returns_at_once_and_a_present_model_is_left_alone() {
     wait("the download to settle", || {
         status(&r)["local"]["download"]["state"] == "failed"
     });
-    std::fs::create_dir_all(r.dir.path().join("models")).unwrap();
-    std::fs::write(r.dir.path().join("models/ggml-base.en.bin"), b"x").unwrap();
+    let (e, at) = default_model(&r);
+    std::fs::create_dir_all(&at).unwrap();
+    for f in &e.files {
+        std::fs::write(at.join(&f.name), b"x").unwrap();
+    }
     let v = r
         .engine
         .dispatch(&Action::SttModelFetch {

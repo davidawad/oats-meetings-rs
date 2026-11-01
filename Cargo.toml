@@ -29,7 +29,8 @@ ureq = { version = "3", default-features = false, features = ["gzip"] }
 keyring = "4"
 hound = "3"
 whisper-rs = "0.16"
-sherpa-onnx = "1.13"
+# Link mode (static / shared) is chosen per target in crates/core/Cargo.toml.
+sherpa-onnx = { version = "1.13", default-features = false }
 sha2 = "0.10"
 oats-core = { path = "crates/core" }
 oats-audio = { path = "crates/audio" }
@@ -60,7 +61,11 @@ tiny_http.workspace = true
 
 [features]
 # whisper: local ASR (whisper.cpp), so a stock build transcribes out of the box (dot-4uzgol.26). It needs cmake, a C++
-# compiler and libclang. Windows builds pass `--no-default-features --features gui` until whisper-rs is proven there.
-default = ["gui", "whisper"]
+# compiler and libclang. parakeet: the sherpa-onnx runtime (Parakeet, Moonshine; the default model is Parakeet v2,
+# dot-4uzgol.66); its build downloads a prebuilt sherpa-onnx + onnxruntime static library. Both are on in the macOS and
+# Linux release builds (ci/package-linux.sh, packaging/macos/make-app.sh build the default features). Windows builds
+# pass `--no-default-features --features gui` until whisper-rs and sherpa-onnx are proven there.
+default = ["gui", "whisper", "parakeet"]
 gui = ["dep:oats-ui"]
 whisper = ["oats-core/whisper"]
+parakeet = ["oats-core/parakeet"]

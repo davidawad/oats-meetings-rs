@@ -658,11 +658,14 @@ mod tests {
             .clone()
             .expect("a fresh data dir has no model");
         assert!(p.message.contains("audio only"), "{}", p.message);
-        // Whisper is compiled into default builds; without it the banner has no fix.
+        // Local ASR is compiled into default builds; without it the banner has no fix.
         assert_eq!(p.fix.as_deref(), compiled.then_some("stt-model-fetch"));
-        let m = dir.path().join("models");
+        let e = oats_core::stt::catalog::get(&engine.snapshot().config.stt.local.model).unwrap();
+        let m = e.location(&dir.path().join("models"));
         std::fs::create_dir_all(&m).unwrap();
-        std::fs::write(m.join("ggml-base.en.bin"), b"x").unwrap();
+        for f in &e.files {
+            std::fs::write(m.join(&f.name), b"x").unwrap();
+        }
         st.refresh(&engine);
         assert_eq!(st.stt_problem.is_some(), !compiled);
     }

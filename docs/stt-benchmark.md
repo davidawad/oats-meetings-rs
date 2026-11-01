@@ -1,6 +1,6 @@
 # STT benchmark: engine x model (dot-4uzgol.22)
 
-Measurements for David's final review. No default was changed by this work.
+Measurements for David's final review. No default was changed by this work; dot-4uzgol.66 later made Parakeet TDT 0.6B v2 the default (see the CPU section at the end).
 
 ## Corpus and licence
 
@@ -56,3 +56,25 @@ WER over all 16 clips, per pass (first table); clean final-pass WER by subset, r
 - Sample size is small (501 words): differences of about 1-2 points between neighbours are not significant.
 
 Reproduce: `bin/pod-run git@gitlab.com:davidawad/oats-meetings-rs.git <ref> bash ci/stt-bench.sh > log`, then `bash ci/stt-bench-table.sh log`.
+
+## CPU of a 60 s transcription, through the app (dot-4uzgol.66)
+
+One `ctl stt-transcribe` of a 60 s two-channel call (the `tests/fixtures/stt` sentences alternating between you and
+them, 0.5 s gaps) in a release build started with `--headless`. Each model was selected with `ctl config set
+stt.local.model` and downloaded with `ctl stt-model-fetch` through the catalog model manager (sha256-checked). CPU is
+the app process's user+system time (rusage at exit, so it includes the model load and app start/stop), wall is the
+`stt-transcribe` call, cpu% is CPU over wall (100 = one core). 4 threads (`stt.local.threads`), provider cpu, AMD
+EPYC-Genoa pod (16 vCPU, shared), 2026-11-01.
+
+| model (runtime) | passes | wall | CPU | cpu% | peak RSS | final text |
+|---|---|---|---|---|---|---|
+| parakeet-tdt-0.6b-v2 (sherpa-onnx) | final | 10.3 s | 31.2 s | 302 | 1.9 GB | correct, one utterance per sentence |
+| parakeet-tdt-0.6b-v2 (sherpa-onnx) | live + final | 16.0 s | 53.7 s | 336 | 1.9 GB | correct |
+| large-v3-turbo-q5_0 (whisper.cpp) | final | 105.5 s | 418.2 s | 396 | 1.0 GB | correct |
+| large-v3-turbo-q5_0 (whisper.cpp) | live + final | stopped after 9 min | | | | |
+| moonshine-base-en (sherpa-onnx) | final | 6.3 s | 22.8 s | 361 | 0.8 GB | correct, one utterance per 30 s piece (no token times) |
+
+- Whisper turbo needs about 13x Parakeet's CPU for the same final pass. Its live pass cannot keep up on CPU: whisper.cpp
+  pads every 4 s live window to 30 s, so 60 s of stereo audio took over 9 minutes. Parakeet's live pass adds about 6 s.
+- These are Linux CPU numbers. On macOS `stt.local.provider = auto` loads sherpa-onnx models on CoreML (onnxruntime
+  dylib, Apple Neural Engine / GPU) and `stt-status` reports the provider in use; the Mac CPU figure is a PM live check.

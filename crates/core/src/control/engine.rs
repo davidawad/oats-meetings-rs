@@ -430,11 +430,11 @@ impl Engine {
         use crate::config::typed::{AudioTranscribe, SttBackend};
         let cfg = self.snapshot().config.clone();
         if let Ok(s) = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir()) {
-            if cfg!(feature = "whisper")
+            if s.entry.runtime.compiled()
                 && cfg.audio.transcribe != AudioTranscribe::Off
                 && s.backend == SttBackend::Local
                 && s.auto_download
-                && !s.model_file.is_file()
+                && !s.entry.present(&s.model_file)
                 && crate::stt::models::check(&s).is_ok()
             {
                 let _ = crate::stt::models::spawn(

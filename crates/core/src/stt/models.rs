@@ -1,11 +1,11 @@
-//! Fetching the local whisper model (dot-4uzgol.26). `stt-model-fetch` (and, when
-//! `stt.local.auto_download` is on, app launch or a recording that finds the model missing) downloads
-//! `ggml-<stt.local.model>.bin` from `stt.local.model_url` into the models directory, checks it
-//! against the SHA-256 pinned below (the same pins as ci/fetch-models.sh; a test keeps them in
-//! sync), and only then moves it into place. Progress is a `model-download` bus event and the
-//! `download` object of `stt-status`. The download runs on its own thread; one per target file.
-//! When it lands, the engine transcribes the recordings saved as audio only meanwhile
-//! (dot-4uzgol.44).
+//! The local model manager (dot-4uzgol.26, generalised to the catalog in dot-4uzgol.66).
+//! `stt-model-fetch` (and, when `stt.local.auto_download` is on, app launch or a recording that
+//! finds the model missing) downloads every file of the selected catalog entry (`catalog`) from its
+//! catalog URL, or from the `stt.local.model_url` mirror, checks each against the catalog SHA-256,
+//! and only then moves it into place: a whisper.cpp model is one `ggml-*.bin` file in the models
+//! directory, a sherpa-onnx model a directory of files. Progress is a `model-download` bus event and
+//! the `download` object of `stt-status`. The download runs on its own thread; one per model. When
+//! it lands, the engine transcribes the recordings saved as audio only meanwhile (dot-4uzgol.44).
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -15,41 +15,10 @@ use std::sync::{Condvar, Mutex, OnceLock};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use super::catalog::{self, Entry};
 use super::Settings;
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
-
-/// (model name, SHA-256 of ggml-<name>.bin). Keep in sync with ci/fetch-models.sh.
-pub const PINS: &[(&str, &str)] = &[
-    (
-        "tiny.en",
-        "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
-    ),
-    (
-        "tiny",
-        "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-    ),
-    (
-        "base.en",
-        "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
-    ),
-    (
-        "base",
-        "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-    ),
-    (
-        "small.en",
-        "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
-    ),
-    (
-        "small",
-        "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-    ),
-];
-
-pub fn pin(model: &str) -> Option<&'static str> {
-    PINS.iter().find(|p| p.0 == model).map(|p| p.1)
-}
 
 /// State of the download into one file, as `stt-status` reports it.
 #[derive(Clone, Debug, PartialEq)]
@@ -118,30 +87,43 @@ fn record(file: &Path, p: Progress) {
     table().1.notify_all();
 }
 
-fn url_for(s: &Settings) -> String {
-    format!("{}/ggml-{}.bin", s.model_url.trim_end_matches('/'), s.model)
+/// One file to download: from where, under which name, its checksum and catalog size.
+#[derive(Clone, Debug)]
+struct Fetch {
+    url: String,
+    name: String,
+    sha: String,
+    bytes: u64,
 }
 
-/// Whether a download can serve these settings (returns the pinned checksum), else why not.
-pub fn check(s: &Settings) -> Result<&'static str> {
-    if s.engine != crate::config::typed::SttEngine::Whisper {
-        return Err(ConfigError::new(
-            "unsupported_engine",
-            "only whisper models can be downloaded here; fetch the Parakeet files with ci/fetch-models.sh or set stt.local.model_path",
-        ));
-    }
+/// The files of the model `s` selects, with the mirror applied.
+fn plan(s: &Settings) -> Vec<Fetch> {
+    let base = s.model_url.trim_end_matches('/');
+    s.entry
+        .files
+        .iter()
+        .map(|f| Fetch {
+            url: match (base.is_empty(), s.entry.is_dir()) {
+                (true, _) => f.url.clone(),
+                (false, false) => format!("{base}/{}", f.name),
+                (false, true) => format!("{base}/{}/{}", s.entry.dir, f.name),
+            },
+            name: f.name.clone(),
+            sha: f.sha256.clone(),
+            bytes: f.bytes,
+        })
+        .collect()
+}
+
+/// Whether a download can serve these settings, else why not.
+pub fn check(s: &Settings) -> Result<()> {
     if s.explicit_model_path {
         return Err(ConfigError::new(
             "unsupported_engine",
-            "stt.local.model_path is set: put the model file there yourself; nothing is downloaded for an explicit path",
+            "stt.local.model_path is set: put the model there yourself; nothing is downloaded for an explicit path",
         ));
     }
-    pin(&s.model).ok_or_else(|| {
-        ConfigError::new(
-            "invalid_value",
-            format!("stt.local.model '{}' has no pinned checksum", s.model),
-        )
-    })
+    Ok(())
 }
 
 fn hex(b: &[u8]) -> String {
@@ -193,71 +175,108 @@ fn stream(url: &str, part: &Path, sha: &str, mut tick: impl FnMut(u64, Option<u6
 
 /// Download and verify the model for `s` (blocking). Publishes `model-download` events.
 pub fn run(s: &Settings, bus: Option<&Bus>) -> Result<Value> {
-    run_pinned(s, bus, check(s)?)
+    check(s)?;
+    fetch(s, bus, &plan(s))
 }
 
-fn run_pinned(s: &Settings, bus: Option<&Bus>, sha: &str) -> Result<Value> {
-    let file = s.model_file.clone();
-    let url = url_for(s);
+/// Where a file being downloaded is written until it is verified: `<file>.part`, or, for a
+/// directory model, the file inside `<dir>.part/`.
+fn staging(s: &Settings) -> PathBuf {
+    let mut name = s.model_file.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    s.model_file.with_file_name(name)
+}
+
+fn io_err(p: &Path) -> impl Fn(std::io::Error) -> ConfigError + '_ {
+    move |e| ConfigError::new("io_error", format!("{}: {e}", p.display()))
+}
+
+fn fetch(s: &Settings, bus: Option<&Bus>, files: &[Fetch]) -> Result<Value> {
+    let target = s.model_file.clone();
+    let dir_model = s.entry.is_dir();
+    let total: u64 = files.iter().map(|f| f.bytes).sum();
     let publish = |p: &Progress| {
         if let Some(b) = bus {
             b.publish("model-download", p.to_json());
         }
     };
-    let start = Progress::new(&s.model, "downloading", 0, None);
-    record(&file, start.clone());
+    let start = Progress::new(&s.model, "downloading", 0, Some(total));
+    record(&target, start.clone());
     publish(&start);
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", dir.display())))?;
-    }
-    let part = file.with_extension("bin.part");
-    let mut last_pct = u64::MAX;
-    let r = stream(&url, &part, sha, |done, total| {
-        let p = Progress::new(&s.model, "downloading", done, total);
-        let pct = total
-            .filter(|t| *t > 0)
-            .map_or(done >> 22, |t| done * 100 / t);
-        record(&file, p.clone());
-        if pct != last_pct {
-            last_pct = pct;
-            publish(&p);
+    let stage = staging(s);
+    let r = (|| -> Result<u64> {
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir).map_err(io_err(dir))?;
         }
-    })
-    .and_then(|()| {
-        std::fs::rename(&part, &file)
-            .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", file.display())))
-    });
+        if dir_model {
+            std::fs::create_dir_all(&stage).map_err(io_err(&stage))?;
+        }
+        let (mut base, mut last_pct) = (0u64, u64::MAX);
+        for f in files {
+            let part = if dir_model {
+                stage.join(&f.name)
+            } else {
+                stage.clone()
+            };
+            let mut got = 0;
+            stream(&f.url, &part, &f.sha, |done, _| {
+                got = done;
+                let all = base + done;
+                let p = Progress::new(&s.model, "downloading", all, Some(total.max(all)));
+                let pct = all * 100 / total.max(all).max(1);
+                record(&target, p.clone());
+                if pct != last_pct {
+                    last_pct = pct;
+                    publish(&p);
+                }
+            })?;
+            base += got;
+        }
+        if dir_model {
+            std::fs::create_dir_all(&target).map_err(io_err(&target))?;
+            for f in files {
+                let to = target.join(&f.name);
+                std::fs::rename(stage.join(&f.name), &to).map_err(io_err(&to))?;
+            }
+            std::fs::remove_dir(&stage).map_err(io_err(&stage))?;
+        } else {
+            std::fs::rename(&stage, &target).map_err(io_err(&target))?;
+        }
+        Ok(base)
+    })();
     match r {
-        Ok(()) => {
-            let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+        Ok(size) => {
             let done = Progress::new(&s.model, "done", size, Some(size));
-            record(&file, done.clone());
+            record(&target, done.clone());
             publish(&done);
             Ok(
-                json!({"model": s.model, "path": file, "bytes": size, "sha256": sha, "state": "done"}),
+                json!({"model": s.model, "path": target, "bytes": size, "files": files.len(), "state": "done"}),
             )
         }
         Err(e) => {
-            let _ = std::fs::remove_file(&part);
+            let _ = if dir_model {
+                std::fs::remove_dir_all(&stage)
+            } else {
+                std::fs::remove_file(&stage)
+            };
             let mut p = Progress::new(&s.model, "failed", 0, None);
             p.error = Some((e.code.to_string(), e.message.clone()));
-            record(&file, p.clone());
+            record(&target, p.clone());
             publish(&p);
             Err(e)
         }
     }
 }
 
-/// Start `run` on its own thread unless the file is present or already being fetched; `then` runs
-/// on that thread once the file is in place. Returns the status to show.
+/// Start `run` on its own thread unless the model is present or already being fetched; `then`
+/// runs on that thread once the model is in place. Returns the status to show.
 pub fn spawn(
     s: &Settings,
     bus: Option<std::sync::Arc<Bus>>,
     then: Box<dyn FnOnce() + Send>,
 ) -> Result<Value> {
     check(s)?;
-    if s.model_file.is_file() {
+    if s.entry.present(&s.model_file) {
         return Ok(json!({"model": s.model, "path": s.model_file, "state": "present"}));
     }
     if is_downloading(&s.model_file) {
@@ -265,7 +284,7 @@ pub fn spawn(
             .map(|p| p.to_json())
             .unwrap_or(Value::Null));
     }
-    let start = Progress::new(&s.model, "downloading", 0, None);
+    let start = Progress::new(&s.model, "downloading", 0, Some(s.entry.bytes()));
     record(&s.model_file, start.clone());
     let s2 = s.clone();
     std::thread::Builder::new()
@@ -281,82 +300,96 @@ pub fn spawn(
     Ok(start.to_json())
 }
 
-fn known(model: &str) -> Result<&'static str> {
-    pin(model).ok_or_else(|| {
-        let names: Vec<&str> = PINS.iter().map(|p| p.0).collect();
+fn known(model: &str) -> Result<&'static Entry> {
+    catalog::get(model).ok_or_else(|| {
+        let ids: Vec<&str> = catalog::all().iter().map(|e| e.id.as_str()).collect();
         ConfigError::new(
             "invalid_value",
-            format!(
-                "'{model}' is not a downloadable model ({})",
-                names.join(", ")
-            ),
+            format!("'{model}' is not a catalog model ({})", ids.join(", ")),
         )
     })
 }
 
-fn file_in(s: &Settings, model: &str) -> PathBuf {
-    s.models_dir.join(format!("ggml-{model}.bin"))
-}
-
-/// `s` retargeted at another pinned model in the same models directory (`stt-model-fetch model=`).
+/// `s` retargeted at another catalog model in the same models directory (`stt-model-fetch model=`).
 pub fn for_model(s: &Settings, model: &str) -> Result<Settings> {
-    known(model)?;
+    let entry = known(model)?;
     let mut t = s.clone();
+    t.entry = entry;
     t.model = model.to_string();
     if !t.explicit_model_path {
-        t.model_file = file_in(s, model);
+        t.model_file = entry.location(&s.models_dir);
     }
     Ok(t)
 }
 
-/// Every pinned model with whether its file is in the models directory, for `stt-model-list`.
-pub fn list(s: &Settings) -> Value {
-    let models: Vec<Value> = PINS
-        .iter()
-        .map(|(name, _)| {
-            let file = file_in(s, name);
-            let bytes = std::fs::metadata(&file)
-                .ok()
-                .filter(|m| m.is_file())
-                .map(|m| m.len());
-            json!({
-                "name": name, "path": file, "present": bytes.is_some(), "bytes": bytes,
-                "selected": *name == s.model,
-                "download": progress(&file).map(|p| p.to_json()),
-            })
-        })
-        .collect();
-    let engine = match s.engine {
-        crate::config::typed::SttEngine::Whisper => "whisper",
-        crate::config::typed::SttEngine::Parakeet => "parakeet",
-    };
-    json!({
-        "selected": s.model, "engine": engine, "models_dir": s.models_dir,
-        "explicit_path": s.explicit_model_path.then_some(&s.model_file), "models": models,
+/// Bytes of `entry`'s files present at `path`, or `None` when it is not all there.
+fn on_disk(entry: &Entry, path: &Path) -> Option<u64> {
+    if !entry.present(path) {
+        return None;
+    }
+    let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    Some(if entry.is_dir() {
+        entry.files.iter().map(|f| size(&path.join(&f.name))).sum()
+    } else {
+        size(path)
     })
 }
 
-/// Remove a downloaded model file; refused while it is downloading. Publishes `model-download`
-/// with state `deleted`.
+/// Every catalog model, whatever its runtime, with its catalog facts (size, WER, RTFx, languages),
+/// whether this build can run it, whether it is downloaded and whether it is selected, for
+/// `stt-model-list` and the Models tab.
+pub fn list(s: &Settings) -> Value {
+    let models: Vec<Value> = catalog::all()
+        .iter()
+        .map(|e| {
+            let path = e.location(&s.models_dir);
+            let bytes = on_disk(e, &path);
+            let mut v = e.to_json();
+            v["path"] = json!(path);
+            v["present"] = json!(bytes.is_some());
+            v["bytes"] = json!(bytes);
+            v["selected"] = json!(e.id == s.model);
+            v["download"] = json!(progress(&path).map(|p| p.to_json()));
+            v
+        })
+        .collect();
+    json!({
+        "selected": s.model, "runtime": s.entry.runtime.label(), "models_dir": s.models_dir,
+        "explicit_path": s.explicit_model_path.then_some(&s.model_file),
+        "auto_download": s.auto_download, "models": models,
+    })
+}
+
+/// Remove a downloaded model (its file, or its directory); refused while it is downloading.
+/// Publishes `model-download` with state `deleted`.
 pub fn delete(s: &Settings, model: &str, bus: Option<&Bus>) -> Result<Value> {
-    known(model)?;
-    let file = file_in(s, model);
-    if is_downloading(&file) {
+    let entry = known(model)?;
+    let path = entry.location(&s.models_dir);
+    if is_downloading(&path) {
         return Err(ConfigError::new(
             "model_downloading",
             format!("the {model} model is downloading; wait for it to finish"),
         ));
     }
-    if !file.is_file() {
-        return Err(ConfigError::new(
+    let gone = || {
+        ConfigError::new(
             "model_not_found",
-            format!("{} is not downloaded", file.display()),
-        ));
+            format!("{} is not downloaded", path.display()),
+        )
+    };
+    if entry.is_dir() {
+        if !path.is_dir() {
+            return Err(gone());
+        }
+        std::fs::remove_dir_all(&path).map_err(io_err(&path))?;
+    } else {
+        if !path.is_file() {
+            return Err(gone());
+        }
+        std::fs::remove_file(&path).map_err(io_err(&path))?;
     }
-    std::fs::remove_file(&file)
-        .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", file.display())))?;
-    table().0.lock().expect("model table").remove(&file);
-    let v = json!({"model": model, "path": file, "state": "deleted"});
+    table().0.lock().expect("model table").remove(&path);
+    let v = json!({"model": model, "path": path, "state": "deleted"});
     if let Some(b) = bus {
         b.publish("model-download", v.clone());
     }
@@ -368,13 +401,29 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn serve(body: Vec<u8>, status: u16) -> (String, std::thread::JoinHandle<()>) {
+    /// Serves `files` (url path -> (status, body)) until `n` requests are answered.
+    fn serve(
+        files: Vec<(&str, u16, Vec<u8>)>,
+        n: usize,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
         let srv = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", srv.server_addr().to_ip().unwrap());
+        let files: Vec<(String, u16, Vec<u8>)> = files
+            .into_iter()
+            .map(|(p, st, b)| (p.to_string(), st, b))
+            .collect();
         let h = std::thread::spawn(move || {
-            if let Ok(req) = srv.recv() {
-                let _ = req.respond(tiny_http::Response::from_data(body).with_status_code(status));
+            let mut seen = vec![];
+            for _ in 0..n {
+                let Ok(req) = srv.recv() else { break };
+                seen.push(req.url().to_string());
+                let (st, body) = files
+                    .iter()
+                    .find(|f| f.0 == req.url())
+                    .map_or((404, b"missing".to_vec()), |f| (f.1, f.2.clone()));
+                let _ = req.respond(tiny_http::Response::from_data(body).with_status_code(st));
             }
+            seen
         });
         (url, h)
     }
@@ -383,6 +432,7 @@ mod tests {
         let mut c = crate::config::resolve::defaults_flat();
         c.insert("stt.local.models_dir".into(), json!(dir.to_str().unwrap()));
         c.insert("stt.local.model_url".into(), json!(url));
+        c.insert("stt.local.model".into(), json!("tiny.en"));
         for (k, v) in over {
             c.insert((*k).into(), v.clone());
         }
@@ -391,20 +441,34 @@ mod tests {
         Settings::from_config(&cfg, &dir.join("sessions")).unwrap()
     }
 
+    fn body(n: u32, salt: u32) -> Vec<u8> {
+        (0..n).map(|i| ((i + salt) % 251) as u8).collect()
+    }
+
+    fn sha(b: &[u8]) -> String {
+        hex(&Sha256::digest(b))
+    }
+
     #[test]
     fn download_verifies_the_checksum_publishes_progress_and_moves_into_place() {
-        let body: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
-        let sha = hex(&Sha256::digest(&body));
+        let b = body(300_000, 0);
         let dir = tempfile::tempdir().unwrap();
-        let (url, h) = serve(body.clone(), 200);
+        let (url, h) = serve(vec![("/ggml-tiny.en.bin", 200, b.clone())], 1);
         let s = settings(dir.path(), &url, &[]);
         let bus = Bus::default();
         let rx = bus.subscribe(vec!["model-download".into()]);
-        let r = run_pinned(&s, Some(&bus), &sha).unwrap();
+        let mut files = plan(&s);
+        assert_eq!(
+            files[0].url,
+            format!("{url}/ggml-tiny.en.bin"),
+            "mirror URL"
+        );
+        files[0].sha = sha(&b);
+        let r = fetch(&s, Some(&bus), &files).unwrap();
         h.join().unwrap();
         assert_eq!(r["state"], "done");
-        assert_eq!(std::fs::read(&s.model_file).unwrap(), body);
-        assert!(!s.model_file.with_extension("bin.part").exists());
+        assert_eq!(std::fs::read(&s.model_file).unwrap(), b);
+        assert!(!staging(&s).exists());
         let events: Vec<Value> = std::iter::from_fn(|| rx.try_recv().ok())
             .map(|l| serde_json::from_str::<Value>(&l).unwrap()["data"].clone())
             .collect();
@@ -414,14 +478,103 @@ mod tests {
     }
 
     #[test]
+    fn a_sherpa_model_downloads_every_file_into_its_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = catalog::get("parakeet-tdt-0.6b-v2").unwrap();
+        let bodies: Vec<Vec<u8>> = (0..e.files.len() as u32)
+            .map(|i| body(1000 + i, i))
+            .collect();
+        let served: Vec<String> = e
+            .files
+            .iter()
+            .map(|f| format!("/{}/{}", e.dir, f.name))
+            .collect();
+        let (url, h) = serve(
+            served
+                .iter()
+                .zip(&bodies)
+                .map(|(p, b)| (p.as_str(), 200, b.clone()))
+                .collect(),
+            e.files.len(),
+        );
+        let s = settings(
+            dir.path(),
+            &url,
+            &[("stt.local.model", json!("parakeet-tdt-0.6b-v2"))],
+        );
+        assert!(!e.present(&s.model_file));
+        let mut files = plan(&s);
+        for (f, b) in files.iter_mut().zip(&bodies) {
+            f.sha = sha(b);
+        }
+        let r = fetch(&s, None, &files).unwrap();
+        assert_eq!(h.join().unwrap(), served);
+        assert_eq!(
+            (r["state"].as_str(), r["files"].as_u64()),
+            (Some("done"), Some(4))
+        );
+        assert!(e.present(&s.model_file));
+        assert_eq!(
+            std::fs::read(s.model_file.join("tokens.txt")).unwrap(),
+            bodies[3]
+        );
+        assert!(!staging(&s).exists());
+        let v = list(&s);
+        let row = v["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == "parakeet-tdt-0.6b-v2")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (
+                row["present"].as_bool(),
+                row["selected"].as_bool(),
+                row["runtime"].as_str()
+            ),
+            (Some(true), Some(true), Some("sherpa-onnx"))
+        );
+        assert_eq!(
+            delete(&s, "parakeet-tdt-0.6b-v2", None).unwrap()["state"],
+            "deleted"
+        );
+        assert!(!s.model_file.exists());
+    }
+
+    #[test]
+    fn a_bad_file_in_a_directory_model_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = catalog::get("moonshine-base-en").unwrap();
+        let (url, h) = serve(
+            vec![(
+                format!("/{}/{}", e.dir, e.files[0].name).leak() as &str,
+                200,
+                b"not the model".to_vec(),
+            )],
+            1,
+        );
+        let s = settings(
+            dir.path(),
+            &url,
+            &[("stt.local.model", json!("moonshine-base-en"))],
+        );
+        let err = run(&s, None).unwrap_err();
+        h.join().unwrap();
+        assert_eq!(err.code, "model_checksum_mismatch");
+        assert!(!s.model_file.exists() && !staging(&s).exists());
+        assert_eq!(progress(&s.model_file).unwrap().state, "failed");
+    }
+
+    #[test]
     fn wrong_bytes_are_discarded_and_reported() {
         let dir = tempfile::tempdir().unwrap();
-        let (url, h) = serve(b"not a model".to_vec(), 200);
+        let (url, h) = serve(vec![("/ggml-tiny.en.bin", 200, b"not a model".to_vec())], 1);
         let s = settings(dir.path(), &url, &[]);
         let e = run(&s, None).unwrap_err();
         h.join().unwrap();
         assert_eq!(e.code, "model_checksum_mismatch");
-        assert!(!s.model_file.exists() && !s.model_file.with_extension("bin.part").exists());
+        assert!(!s.model_file.exists() && !staging(&s).exists());
         let p = progress(&s.model_file).unwrap();
         assert_eq!(
             (p.state, p.error.unwrap().0.as_str()),
@@ -432,7 +585,7 @@ mod tests {
     #[test]
     fn http_errors_and_unsupported_settings_have_codes() {
         let dir = tempfile::tempdir().unwrap();
-        let (url, h) = serve(b"nope".to_vec(), 404);
+        let (url, h) = serve(vec![], 1);
         let e = run(&settings(dir.path(), &url, &[]), None).unwrap_err();
         h.join().unwrap();
         assert_eq!(e.code, "model_download_failed");
@@ -447,54 +600,56 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(e.code, "unsupported_engine");
-        let e = run(
-            &settings(
-                dir.path(),
-                "http://127.0.0.1:9",
-                &[("stt.local.engine", json!("parakeet"))],
-            ),
-            None,
-        )
-        .unwrap_err();
-        assert_eq!(e.code, "unsupported_engine");
     }
 
     #[test]
-    fn pins_match_the_allowed_models_and_ci_script() {
-        let names: Vec<&str> = PINS.iter().map(|p| p.0).collect();
-        assert_eq!(names, crate::config::keys::STT_LOCAL_MODELS);
-        let script = include_str!("../../../../ci/fetch-models.sh");
-        for (n, sha) in PINS {
-            assert!(
-                script.contains(&format!("[{n}]={sha}")),
-                "ci/fetch-models.sh pin for {n}"
-            );
+    fn without_a_mirror_files_come_from_the_catalog_urls() {
+        let dir = tempfile::tempdir().unwrap();
+        for e in catalog::all() {
+            let s = settings(dir.path(), "", &[("stt.local.model", json!(e.id))]);
+            let urls: Vec<String> = plan(&s).into_iter().map(|f| f.url).collect();
+            let want: Vec<String> = e.files.iter().map(|f| f.url.clone()).collect();
+            assert_eq!(urls, want, "{}", e.id);
         }
     }
 
     #[test]
-    fn list_reports_presence_and_delete_removes_only_a_known_idle_file() {
+    fn the_ci_script_pins_match_the_catalog() {
+        let script = include_str!("../../../../ci/fetch-models.sh");
+        let pins: Vec<&str> = script
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix('['))
+            .collect();
+        assert!(!pins.is_empty());
+        for p in pins {
+            let (name, sha) = p.split_once("]=").expect("[name]=sha");
+            let e = catalog::get(name).unwrap_or_else(|| panic!("{name} is not in the catalog"));
+            assert_eq!(e.files[0].sha256, sha, "ci/fetch-models.sh pin for {name}");
+        }
+    }
+
+    #[test]
+    fn list_covers_every_runtime_and_delete_removes_only_a_known_idle_model() {
         let dir = tempfile::tempdir().unwrap();
-        let s = settings(
-            dir.path(),
-            "http://127.0.0.1:9",
-            &[("stt.local.model", json!("tiny.en"))],
-        );
+        let s = settings(dir.path(), "http://127.0.0.1:9", &[]);
         let v = list(&s);
         assert_eq!(v["selected"], "tiny.en");
-        assert_eq!(v["models"].as_array().unwrap().len(), PINS.len());
-        assert!(v["models"]
-            .as_array()
-            .unwrap()
+        let models = v["models"].as_array().unwrap();
+        assert_eq!(models.len(), catalog::all().len());
+        assert!(models.iter().all(|m| m["present"] == false));
+        for rt in ["whisper.cpp", "sherpa-onnx"] {
+            assert!(models.iter().any(|m| m["runtime"] == rt), "{rt}");
+        }
+        assert!(models
             .iter()
-            .all(|m| m["present"] == false));
+            .all(|m| m["size"].as_u64().unwrap() > 0 && m["benchmark_source"].is_string()));
         std::fs::write(dir.path().join("ggml-small.bin"), b"abc").unwrap();
         let v = list(&s);
         let small = v["models"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|m| m["name"] == "small")
+            .find(|m| m["id"] == "small")
             .unwrap()
             .clone();
         assert_eq!(
@@ -510,6 +665,10 @@ mod tests {
             delete(&s, "base", None).unwrap_err().code,
             "model_not_found"
         );
+        assert_eq!(
+            delete(&s, "parakeet-tdt-0.6b-v3", None).unwrap_err().code,
+            "model_not_found"
+        );
         let bus = Bus::default();
         let rx = bus.subscribe(vec!["model-download".into()]);
         assert_eq!(delete(&s, "small", Some(&bus)).unwrap()["state"], "deleted");
@@ -519,6 +678,14 @@ mod tests {
         assert_eq!(
             (t.model.as_str(), t.model_file.clone()),
             ("base", dir.path().join("ggml-base.bin"))
+        );
+        let t = for_model(&s, "moonshine-base-en").unwrap();
+        assert_eq!(
+            (t.entry.runtime, t.model_file.clone()),
+            (
+                catalog::Runtime::SherpaOnnx,
+                dir.path().join("sherpa-onnx-moonshine-base-en-int8")
+            )
         );
         assert_eq!(for_model(&s, "huge").unwrap_err().code, "invalid_value");
     }
