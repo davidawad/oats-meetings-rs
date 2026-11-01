@@ -47,6 +47,10 @@ ureq = { workspace = true, features = ["native-tls"] }
 # the build copies them beside the binary (rpath @loader_path) and packaging/macos/make-app.sh bundles them.
 [target.'cfg(target_os = "macos")'.dependencies]
 sherpa-onnx = { workspace = true, optional = true, features = ["shared"] }
+# The CoreML runtime (dot-4uzgol.69): Parakeet v2 as compiled .mlmodelc bundles on the Neural Engine, driven from Rust.
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue"] }
+objc2-core-ml = { version = "0.3", default-features = false, features = ["std", "MLDictionaryFeatureProvider", "MLFeatureDescription", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModelDescription", "MLMultiArray", "MLMultiArrayConstraint", "MLPredictionOptions"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 sherpa-onnx = { workspace = true, optional = true, features = ["static"] }

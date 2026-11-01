@@ -1,7 +1,9 @@
 //! The local STT model catalog (dot-4uzgol.66): every model `stt.local.model` can name, read from
 //! `crates/core/data/stt-models.json` (data, not code). An entry says which runtime runs it
-//! (whisper.cpp or sherpa-onnx), which files make it up (URL, SHA-256, size), its languages and
-//! its published benchmark, so the engine, the model manager and the Models tab all work from it.
+//! (whisper.cpp, sherpa-onnx, or CoreML on macOS: dot-4uzgol.69), which files make it up (URL,
+//! SHA-256, size), its languages and its published benchmark, so the engine, the model manager and
+//! the Models tab all work from it. An entry may name a `fallback` entry, used where this build has
+//! no runtime for it or the runtime cannot load it.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -17,6 +19,9 @@ pub enum Runtime {
     WhisperCpp,
     #[serde(rename = "sherpa-onnx")]
     SherpaOnnx,
+    /// Compiled `.mlmodelc` bundles run by Apple's CoreML (`stt::coreml`), macOS only.
+    #[serde(rename = "coreml")]
+    CoreMl,
 }
 
 impl Runtime {
@@ -24,22 +29,26 @@ impl Runtime {
         match self {
             Runtime::WhisperCpp => "whisper.cpp",
             Runtime::SherpaOnnx => "sherpa-onnx",
+            Runtime::CoreMl => "coreml",
         }
     }
 
-    /// Whether this build has the runtime (cargo features `whisper` / `parakeet`).
+    /// Whether this build has the runtime (cargo features `whisper` / `parakeet`; CoreML is
+    /// built into every macOS build and absent elsewhere).
     pub fn compiled(self) -> bool {
         match self {
             Runtime::WhisperCpp => cfg!(feature = "whisper"),
             Runtime::SherpaOnnx => cfg!(feature = "parakeet"),
+            Runtime::CoreMl => cfg!(target_os = "macos"),
         }
     }
 
-    /// The cargo feature that builds this runtime in, for error messages.
-    pub fn feature(self) -> &'static str {
+    /// How to get a build with this runtime, for error messages.
+    pub fn how_to_build(self) -> &'static str {
         match self {
-            Runtime::WhisperCpp => "whisper",
-            Runtime::SherpaOnnx => "parakeet",
+            Runtime::WhisperCpp => "rebuild with --features oats-core/whisper",
+            Runtime::SherpaOnnx => "rebuild with --features oats-core/parakeet",
+            Runtime::CoreMl => "use the macOS build",
         }
     }
 }
@@ -65,6 +74,15 @@ pub struct Benchmark {
     pub source: String,
 }
 
+/// Token facts a TDT decoder needs (coreml entries).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tdt {
+    pub blank: usize,
+    /// Encoder frames each duration bin of the joint network advances.
+    pub durations: Vec<usize>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
@@ -72,9 +90,15 @@ pub struct Entry {
     pub name: String,
     pub family: String,
     pub runtime: Runtime,
-    /// sherpa-onnx model config the files fill (`transducer`, `moonshine`); empty for whisper.cpp.
+    /// sherpa-onnx model config the files fill (`transducer`, `moonshine`), `tdt` for coreml;
+    /// empty for whisper.cpp.
     #[serde(default)]
     pub arch: String,
+    /// The entry to use where this build has no runtime for this one, or it cannot load.
+    #[serde(default)]
+    pub fallback: String,
+    #[serde(default)]
+    pub tdt: Option<Tdt>,
     pub languages: Vec<String>,
     /// Sub-directory of the models directory holding the files; empty: one file directly in it.
     pub dir: String,
@@ -113,7 +137,25 @@ impl Entry {
         self.files.iter().find(|f| f.role == role)
     }
 
-    /// Whether the model is a directory of files (sherpa-onnx) rather than a single file.
+    /// The entry used instead of this one where its runtime is missing or fails to load.
+    pub fn fallback(&self) -> Option<&'static Entry> {
+        if self.fallback.is_empty() {
+            None
+        } else {
+            get(&self.fallback)
+        }
+    }
+
+    /// The entry this build runs for this one: itself, or its fallback when this build has no
+    /// runtime for it (then a build without the fallback's runtime says that one is missing).
+    pub fn resolved(&'static self) -> &'static Entry {
+        match self.fallback() {
+            Some(f) if !self.runtime.compiled() => f,
+            _ => self,
+        }
+    }
+
+    /// Whether the model is a directory of files (sherpa-onnx, coreml) rather than a single file.
     pub fn is_dir(&self) -> bool {
         !self.dir.is_empty()
     }
@@ -141,6 +183,7 @@ impl Entry {
         json!({
             "id": self.id, "name": self.name, "family": self.family, "runtime": self.runtime.label(),
             "languages": self.languages, "size": self.bytes(), "compiled": self.runtime.compiled(),
+            "fallback": (!self.fallback.is_empty()).then_some(&self.fallback),
             "wer": self.benchmark.wer, "rtfx": self.benchmark.rtfx, "benchmark_source": self.benchmark.source,
         })
     }
@@ -170,7 +213,14 @@ mod tests {
             assert!(!e.benchmark.source.is_empty(), "{}: benchmark source", e.id);
             assert!(!e.files.is_empty(), "{}", e.id);
             for f in &e.files {
-                assert!(safe_name(&f.name), "{}: {}", e.id, f.name);
+                // A coreml file may sit inside its .mlmodelc bundle: each part is a plain name.
+                assert!(f.name.split('/').all(safe_name), "{}: {}", e.id, f.name);
+                assert!(
+                    e.runtime == Runtime::CoreMl || !f.name.contains('/'),
+                    "{}: {}",
+                    e.id,
+                    f.name
+                );
                 assert!(f.url.starts_with("https://"), "{}: {}", e.id, f.url);
                 assert!(
                     f.url.ends_with(&format!("/{}", f.name)),
@@ -215,7 +265,37 @@ mod tests {
                         e.id
                     );
                 }
+                (Runtime::CoreMl, "tdt") => {
+                    assert!(safe_name(&e.dir), "{}", e.id);
+                    let tdt = e.tdt.as_ref().expect("a tdt entry has its token facts");
+                    assert!(!tdt.durations.is_empty());
+                    // Each network is one compiled bundle: all its files under one .mlmodelc.
+                    for role in ["encoder", "decoder", "joint"] {
+                        let files: Vec<&File> = e.files.iter().filter(|f| f.role == role).collect();
+                        let bundle = files[0].name.split('/').next().unwrap();
+                        assert!(bundle.ends_with(".mlmodelc"), "{}: {role}", e.id);
+                        for f in &files {
+                            assert!(f.name.starts_with(&format!("{bundle}/")), "{}", f.name);
+                            assert!(e.files.iter().filter(|g| g.name == f.name).count() == 1);
+                        }
+                        for part in ["coremldata.bin", "model.mil", "weights/weight.bin"] {
+                            assert!(
+                                files.iter().any(|f| f.name == format!("{bundle}/{part}")),
+                                "{}: {bundle}/{part}",
+                                e.id
+                            );
+                        }
+                    }
+                    let mut roles: Vec<&str> = roles.clone();
+                    roles.dedup();
+                    assert_eq!(roles, ["encoder", "decoder", "joint", "vocab"], "{}", e.id);
+                }
                 (r, a) => panic!("{}: runtime {r:?} with arch {a:?}", e.id),
+            }
+            if !e.fallback.is_empty() {
+                let f = e.fallback().unwrap_or_else(|| panic!("{}: fallback", e.id));
+                assert!(f.fallback.is_empty(), "{}: one fallback hop", e.id);
+                assert_eq!(f.languages, e.languages, "{}", e.id);
             }
         }
         // Two models never share a file or directory in the models directory.
@@ -241,6 +321,7 @@ mod tests {
     #[test]
     fn the_bead_seed_models_are_there_for_both_runtimes() {
         for (id, rt) in [
+            ("parakeet-tdt-0.6b-v2-coreml", Runtime::CoreMl),
             ("parakeet-tdt-0.6b-v2", Runtime::SherpaOnnx),
             ("large-v3-turbo-q5_0", Runtime::WhisperCpp),
             ("small.en", Runtime::WhisperCpp),
@@ -265,6 +346,41 @@ mod tests {
             assert!(get(from).is_none(), "{from} is retired");
             assert!(get(to).is_some(), "{from} -> {to}");
         }
+    }
+
+    /// dot-4uzgol.69: Parakeet v2 on the Neural Engine is the default; a build without CoreML
+    /// (Linux) runs the sherpa-onnx export of the same model instead.
+    #[test]
+    fn the_coreml_parakeet_falls_back_to_sherpa_where_coreml_is_missing() {
+        let e = get("parakeet-tdt-0.6b-v2-coreml").unwrap();
+        assert_eq!(
+            e.fallback().map(|f| f.id.as_str()),
+            Some("parakeet-tdt-0.6b-v2")
+        );
+        assert_eq!(e.tdt.as_ref().map(|t| t.blank), Some(1024));
+        assert_eq!(
+            e.file("vocab").map(|f| f.name.as_str()),
+            Some("parakeet_vocab.json")
+        );
+        let r = e.resolved();
+        if cfg!(target_os = "macos") {
+            assert_eq!(r.id, e.id);
+        } else {
+            assert_eq!(r.id, "parakeet-tdt-0.6b-v2");
+        }
+        let w = get("tiny.en").unwrap();
+        assert!(std::ptr::eq(w.resolved(), w));
+        // A bundle file lives under the model directory at its bundle path.
+        let d = tempfile::tempdir().unwrap();
+        let p = e.location(d.path());
+        for f in &e.files {
+            let at = p.join(&f.name);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, b"x").unwrap();
+        }
+        assert!(e.present(&p));
+        std::fs::remove_file(p.join("Encoder.mlmodelc/weights/weight.bin")).unwrap();
+        assert!(!e.present(&p));
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! finds the model missing) downloads every file of the selected catalog entry (`catalog`) from its
 //! catalog URL, or from the `stt.local.model_url` mirror, checks each against the catalog SHA-256,
 //! and only then moves it into place: a whisper.cpp model is one `ggml-*.bin` file in the models
-//! directory, a sherpa-onnx model a directory of files. Progress is a `model-download` bus event and
+//! directory, a sherpa-onnx model a directory of files, a coreml model a directory of `.mlmodelc`
+//! bundles (files in sub-directories) and its vocabulary. Progress is a `model-download` bus event and
 //! the `download` object of `stt-status`. The download runs on its own thread; one per model. When
 //! it lands, the engine transcribes the recordings saved as audio only meanwhile (dot-4uzgol.44).
 
@@ -218,6 +219,10 @@ fn fetch(s: &Settings, bus: Option<&Bus>, files: &[Fetch]) -> Result<Value> {
             } else {
                 stage.clone()
             };
+            // A coreml file sits inside its .mlmodelc bundle (`Encoder.mlmodelc/weights/...`).
+            if let Some(dir) = part.parent() {
+                std::fs::create_dir_all(dir).map_err(io_err(dir))?;
+            }
             let mut got = 0;
             stream(&f.url, &part, &f.sha, |done, _| {
                 got = done;
@@ -236,9 +241,12 @@ fn fetch(s: &Settings, bus: Option<&Bus>, files: &[Fetch]) -> Result<Value> {
             std::fs::create_dir_all(&target).map_err(io_err(&target))?;
             for f in files {
                 let to = target.join(&f.name);
+                if let Some(dir) = to.parent() {
+                    std::fs::create_dir_all(dir).map_err(io_err(dir))?;
+                }
                 std::fs::rename(stage.join(&f.name), &to).map_err(io_err(&to))?;
             }
-            std::fs::remove_dir(&stage).map_err(io_err(&stage))?;
+            std::fs::remove_dir_all(&stage).map_err(io_err(&stage))?;
         } else {
             std::fs::rename(&stage, &target).map_err(io_err(&target))?;
         }
@@ -541,6 +549,59 @@ mod tests {
         assert!(!s.model_file.exists());
     }
 
+    /// dot-4uzgol.69: a coreml model's files sit in .mlmodelc bundle sub-directories.
+    #[test]
+    fn a_coreml_model_downloads_its_bundles_into_sub_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = catalog::get("parakeet-tdt-0.6b-v2-coreml").unwrap();
+        let base = settings(dir.path(), "http://127.0.0.1:1", &[]);
+        let base = Settings {
+            model_url: String::new(),
+            ..base
+        };
+        let s = for_model(&base, &e.id).unwrap();
+        assert_eq!(s.model_file, dir.path().join(&e.dir));
+        // Without a mirror the files come from the pinned FluidInference revision.
+        assert!(plan(&s).iter().all(|f| f.url.starts_with(
+            "https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml/resolve/"
+        )));
+        let picks = [
+            "Encoder.mlmodelc/coremldata.bin",
+            "Encoder.mlmodelc/weights/weight.bin",
+            "parakeet_vocab.json",
+        ];
+        let bodies: Vec<Vec<u8>> = (0..3).map(|i| body(500 + i, i)).collect();
+        let served: Vec<String> = picks.iter().map(|n| format!("/{}/{n}", e.dir)).collect();
+        let (url, h) = serve(
+            served
+                .iter()
+                .zip(&bodies)
+                .map(|(p, b)| (p.as_str(), 200, b.clone()))
+                .collect(),
+            3,
+        );
+        let s = Settings {
+            model_url: url,
+            ..s
+        };
+        let mut files: Vec<Fetch> = plan(&s)
+            .into_iter()
+            .filter(|f| picks.contains(&f.name.as_str()))
+            .collect();
+        for (f, b) in files.iter_mut().zip(&bodies) {
+            f.sha = sha(b);
+        }
+        fetch(&s, None, &files).unwrap();
+        assert_eq!(h.join().unwrap(), served);
+        assert_eq!(
+            std::fs::read(s.model_file.join("Encoder.mlmodelc/weights/weight.bin")).unwrap(),
+            bodies[1]
+        );
+        assert!(!staging(&s).exists());
+        delete(&s, &e.id, None).unwrap();
+        assert!(!s.model_file.exists());
+    }
+
     #[test]
     fn a_bad_file_in_a_directory_model_leaves_nothing_behind() {
         let dir = tempfile::tempdir().unwrap();
@@ -605,7 +666,9 @@ mod tests {
     fn without_a_mirror_files_come_from_the_catalog_urls() {
         let dir = tempfile::tempdir().unwrap();
         for e in catalog::all() {
-            let s = settings(dir.path(), "", &[("stt.local.model", json!(e.id))]);
+            // Retarget rather than configure: a configured coreml model resolves to its fallback
+            // in a build without CoreML.
+            let s = for_model(&settings(dir.path(), "", &[]), &e.id).unwrap();
             let urls: Vec<String> = plan(&s).into_iter().map(|f| f.url).collect();
             let want: Vec<String> = e.files.iter().map(|f| f.url.clone()).collect();
             assert_eq!(urls, want, "{}", e.id);

@@ -235,18 +235,24 @@ enabled = true
 [stt.local]
 # When the selected local model is missing at app launch (or when a recording starts), download it in the background (about 660 MB for the default Parakeet v2); recordings saved as audio only meanwhile are transcribed when it finishes. Picking a model in the Models tab also downloads it when this and network.allow are both on. Off means transcription stays unavailable until you run `ctl stt model fetch` or press Download. A download you ask for with stt-model-fetch is not gated by this or by network.allow.
 auto_download = true
-# Local ASR model: an id from the model catalog (stt-model-list shows each with its size, WER and speed). The catalog entry decides the runtime: whisper.cpp for the Whisper models, sherpa-onnx for Parakeet and Moonshine.
-model = "parakeet-tdt-0.6b-v2"
+# Local ASR model: an id from the model catalog (stt-model-list shows each with its size, WER and speed). The catalog entry decides the runtime: whisper.cpp for the Whisper models, sherpa-onnx for Parakeet and Moonshine, CoreML for parakeet-tdt-0.6b-v2-coreml (the default: Parakeet v2 on the Apple Neural Engine, as FluidAudio runs it). Where a build has no CoreML (Linux, Windows), or CoreML cannot load the model, parakeet-tdt-0.6b-v2-coreml runs as parakeet-tdt-0.6b-v2 through sherpa-onnx on the CPU; stt-status reports the runtime and compute units in use.
+model = "parakeet-tdt-0.6b-v2-coreml"
 # Explicit path to the local model; empty means where the model catalog puts stt.local.model under models_dir (a ggml-*.bin file for whisper.cpp models, a directory of files for sherpa-onnx models). Nothing is downloaded for an explicit path.
 model_path = ""
 # Mirror for model downloads: empty fetches each file from the URL in the model catalog; set, a file comes from <url>/<file> (whisper.cpp) or <url>/<model dir>/<file> (sherpa-onnx). Every file is checked against the catalog's SHA-256, so a mirror must serve the same bytes.
 model_url = ""
 # Directory holding local model files; empty means models/ beside the sessions dir.
 models_dir = ""
-# Longest stretch a sherpa-onnx model (Parakeet, Moonshine) decodes at once; longer audio is cut at the quietest point near this length, which bounds memory on long recordings. Each piece is split into sentences by the model's token times.
+# Longest stretch a sherpa-onnx model (Parakeet, Moonshine) decodes at once; longer audio is cut at the quietest point near this length, which bounds memory on long recordings. Each piece is split into sentences by the model's token times. A CoreML model decodes at most its encoder window (15 s for Parakeet v2) at once, cut the same way.
 piece = "30s"
-# Where sherpa-onnx models (Parakeet, Moonshine) run: auto uses CoreML (Apple Neural Engine / GPU) on macOS and the CPU elsewhere; coreml falls back to the CPU when it cannot load the model. stt-status reports the provider in use. whisper.cpp models always run on the CPU.
+# Where sherpa-onnx models (Parakeet, Moonshine) run: auto uses CoreML (Apple Neural Engine / GPU) on macOS and the CPU elsewhere; coreml falls back to the CPU when it cannot load the model. stt-status reports the provider in use. whisper.cpp models always run on the CPU. The CoreML model (parakeet-tdt-0.6b-v2-coreml) runs on the Neural Engine (MLComputeUnits cpuAndNeuralEngine) unless this is cpu (cpuOnly).
 provider = "auto"
+# CoreML Parakeet (TDT) decoding: tokens emitted at one encoder frame before the decoder is forced to the next frame (FluidAudio maxSymbolsPerStep). Also caps the steps of the end-of-window pass.
+tdt_max_symbols = 10
+# CoreML Parakeet (TDT) decoding: most tokens decoded from one 15 s encoder window, against runaway output (FluidAudio maxTokensPerChunk).
+tdt_max_tokens = 150
+# CoreML Parakeet (TDT) decoding: consecutive blanks that end the pass over the last frames of a window, which picks up tokens the main loop stepped past (FluidAudio consecutiveBlankLimit).
+tdt_tail_blanks = 5
 # CPU threads for local transcription.
 threads = 4
 

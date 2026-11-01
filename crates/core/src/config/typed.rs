@@ -297,6 +297,9 @@ pub struct SttCloud {
 pub struct SttLocal {
     pub model: String,
     pub piece: Dur,
+    pub tdt_max_symbols: u32,
+    pub tdt_max_tokens: u32,
+    pub tdt_tail_blanks: u32,
     pub provider: SttProvider,
     pub model_path: String,
     pub models_dir: String,

@@ -131,12 +131,15 @@
     },
     "local": {
       "auto_download": true,
-      "model": "parakeet-tdt-0.6b-v2",
+      "model": "parakeet-tdt-0.6b-v2-coreml",
       "model_path": "",
       "model_url": "",
       "models_dir": "",
       "piece": "30s",
       "provider": "auto",
+      "tdt_max_symbols": 10,
+      "tdt_max_tokens": 150,
+      "tdt_tail_blanks": 5,
       "threads": 4
     },
     "pad": "250ms",

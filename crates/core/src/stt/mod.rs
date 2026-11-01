@@ -1,7 +1,10 @@
 //! Transcription engine (dot-4uzgol.8). One trait, `Asr`, two backends chosen by `stt.backend`:
 //!
 //! - `local`: the model `stt.local.model` names in the catalog (`catalog`), run by whisper.cpp
-//!   (cargo feature `whisper`) or sherpa-onnx (Parakeet, Moonshine; cargo feature `parakeet`).
+//!   (cargo feature `whisper`), sherpa-onnx (Parakeet, Moonshine; cargo feature `parakeet`) or, on
+//!   macOS, CoreML (`coreml`: Parakeet v2 on the Neural Engine, the default; dot-4uzgol.69). Where
+//!   CoreML is missing or cannot load the model, its catalog fallback (sherpa-onnx Parakeet v2 on
+//!   the CPU) runs instead.
 //!   Model files are downloaded and checksummed by `models` (or `ci/fetch-models.sh`), never
 //!   committed.
 //! - `cloud`: an OpenAI-compatible HTTP adapter (`stt.cloud.adapter`), gated by `network.allow`,
@@ -21,11 +24,15 @@
 pub mod capture;
 pub mod catalog;
 pub mod cloud;
+#[cfg(target_os = "macos")]
+pub mod coreml;
 #[cfg(feature = "whisper")]
 pub mod local;
+pub mod mel;
 pub mod models;
 #[cfg(feature = "parakeet")]
 pub mod sherpa;
+pub mod tdt;
 pub mod wav;
 pub mod wer;
 
@@ -155,9 +162,13 @@ pub struct Settings {
     pub live_enabled: bool,
     pub chunk_secs: f64,
     pub final_enabled: bool,
-    /// The catalog entry for `stt.local.model`; its runtime runs it.
+    /// The catalog entry this build runs for `stt.local.model` (its fallback where the build has
+    /// no runtime for it); its runtime runs it.
     pub entry: &'static catalog::Entry,
+    /// `entry`'s id.
     pub model: String,
+    /// `stt.local.model` as configured (differs from `model` when the fallback stands in).
+    pub requested: String,
     /// The model file (whisper.cpp) or directory (sherpa-onnx).
     pub model_file: PathBuf,
     /// Where downloaded models live (`stt.local.models_dir`, else `<data>/models`).
@@ -171,6 +182,8 @@ pub struct Settings {
     pub provider: SttProvider,
     /// `stt.local.piece` in samples: the longest stretch a sherpa-onnx model decodes at once.
     pub piece_samples: usize,
+    /// `stt.local.tdt_*`: the CoreML TDT decoder's limits.
+    pub tdt: TdtLimits,
     pub cloud_url: String,
     pub cloud_model: String,
     pub cloud_key: String,
@@ -199,13 +212,16 @@ impl Settings {
                 "speaker_you and speaker_them must be non-empty and different",
             ));
         }
-        let model = c.local.model.trim();
-        let entry = catalog::get(model).ok_or_else(|| {
-            invalid(
-                "local.model",
-                format!("'{model}' is not in the model catalog (see stt-model-list)"),
-            )
-        })?;
+        let requested = c.local.model.trim();
+        let entry = catalog::get(requested)
+            .ok_or_else(|| {
+                invalid(
+                    "local.model",
+                    format!("'{requested}' is not in the model catalog (see stt-model-list)"),
+                )
+            })?
+            .resolved();
+        let model = entry.id.as_str();
         let models_dir = if c.local.models_dir.trim().is_empty() {
             sessions_dir.parent().unwrap_or(sessions_dir).join("models")
         } else {
@@ -227,6 +243,7 @@ impl Settings {
             final_enabled: c.final_.enabled,
             entry,
             model: model.to_string(),
+            requested: requested.to_string(),
             model_file,
             models_dir,
             explicit_model_path: !c.local.model_path.trim().is_empty(),
@@ -235,6 +252,11 @@ impl Settings {
             threads: c.local.threads,
             provider: c.local.provider,
             piece_samples: samples_of(c.local.piece).max(1),
+            tdt: TdtLimits {
+                max_symbols: c.local.tdt_max_symbols.max(1) as usize,
+                max_tokens: c.local.tdt_max_tokens.max(1) as usize,
+                tail_blanks: c.local.tdt_tail_blanks.max(1) as usize,
+            },
             cloud_url: c.cloud.url.trim().to_string(),
             cloud_model: c.cloud.model.trim().to_string(),
             cloud_key: c.cloud.key.trim().to_string(),
@@ -321,20 +343,101 @@ fn local_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     match s.entry.runtime {
         catalog::Runtime::WhisperCpp => whisper_asr(s),
         catalog::Runtime::SherpaOnnx => sherpa_asr(s),
+        catalog::Runtime::CoreMl => coreml_asr(s),
     }
+}
+
+/// The decoder limits `stt.local.tdt_*` set (CoreML TDT models).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TdtLimits {
+    pub max_symbols: usize,
+    pub max_tokens: usize,
+    pub tail_blanks: usize,
+}
+
+/// Why the CoreML model in a directory is not the one running: the fallback model id and the
+/// CoreML error, set when loading it failed and the fallback took over (dot-4uzgol.69).
+static FALLBACK: std::sync::Mutex<Option<(PathBuf, String, String)>> = std::sync::Mutex::new(None);
+
+fn fallback_for(dir: &Path) -> Option<(String, String)> {
+    FALLBACK
+        .lock()
+        .expect("stt fallback")
+        .as_ref()
+        .filter(|f| f.0 == dir)
+        .map(|f| (f.1.clone(), f.2.clone()))
+}
+
+fn set_fallback(v: Option<(PathBuf, String, String)>) {
+    *FALLBACK.lock().expect("stt fallback") = v;
+}
+
+#[cfg(any(target_os = "macos", feature = "parakeet"))]
+fn not_downloaded(s: &Settings) -> ConfigError {
+    ConfigError::new(
+        "model_not_found",
+        format!(
+            "model {} not found at {}; download it with `ctl stt model fetch` (or the Download button in Models), or set stt.local.model_path",
+            s.model,
+            s.model_file.display()
+        ),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn coreml_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
+    if !s.entry.present(&s.model_file) {
+        return Err(not_downloaded(s));
+    }
+    match coreml::CoreMlAsr::load(s.entry, &s.model_file, s.provider, s.tdt) {
+        Ok(a) => {
+            set_fallback(None);
+            Ok(Arc::new(a.with_piece(s.piece_samples)))
+        }
+        Err(e) => coreml_fallback(s, e),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn coreml_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
+    coreml_fallback(
+        s,
+        ConfigError::new(
+            "backend_unavailable",
+            format!("this build has no CoreML runtime for {}", s.model),
+        ),
+    )
+}
+
+/// CoreML could not load `s`'s model (`why`): run the catalog fallback (sherpa-onnx Parakeet v2)
+/// on the CPU instead and remember why, for stt-status.
+fn coreml_fallback(s: &Settings, why: ConfigError) -> Result<Arc<dyn Asr>> {
+    let Some(f) = s.entry.fallback() else {
+        return Err(why);
+    };
+    let mut t = models::for_model(s, &f.id)?;
+    t.model_file = f.location(&s.models_dir);
+    t.provider = SttProvider::Cpu;
+    set_fallback(Some((
+        s.model_file.clone(),
+        f.id.clone(),
+        why.message.clone(),
+    )));
+    local_asr(&t).map_err(|e| {
+        ConfigError::new(
+            e.code,
+            format!(
+                "{} (CoreML could not run {}: {}; {} is its CPU fallback)",
+                e.message, s.model, why.message, f.id
+            ),
+        )
+    })
 }
 
 #[cfg(feature = "parakeet")]
 fn sherpa_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     if !s.entry.present(&s.model_file) {
-        return Err(ConfigError::new(
-            "model_not_found",
-            format!(
-                "model {} not found at {}; download it with `ctl stt model fetch` (or the Download button in Models), or set stt.local.model_path",
-                s.model,
-                s.model_file.display()
-            ),
-        ));
+        return Err(not_downloaded(s));
     }
     Ok(Arc::new(
         sherpa::SherpaAsr::load(s.entry, &s.model_file, s.threads, s.provider)?
@@ -353,21 +456,61 @@ fn sherpa_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
     ))
 }
 
-/// The inference provider `stt-status` reports: the loaded one when the selected model is loaded,
-/// else what loading would try first.
+#[cfg(feature = "parakeet")]
+fn sherpa_loaded(dir: &Path) -> Option<String> {
+    sherpa::loaded_provider(dir)
+}
+
+#[cfg(not(feature = "parakeet"))]
+fn sherpa_loaded(_dir: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn coreml_loaded(dir: &Path) -> Option<String> {
+    coreml::loaded_units(dir)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn coreml_loaded(_dir: &Path) -> Option<String> {
+    None
+}
+
+/// Where inference runs, for `stt-status`: `runtime` and `active` (the onnxruntime provider, or
+/// the CoreML compute units) of the loaded model, null until it is loaded; `planned`, what loading
+/// would use; `fallback`, the model running in place of the configured one and why (no CoreML in
+/// this build, or CoreML failed to load it).
 fn provider_status(s: &Settings) -> Value {
-    let active: Option<String> = match s.entry.runtime {
-        catalog::Runtime::WhisperCpp => Some("cpu".into()),
-        #[cfg(feature = "parakeet")]
-        catalog::Runtime::SherpaOnnx => sherpa::loaded_provider(&s.model_file),
-        #[cfg(not(feature = "parakeet"))]
-        catalog::Runtime::SherpaOnnx => None,
+    let mut fallback = Value::Null;
+    let (runtime, active): (Option<&str>, Option<String>) = match s.entry.runtime {
+        catalog::Runtime::WhisperCpp => (Some("whisper.cpp"), Some("cpu".into())),
+        catalog::Runtime::SherpaOnnx => {
+            let a = sherpa_loaded(&s.model_file);
+            (a.as_ref().map(|_| "sherpa-onnx"), a)
+        }
+        catalog::Runtime::CoreMl => match fallback_for(&s.model_file) {
+            Some((id, why)) => {
+                let dir = catalog::get(&id).map(|e| e.location(&s.models_dir));
+                let a = dir.as_deref().and_then(sherpa_loaded);
+                fallback = json!({"model": id, "reason": why});
+                (a.as_ref().map(|_| "sherpa-onnx"), a)
+            }
+            None => {
+                let a = coreml_loaded(&s.model_file);
+                (a.as_ref().map(|_| "coreml"), a)
+            }
+        },
     };
+    if s.requested != s.model {
+        fallback = json!({"model": s.model, "reason": format!("this build has no {} runtime for {}", catalog::get(&s.requested).map_or("", |e| e.runtime.label()), s.requested)});
+    }
     let planned = match s.entry.runtime {
         catalog::Runtime::WhisperCpp => "cpu",
         catalog::Runtime::SherpaOnnx => provider_order(s.provider)[0],
+        catalog::Runtime::CoreMl if s.provider == SttProvider::Cpu => "cpuOnly",
+        catalog::Runtime::CoreMl => "cpuAndNeuralEngine",
     };
-    json!({"setting": s.provider.as_str(), "active": active, "planned": planned})
+    json!({"setting": s.provider.as_str(), "runtime": runtime, "active": active, "planned": planned, "fallback": fallback})
 }
 
 /// The onnxruntime providers to try, in order, for `stt.local.provider` (cpu is always last).
@@ -908,10 +1051,10 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 return Err(ConfigError::new(
                     "backend_unavailable",
                     format!(
-                        "this build has no {} runtime, so the {} model would not be used; rebuild with --features oats-core/{}",
+                        "this build has no {} runtime, so the {} model would not be used; {}",
                         s.entry.runtime.label(),
                         s.model,
-                        s.entry.runtime.feature()
+                        s.entry.runtime.how_to_build()
                     ),
                 ));
             }
@@ -947,7 +1090,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 "backend": match s.backend { SttBackend::Local => "local", SttBackend::Cloud => "cloud" },
                 "language": s.language, "live": s.live_enabled, "final": s.final_enabled,
                 "local": {
-                    "model": s.model, "name": s.entry.name, "runtime": s.entry.runtime.label(),
+                    "model": s.model, "requested": s.requested, "name": s.entry.name, "runtime": s.entry.runtime.label(),
                     "path": s.model_file, "present": s.entry.present(&s.model_file),
                     "compiled": s.entry.runtime.compiled(), "threads": s.threads,
                     "provider": provider_status(&s),
@@ -1033,6 +1176,9 @@ impl Subsystem for SttSubsystem {
             local::clear_cache();
             #[cfg(feature = "parakeet")]
             sherpa::clear_cache();
+            #[cfg(target_os = "macos")]
+            coreml::clear_cache();
+            set_fallback(None);
         }
     }
 }
@@ -1378,6 +1524,71 @@ mod tests {
                 "cpu"
             }
         );
+    }
+
+    /// dot-4uzgol.69: the default is Parakeet v2 on CoreML; a build without CoreML runs the
+    /// sherpa-onnx export on the CPU instead and stt-status says so, as it does when CoreML fails
+    /// to load the model.
+    #[test]
+    fn the_coreml_default_falls_back_to_sherpa_on_the_cpu_and_status_says_why() {
+        let base = crate::config::resolve::defaults_flat();
+        assert_eq!(base["stt.local.model"], "parakeet-tdt-0.6b-v2-coreml");
+        let mut c = base.clone();
+        c.insert("stt.local.models_dir".into(), json!("/m"));
+        let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
+        let s = Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).unwrap();
+        assert_eq!(s.requested, "parakeet-tdt-0.6b-v2-coreml");
+        assert_eq!(
+            s.tdt,
+            TdtLimits {
+                max_symbols: 10,
+                max_tokens: 150,
+                tail_blanks: 5
+            }
+        );
+        let st = provider_status(&s);
+        if cfg!(target_os = "macos") {
+            assert_eq!(s.entry.runtime, catalog::Runtime::CoreMl);
+            assert_eq!(s.model_file, Path::new("/m/parakeet-tdt-0.6b-v2-coreml"));
+            assert_eq!(st["planned"], "cpuAndNeuralEngine");
+            assert_eq!(st["fallback"], Value::Null);
+        } else {
+            assert_eq!(s.model, "parakeet-tdt-0.6b-v2");
+            assert_eq!(s.entry.runtime, catalog::Runtime::SherpaOnnx);
+            assert_eq!(s.engine_label(), "sherpa-onnx:parakeet-tdt-0.6b-v2");
+            assert_eq!(st["fallback"]["model"], "parakeet-tdt-0.6b-v2");
+            assert!(st["fallback"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no coreml runtime"));
+        }
+        // The CoreML model itself (stt-model-fetch model=, or a failed load on macOS): when
+        // CoreML cannot run it, the sherpa-onnx fallback is tried on the CPU and the reason kept.
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = base.clone();
+        c.insert("stt.local.models_dir".into(), json!(dir.path()));
+        let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
+        let s = Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).unwrap();
+        let cm = models::for_model(&s, "parakeet-tdt-0.6b-v2-coreml").unwrap();
+        let why = ConfigError::new("model_load_failed", "no Neural Engine here");
+        let Err(e) = coreml_fallback(&cm, why) else {
+            panic!("the fallback model is not downloaded")
+        };
+        assert!(
+            e.code == "model_not_found" || e.code == "backend_unavailable",
+            "{}",
+            e.code
+        );
+        assert!(e.message.contains("no Neural Engine here"), "{}", e.message);
+        assert!(e
+            .message
+            .contains("parakeet-tdt-0.6b-v2 is its CPU fallback"));
+        let st = provider_status(&cm);
+        assert_eq!(st["fallback"]["model"], "parakeet-tdt-0.6b-v2");
+        assert_eq!(st["fallback"]["reason"], "no Neural Engine here");
+        assert_eq!(st["active"], Value::Null, "nothing loaded");
+        set_fallback(None);
+        assert_eq!(provider_status(&cm)["fallback"], Value::Null);
     }
 
     fn tuning_with(over: &[(&str, Value)]) -> Tuning {

@@ -1024,9 +1024,10 @@
               "x-ui": true
             },
             "model": {
-              "default": "parakeet-tdt-0.6b-v2",
-              "description": "Local ASR model: an id from the model catalog (stt-model-list shows each with its size, WER and speed). The catalog entry decides the runtime: whisper.cpp for the Whisper models, sherpa-onnx for Parakeet and Moonshine.",
+              "default": "parakeet-tdt-0.6b-v2-coreml",
+              "description": "Local ASR model: an id from the model catalog (stt-model-list shows each with its size, WER and speed). The catalog entry decides the runtime: whisper.cpp for the Whisper models, sherpa-onnx for Parakeet and Moonshine, CoreML for parakeet-tdt-0.6b-v2-coreml (the default: Parakeet v2 on the Apple Neural Engine, as FluidAudio runs it). Where a build has no CoreML (Linux, Windows), or CoreML cannot load the model, parakeet-tdt-0.6b-v2-coreml runs as parakeet-tdt-0.6b-v2 through sherpa-onnx on the CPU; stt-status reports the runtime and compute units in use.",
               "enum": [
+                "parakeet-tdt-0.6b-v2-coreml",
                 "parakeet-tdt-0.6b-v2",
                 "large-v3-turbo-q5_0",
                 "small.en",
@@ -1061,7 +1062,7 @@
             },
             "piece": {
               "default": "30s",
-              "description": "Longest stretch a sherpa-onnx model (Parakeet, Moonshine) decodes at once; longer audio is cut at the quietest point near this length, which bounds memory on long recordings. Each piece is split into sentences by the model's token times.",
+              "description": "Longest stretch a sherpa-onnx model (Parakeet, Moonshine) decodes at once; longer audio is cut at the quietest point near this length, which bounds memory on long recordings. Each piece is split into sentences by the model's token times. A CoreML model decodes at most its encoder window (15 s for Parakeet v2) at once, cut the same way.",
               "format": "duration",
               "pattern": "^[0-9]+(ms|s|m|h|d)$",
               "type": "string",
@@ -1075,7 +1076,7 @@
             },
             "provider": {
               "default": "auto",
-              "description": "Where sherpa-onnx models (Parakeet, Moonshine) run: auto uses CoreML (Apple Neural Engine / GPU) on macOS and the CPU elsewhere; coreml falls back to the CPU when it cannot load the model. stt-status reports the provider in use. whisper.cpp models always run on the CPU.",
+              "description": "Where sherpa-onnx models (Parakeet, Moonshine) run: auto uses CoreML (Apple Neural Engine / GPU) on macOS and the CPU elsewhere; coreml falls back to the CPU when it cannot load the model. stt-status reports the provider in use. whisper.cpp models always run on the CPU. The CoreML model (parakeet-tdt-0.6b-v2-coreml) runs on the Neural Engine (MLComputeUnits cpuAndNeuralEngine) unless this is cpu (cpuOnly).",
               "enum": [
                 "auto",
                 "cpu",
@@ -1084,6 +1085,33 @@
               "type": "string",
               "x-reload": "live",
               "x-ui": true
+            },
+            "tdt_max_symbols": {
+              "default": 10,
+              "description": "CoreML Parakeet (TDT) decoding: tokens emitted at one encoder frame before the decoder is forced to the next frame (FluidAudio maxSymbolsPerStep). Also caps the steps of the end-of-window pass.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "tdt_max_tokens": {
+              "default": 150,
+              "description": "CoreML Parakeet (TDT) decoding: most tokens decoded from one 15 s encoder window, against runaway output (FluidAudio maxTokensPerChunk).",
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "tdt_tail_blanks": {
+              "default": 5,
+              "description": "CoreML Parakeet (TDT) decoding: consecutive blanks that end the pass over the last frames of a window, which picks up tokens the main loop stepped past (FluidAudio consecutiveBlankLimit).",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": false
             },
             "threads": {
               "default": 4,
