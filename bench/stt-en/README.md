@@ -53,6 +53,22 @@ is a PM live check (see the end).
 | qwen3-asr-0.6b | 2.40% | 6.98% | 1.88 GB (bf16 checkpoint) | Apache-2.0 | 0.67 (4 thr) | 6017 (fp32, last resumed pass) | qwen-asr 0.0.6 (torch 2.9 CPU, transformers 4.57) backend, fp32 CPU, language forced to English |
 | qwen3-asr-1.7b | 1.83% | 5.31% | 4.70 GB (bf16 checkpoint) | Apache-2.0 | 1.69 (4 thr) | 11787 (fp32) | qwen-asr 0.0.6 (torch 2.9 CPU, transformers 4.57) backend, fp32 CPU, language forced to English |
 
+### AMI SDM meeting subset (dot-4uzgol.72)
+
+The catalog models, same runtimes and files as above, on the 120 AMI SDM segments (1959 reference
+words after dropping hesitations). This is the meeting-audio figure for the app default.
+
+| model | AMI SDM WER | hypothesis words | RTF pod CPU | peak RSS MB |
+|---|---|---|---|---|
+| parakeet-tdt-0.6b-v2 | 20.98% | 1879 | 0.082 (4 thr) | 1083 |
+| whisper-large-v3-turbo | 27.67% | 1770 | 1.47 (4 thr, shared the 4 CPUs with a 2-thread Kyutai run for most of it) | 1659 |
+| moonshine-base-en | 31.90% | 1949 | 0.058 (4 thr) | 496 |
+
+Parakeet leads by about 7 points, well past the 3-point noise on this set. Whisper turbo's gap is
+mostly deletions: it emits 1770 words against 1959 reference words, dropping quieter far-field
+speech (for example "or something like that." for a 15-word segment). Moonshine keeps the word count
+(1949) but has the most errors.
+
 ## Candidates: size, licence, Mac runtime, what Rust can drive
 
 Sizes are the upstream checkpoint files on Hugging Face (checked 2026-11-01 via the HF API, the
@@ -90,7 +106,8 @@ benchmark adds the measured WER below (same files, same hashes):
 
 - Kyutai STT 1B, Nemotron streaming 0.6B, Granite Speech 4.0 1B (dot-4uzgol.70, in this order):
   loaders are in `MODELS`. None has a runtime the app ships, so none can be a catalog entry yet.
-- AMI meeting subset across all measured models (dot-4uzgol.70): subset and `run-ami` in place.
+- AMI meeting subset for the non-catalog models (Qwen3-ASR, Kyutai, Nemotron, Granite): `run-ami`
+  in place; the catalog models are measured above.
 
 ## PM live check (Mac)
 

@@ -1,0 +1,18 @@
+{
+ "model": "parakeet-tdt-0.6b-v2",
+ "licence": "CC-BY-4.0",
+ "note": "sherpa-onnx int8 export, catalog files",
+ "bytes": 661190513,
+ "wer": {
+  "ami-sdm": 20.98
+ },
+ "ref_words": {
+  "ami-sdm": 1959
+ },
+ "utterances": 120,
+ "audio_s": 711.6,
+ "rtf_pod_cpu": 0.0824,
+ "threads": 4,
+ "load_s": 3.0,
+ "peak_rss_mb_last_pass": 1083
+}

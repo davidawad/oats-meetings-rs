@@ -1,0 +1,18 @@
+{
+ "model": "moonshine-base-en",
+ "licence": "MIT",
+ "note": "sherpa-onnx int8 export, catalog files",
+ "bytes": 286929760,
+ "wer": {
+  "ami-sdm": 31.9
+ },
+ "ref_words": {
+  "ami-sdm": 1959
+ },
+ "utterances": 120,
+ "audio_s": 711.6,
+ "rtf_pod_cpu": 0.0584,
+ "threads": 4,
+ "load_s": 1.3,
+ "peak_rss_mb_last_pass": 496
+}
