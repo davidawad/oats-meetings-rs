@@ -55,7 +55,11 @@ fn rig(auto_download: bool, model_url: &str) -> Rig {
 
 /// Where the default model (`stt.local.model`'s default catalog entry) lives in the rig.
 fn default_model(r: &Rig) -> (&'static oats_core::stt::catalog::Entry, std::path::PathBuf) {
-    let e = oats_core::stt::catalog::get(&r.engine.snapshot().config.stt.local.model).unwrap();
+    // The model this build runs for the configured one (the CoreML default resolves to its
+    // sherpa-onnx fallback off macOS).
+    let e = oats_core::stt::catalog::get(&r.engine.snapshot().config.stt.local.model)
+        .unwrap()
+        .resolved();
     (e, e.location(&r.dir.path().join("models")))
 }
 
@@ -191,7 +195,10 @@ fn fetch_without_wait_returns_at_once_and_a_present_model_is_left_alone() {
     let (e, at) = default_model(&r);
     std::fs::create_dir_all(&at).unwrap();
     for f in &e.files {
-        std::fs::write(at.join(&f.name), b"x").unwrap();
+        // A coreml file sits inside its .mlmodelc bundle (`Encoder.mlmodelc/weights/...`).
+        let p = at.join(&f.name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"x").unwrap();
     }
     let v = r
         .engine
