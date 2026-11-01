@@ -303,10 +303,9 @@ pub fn spawn(
 fn known(model: &str) -> Result<&'static Entry> {
     catalog::get(model).ok_or_else(|| {
         let ids: Vec<&str> = catalog::all().iter().map(|e| e.id.as_str()).collect();
-        ConfigError::new(
-            "invalid_value",
-            format!("'{model}' is not a catalog model ({})", ids.join(", ")),
-        )
+        let msg = crate::config::keys::retired_stt_model(model)
+            .unwrap_or_else(|| format!("'{model}' is not a catalog model ({})", ids.join(", ")));
+        ConfigError::new("invalid_value", msg)
     })
 }
 
@@ -643,13 +642,13 @@ mod tests {
         assert!(models
             .iter()
             .all(|m| m["size"].as_u64().unwrap() > 0 && m["benchmark_source"].is_string()));
-        std::fs::write(dir.path().join("ggml-small.bin"), b"abc").unwrap();
+        std::fs::write(dir.path().join("ggml-small.en.bin"), b"abc").unwrap();
         let v = list(&s);
         let small = v["models"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|m| m["id"] == "small")
+            .find(|m| m["id"] == "small.en")
             .unwrap()
             .clone();
         assert_eq!(
@@ -662,22 +661,28 @@ mod tests {
         );
         assert_eq!(delete(&s, "../x", None).unwrap_err().code, "invalid_value");
         assert_eq!(
-            delete(&s, "base", None).unwrap_err().code,
+            delete(&s, "base.en", None).unwrap_err().code,
             "model_not_found"
         );
-        assert_eq!(
-            delete(&s, "parakeet-tdt-0.6b-v3", None).unwrap_err().code,
-            "model_not_found"
+        let e = delete(&s, "parakeet-tdt-0.6b-v3", None).unwrap_err();
+        assert_eq!(e.code, "invalid_value");
+        assert!(
+            e.message.contains("use parakeet-tdt-0.6b-v2"),
+            "{}",
+            e.message
         );
         let bus = Bus::default();
         let rx = bus.subscribe(vec!["model-download".into()]);
-        assert_eq!(delete(&s, "small", Some(&bus)).unwrap()["state"], "deleted");
-        assert!(!dir.path().join("ggml-small.bin").exists());
+        assert_eq!(
+            delete(&s, "small.en", Some(&bus)).unwrap()["state"],
+            "deleted"
+        );
+        assert!(!dir.path().join("ggml-small.en.bin").exists());
         assert!(rx.try_recv().unwrap().contains("deleted"));
-        let t = for_model(&s, "base").unwrap();
+        let t = for_model(&s, "base.en").unwrap();
         assert_eq!(
             (t.model.as_str(), t.model_file.clone()),
-            ("base", dir.path().join("ggml-base.bin"))
+            ("base.en", dir.path().join("ggml-base.en.bin"))
         );
         let t = for_model(&s, "moonshine-base-en").unwrap();
         assert_eq!(

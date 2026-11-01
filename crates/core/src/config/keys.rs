@@ -117,16 +117,29 @@ pub struct Key {
 /// order (a test keeps them equal). The catalog entry says which runtime runs the model.
 pub const STT_LOCAL_MODELS: &[&str] = &[
     "parakeet-tdt-0.6b-v2",
-    "parakeet-tdt-0.6b-v3",
     "large-v3-turbo-q5_0",
     "small.en",
-    "small",
     "base.en",
-    "base",
     "tiny.en",
-    "tiny",
     "moonshine-base-en",
 ];
+/// Model ids the catalog dropped when it went English-only (dot-4uzgol.68), each with its English
+/// replacement, so a config still naming one gets told what to use instead.
+pub const STT_RETIRED_MODELS: &[(&str, &str)] = &[
+    ("parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v2"),
+    ("small", "small.en"),
+    ("base", "base.en"),
+    ("tiny", "tiny.en"),
+];
+
+/// Why `id` is no longer a model, when it is one the catalog dropped.
+pub fn retired_stt_model(id: &str) -> Option<String> {
+    let (_, to) = STT_RETIRED_MODELS.iter().find(|(from, _)| *from == id)?;
+    Some(format!(
+        "'{id}' was removed: the model catalog is English only; use {to} (English models: {})",
+        STT_LOCAL_MODELS.join(", ")
+    ))
+}
 /// onnxruntime execution providers for sherpa-onnx models: auto is coreml on macOS, cpu elsewhere.
 pub const STT_PROVIDERS: &[&str] = &["auto", "cpu", "coreml"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];

@@ -435,7 +435,7 @@ mod tests {
                 {"id": "base.en", "name": "Whisper base (English)", "present": false, "bytes": null, "compiled": true,
                  "size": 147_964_211u64, "languages": ["en"], "runtime": "whisper.cpp", "selected": true,
                  "download": {"state": "downloading", "percent": 42, "bytes": 1}},
-                {"id": "small", "name": "Whisper small", "present": false, "bytes": null, "selected": false, "compiled": true,
+                {"id": "small.en", "name": "Whisper small (English)", "present": false, "bytes": null, "selected": false, "compiled": true,
                  "download": {"state": "failed", "error": {"code": "x", "message": "HTTP 404"}}},
                 {"id": "parakeet-tdt-0.6b-v2", "name": "Parakeet TDT 0.6B v2 (English)", "present": false, "bytes": null,
                  "size": 661_190_513u64, "wer": 6.02, "rtfx": 6000, "languages": ["en"], "runtime": "sherpa-onnx",
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn nothing_downloads_for_an_explicit_path() {
-        let m = json!([{"id": "tiny", "present": false, "selected": false, "compiled": true, "download": null}]);
+        let m = json!([{"id": "tiny.en", "present": false, "selected": false, "compiled": true, "download": null}]);
         let v = json!({"explicit_path": "/x.bin", "auto_download": true, "network_allow": true, "models": m});
         let l = listing(&v);
         assert!(l.note.is_some());
@@ -481,7 +481,7 @@ mod tests {
     #[test]
     fn requests_are_well_formed_actions() {
         for op in [Op::Use, Op::Download, Op::Delete] {
-            let (id, mut p) = op.request("tiny");
+            let (id, mut p) = op.request("tiny.en");
             p["action"] = json!(id);
             serde_json::from_value::<oats_core::action::Action>(p).unwrap();
         }
@@ -492,7 +492,7 @@ mod tests {
         let (engine, dir) = testutil::engine(&[]);
         let models = dir.path().join("models");
         std::fs::create_dir_all(&models).unwrap();
-        std::fs::write(models.join("ggml-tiny.bin"), b"abc").unwrap();
+        std::fs::write(models.join("ggml-tiny.en.bin"), b"abc").unwrap();
         let mut cx = TestAppContext::single();
         let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
         view.update(cx, |v, cx| {
@@ -509,7 +509,7 @@ mod tests {
             Some("parakeet-tdt-0.6b-v2"),
             "the default model"
         );
-        let tiny = l.rows.iter().find(|r| r.id == "tiny").unwrap();
+        let tiny = l.rows.iter().find(|r| r.id == "tiny.en").unwrap();
         assert!(tiny.can_delete && tiny.status.contains("downloaded"));
         // The dropdown opens, and picking an entry makes it the default.
         view.update(cx, |_, cx| {
@@ -518,19 +518,19 @@ mod tests {
         });
         cx.run_until_parked();
         view.update(cx, |v, cx| {
-            select(v, "tiny");
+            select(v, "tiny.en");
             cx.notify();
         });
         cx.run_until_parked();
         assert_eq!(
             engine.snapshot().config.stt.local.model,
-            "tiny",
+            "tiny.en",
             "picking sets stt.local.model"
         );
         assert!(load(&engine)
             .rows
             .iter()
-            .any(|r| r.id == "tiny" && r.selected));
+            .any(|r| r.id == "tiny.en" && r.selected));
         // network.allow is off by default: picking a missing model does not download it.
         view.update(cx, |v, cx| {
             select(v, "large-v3-turbo-q5_0");
@@ -548,13 +548,13 @@ mod tests {
             .unwrap();
         assert!(!turbo.downloading && !turbo.present);
         view.update(cx, |v, cx| {
-            apply(v, Op::Delete, "tiny");
+            apply(v, Op::Delete, "tiny.en");
             cx.notify();
         });
         cx.run_until_parked();
-        assert!(!models.join("ggml-tiny.bin").exists());
+        assert!(!models.join("ggml-tiny.en.bin").exists());
         view.update(cx, |v, cx| {
-            apply(v, Op::Delete, "tiny");
+            apply(v, Op::Delete, "tiny.en");
             assert!(
                 v.state.status.contains("not downloaded"),
                 "{}",

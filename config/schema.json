@@ -1028,14 +1028,10 @@
               "description": "Local ASR model: an id from the model catalog (stt-model-list shows each with its size, WER and speed). The catalog entry decides the runtime: whisper.cpp for the Whisper models, sherpa-onnx for Parakeet and Moonshine.",
               "enum": [
                 "parakeet-tdt-0.6b-v2",
-                "parakeet-tdt-0.6b-v3",
                 "large-v3-turbo-q5_0",
                 "small.en",
-                "small",
                 "base.en",
-                "base",
                 "tiny.en",
-                "tiny",
                 "moonshine-base-en"
               ],
               "type": "string",

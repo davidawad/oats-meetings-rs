@@ -1,6 +1,6 @@
 # STT benchmark: engine x model (dot-4uzgol.22)
 
-Measurements for David's final review. No default was changed by this work; dot-4uzgol.66 later made Parakeet TDT 0.6B v2 the default (see the CPU section at the end).
+Measurements for David's final review. No default was changed by this work; dot-4uzgol.66 later made Parakeet TDT 0.6B v2 the default (see the CPU section at the end). The multilingual whisper rows (tiny, base, small) are kept as measured; dot-4uzgol.68 later dropped those models and Parakeet v3 from the catalog (English only, per David 2026-11-01), so only the `.en` models, Parakeet v2, whisper large-v3 turbo and Moonshine base remain selectable.
 
 ## Corpus and licence
 

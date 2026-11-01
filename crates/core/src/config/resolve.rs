@@ -73,12 +73,13 @@ pub fn validate_layer(flat: &Flat, layer: &str) -> Result<()> {
             (Kind::Bool, Value::Bool(_)) | (Kind::Str, Value::String(_)) => {}
             (Kind::Enum(vals), Value::String(s)) => {
                 if !vals.contains(&s.as_str()) {
+                    let why = match keys::retired_stt_model(s) {
+                        Some(why) if path == "stt.local.model" => why,
+                        _ => format!("allowed: {}", vals.join(", ")),
+                    };
                     return Err(ConfigError::new(
                         "invalid_value",
-                        format!(
-                            "'{path}' = \"{s}\" in {layer}; allowed: {}",
-                            vals.join(", ")
-                        ),
+                        format!("'{path}' = \"{s}\" in {layer}; {why}"),
                     ));
                 }
             }
@@ -360,6 +361,18 @@ mod tests {
                 let e = with_user(&format!("[{table}]\n{leaf} = \"__nope__\"\n")).unwrap_err();
                 assert_eq!(e.code, "invalid_value", "{path}");
             }
+        }
+    }
+
+    /// A user config still naming a model the English-only catalog dropped (dot-4uzgol.68)
+    /// fails with the English replacement, not a panic or a bare list.
+    #[test]
+    fn a_retired_stt_model_names_its_english_replacement() {
+        for (from, to) in keys::STT_RETIRED_MODELS {
+            let e = with_user(&format!("[stt.local]\nmodel = \"{from}\"\n")).unwrap_err();
+            assert_eq!(e.code, "invalid_value", "{from}");
+            assert!(e.message.contains(&format!("use {to}")), "{}", e.message);
+            assert!(e.message.contains("English"), "{}", e.message);
         }
     }
 

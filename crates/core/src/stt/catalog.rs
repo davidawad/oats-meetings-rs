@@ -242,13 +242,28 @@ mod tests {
     fn the_bead_seed_models_are_there_for_both_runtimes() {
         for (id, rt) in [
             ("parakeet-tdt-0.6b-v2", Runtime::SherpaOnnx),
-            ("parakeet-tdt-0.6b-v3", Runtime::SherpaOnnx),
             ("large-v3-turbo-q5_0", Runtime::WhisperCpp),
             ("small.en", Runtime::WhisperCpp),
             ("base.en", Runtime::WhisperCpp),
+            ("tiny.en", Runtime::WhisperCpp),
             ("moonshine-base-en", Runtime::SherpaOnnx),
         ] {
             assert_eq!(get(id).map(|e| e.runtime), Some(rt), "{id}");
+        }
+    }
+
+    /// English only (dot-4uzgol.68): every entry but the turbo model David kept for testing is
+    /// English, and each dropped multilingual id names a catalog replacement.
+    #[test]
+    fn the_catalog_is_english_only_and_retired_ids_point_at_it() {
+        for e in all() {
+            if e.id != "large-v3-turbo-q5_0" {
+                assert_eq!(e.languages, ["en"], "{}", e.id);
+            }
+        }
+        for (from, to) in crate::config::keys::STT_RETIRED_MODELS {
+            assert!(get(from).is_none(), "{from} is retired");
+            assert!(get(to).is_some(), "{from} -> {to}");
         }
     }
 

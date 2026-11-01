@@ -12,6 +12,6 @@ run() { # features, engine, model
   OATS_BENCH_ENGINE=$2 OATS_BENCH_MODEL=$3 cargo test --locked --release -p oats-core --features "$1" --test stt_bench -- --nocapture --test-threads=1 2>&1 | grep -a -o 'BENCH_.*'
 }
 # OATS_BENCH_ONLY="base.en parakeet" runs a subset (default: everything).
-only=" ${OATS_BENCH_ONLY:-tiny.en tiny base.en base small.en small parakeet} "
-for m in tiny.en tiny base.en base small.en small; do [[ $only == *" $m "* ]] && run whisper whisper "$m"; done
+only=" ${OATS_BENCH_ONLY:-tiny.en base.en small.en parakeet} "
+for m in tiny.en base.en small.en; do [[ $only == *" $m "* ]] && run whisper whisper "$m"; done
 [[ $only == *" parakeet "* ]] && run parakeet parakeet - || true
