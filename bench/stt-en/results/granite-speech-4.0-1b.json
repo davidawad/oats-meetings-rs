@@ -1,0 +1,20 @@
+{
+ "model": "granite-speech-4.0-1b",
+ "licence": "Apache-2.0",
+ "note": "PyTorch bf16 CPU (transformers 5.22.1), model-card transcription prompt, greedy",
+ "bytes": 4637933040,
+ "wer": {
+  "test-clean": 1.75,
+  "test-other": 4.0
+ },
+ "ref_words": {
+  "test-clean": 3993,
+  "test-other": 1676
+ },
+ "utterances": 300,
+ "audio_s": 2126.2,
+ "rtf_pod_cpu": 1.5736,
+ "threads": 1,
+ "load_s": 6.3,
+ "peak_rss_mb_last_pass": 457
+}
