@@ -213,21 +213,37 @@ def run(libri, model, models_dir, threads):
     t0 = time.time()
     decode, size = loader(models_dir, threads, arg)
     load_s = time.time() - t0
+    # Each decoded utterance is appended to hyps/<model>.partial.tsv, so a killed run resumes.
+    (HERE / "hyps").mkdir(exist_ok=True)
+    partial = HERE / "hyps" / f"{model}.partial.tsv"
+    done = {}
+    if partial.exists():
+        for line in partial.read_text().splitlines():
+            uid, wall_s, audio_s, hyp = line.split("\t")
+            done[uid] = (float(wall_s), float(audio_s), hyp)
+    with open(partial, "a") as f:
+        for split, uid, path, ref in rows:
+            if uid in done:
+                continue
+            samples = load_audio(path)
+            t = time.time()
+            hyp = " ".join(decode(samples).split())
+            done[uid] = (time.time() - t, len(samples) / 16000, hyp)
+            f.write(f"{uid}\t{done[uid][0]:.4f}\t{done[uid][1]:.4f}\t{hyp}\n")
+            f.flush()
     per = {}
     hyps = []
     audio_s = 0.0
     wall = 0.0
     for split, uid, path, ref in rows:
-        samples = load_audio(path)
-        t = time.time()
-        hyp = decode(samples)
-        wall += time.time() - t
-        audio_s += len(samples) / 16000
+        w, a, hyp = done[uid]
+        wall += w
+        audio_s += a
         e, n = edits(normalize(ref), normalize(hyp))
         acc = per.setdefault(split, [0, 0])
         acc[0] += e
         acc[1] += n
-        hyps.append((split, uid, e, n, hyp.strip()))
+        hyps.append((split, uid, e, n, hyp))
     import resource
     out = {
         "model": model, "licence": licence, "note": note, "bytes": size,
@@ -236,15 +252,15 @@ def run(libri, model, models_dir, threads):
         "utterances": len(rows), "audio_s": round(audio_s, 1),
         "rtf_pod_cpu": round(wall / audio_s, 4), "threads": threads,
         "load_s": round(load_s, 1),
-        "peak_rss_mb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
+        "peak_rss_mb_last_pass": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
     }
     (HERE / "results").mkdir(exist_ok=True)
-    (HERE / "hyps").mkdir(exist_ok=True)
     (HERE / "results" / f"{model}.json").write_text(json.dumps(out, indent=1) + "\n")
     with open(HERE / "hyps" / f"{model}.tsv", "w") as f:
         f.write("split\tutterance\tedits\tref_words\thypothesis\n")
         for r in hyps:
             f.write("\t".join(map(str, r)) + "\n")
+    partial.unlink()
     print(json.dumps(out, indent=1))
 
 
@@ -254,7 +270,7 @@ def table():
     for f in sorted((HERE / "results").glob("*.json")):
         r = json.loads(f.read_text())
         print(f"| {r['model']} | {r['wer'].get('test-clean')}% | {r['wer'].get('test-other')}% | "
-              f"{r['bytes'] / 1e6:.0f} | {r['licence']} | {r['rtf_pod_cpu']} | {r['peak_rss_mb']} |")
+              f"{r['bytes'] / 1e6:.0f} | {r['licence']} | {r['rtf_pod_cpu']} | {r.get('peak_rss_mb', r.get('peak_rss_mb_last_pass'))} |")
 
 
 if __name__ == "__main__":
