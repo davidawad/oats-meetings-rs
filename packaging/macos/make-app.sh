@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # macOS only (iconutil, plutil). Proof is dot-4uzgol.15. Usage: make-app.sh <release-binary> <out-dir>
 set -euo pipefail
+[ "$(uname)" = Darwin ] || { echo "make-app: macOS only" >&2; exit 1; }
+. "$(dirname "$0")/sign.sh"
 bin=$1
 out=$2
 ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -31,6 +33,5 @@ plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist" | grep -qx AppIc
 # Round trip: the icns must reopen as an iconset.
 iconutil -c iconset "$app/Contents/Resources/AppIcon.icns" -o "$out/roundtrip.iconset"
 ls "$out/roundtrip.iconset"
-# Sign the bundle so TCC grants stick to one identity (CODESIGN_IDENTITY: a Developer ID, or "-" ad hoc).
-codesign --force --deep --sign "${CODESIGN_IDENTITY:--}" "$app"
-codesign --verify --deep --strict "$app"
+# Ad-hoc sign with an identifier-only DR so TCC grants survive rebuilds (dot-4uzgol.74, sign.sh).
+sign_app "$app"

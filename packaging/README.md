@@ -16,7 +16,10 @@ verifies the PNG sha256 and derives hicolor PNGs, the macOS iconset inputs and a
 ## macOS (proof waits for dot-4uzgol.15)
 `packaging/macos/make-app.sh <binary> <outdir>` assembles `Oats Meetings.app` from
 `Info.plist.in` (`CFBundleIconFile` = `AppIcon`), builds `AppIcon.icns` with `iconutil -c icns`,
-and round-trips it with `iconutil -c iconset`. Needs a Mac; not run yet.
+and round-trips it with `iconutil -c iconset`, then ad-hoc signs it via `sign.sh`: dylibs first, then
+the bundle with `-r='designated => identifier "<CFBundleIdentifier>"'` (no cdhash, so TCC grants
+survive rebuilds), checks `codesign -dr -` and runs `codesign --verify --strict`. No Keychain or
+certificates. Needs a Mac; `tests/macos_signing.rs` exercises `sign.sh` on Linux with a stub codesign.
 
 ## Windows
 Not built here. A GPUI Windows binary needs the MSVC target and the Windows SDK, which does not
