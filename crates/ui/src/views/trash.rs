@@ -1,13 +1,16 @@
-//! Trash tab: sessions in the OS trash (`trash-list`), restore one (`trash-restore`), delete one or
+//! Trash ("Recently deleted", reached from Sessions; not in the rail): sessions in the OS trash (`trash-list`), restore one (`trash-restore`), delete one or
 //! all for good (`trash-empty`). Permanent deletes ask twice while `sessions.confirm_delete` is on,
 //! the same policy `ctl trash-empty --confirm` enforces.
 
-use gpui::{div, prelude::*, rgb, AnyElement, Context, SharedString};
+use gpui::{div, prelude::*, px, rgb, AnyElement, Context, FontWeight};
 use oats_core::control::engine::Engine;
 use serde_json::{json, Value};
 
+use crate::kit::{self, Kind, Size};
 use crate::model;
-use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
+use crate::state::Tab;
+use crate::theme;
+use crate::view::MainWindow;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
@@ -96,104 +99,112 @@ fn str_of(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or_default().to_string()
 }
 
-fn button(id: SharedString, label: String, colour: u32) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(rgb(colour))
-        .text_color(rgb(BG))
-        .child(label)
-}
-
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let th = theme::current();
     let t = &w.trash;
     let all_armed = t.confirming == Some(Purge::All);
-    let mut bar = div().flex().flex_none().gap_2().items_center().child(
-        button("trash-refresh".into(), "Refresh".into(), PANEL)
-            .text_color(rgb(FG))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.trash.confirming = None;
-                this.trash.load(&this.engine);
-                cx.notify();
-            })),
-    );
+    let mut head = kit::head("Recently deleted")
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(th.dim))
+                .child(format!(
+                    "{} trashed session{}",
+                    t.items.len(),
+                    if t.items.len() == 1 { "" } else { "s" }
+                )),
+        )
+        .child(div().flex_1())
+        .child(
+            kit::button(
+                "trash-back",
+                "Back to sessions",
+                Kind::Secondary,
+                Size::Md,
+                true,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.switch_tab(Tab::Sessions, cx))),
+        )
+        .child(
+            kit::button("trash-refresh", "Refresh", Kind::Secondary, Size::Md, true).on_click(
+                cx.listener(|this, _, _, cx| {
+                    this.trash.confirming = None;
+                    this.trash.load(&this.engine);
+                    cx.notify();
+                }),
+            ),
+        );
     if !t.items.is_empty() {
         let label = if all_armed {
             format!("Confirm: delete {} for good", t.items.len())
         } else {
             "Empty trash".to_string()
         };
-        bar = bar.child(
-            button(
-                "trash-empty".into(),
-                label,
-                if all_armed { ERR } else { WARN },
-            )
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.trash.purge(&this.engine, Purge::All);
-                this.state.refresh(&this.engine);
-                cx.notify();
-            })),
+        head = head.child(
+            kit::button("trash-empty", label, Kind::Danger, Size::Md, true).on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.trash.purge(&this.engine, Purge::All);
+                    this.state.refresh(&this.engine);
+                    cx.notify();
+                },
+            )),
         );
     }
     if t.confirming.is_some() {
-        bar = bar.child(
-            button("trash-cancel".into(), "Cancel".into(), PANEL)
-                .text_color(rgb(FG))
-                .on_click(cx.listener(|this, _, _, cx| {
+        head = head.child(
+            kit::button("trash-cancel", "Cancel", Kind::Secondary, Size::Md, true).on_click(
+                cx.listener(|this, _, _, cx| {
                     this.trash.confirming = None;
                     cx.notify();
-                })),
+                }),
+            ),
         );
     }
-    bar = bar.child(div().text_sm().text_color(rgb(DIM)).child(format!(
-        "{} trashed session{}",
-        t.items.len(),
-        if t.items.len() == 1 { "" } else { "s" }
-    )));
 
     let rows = t.items.iter().map(|it| {
         let (rid, pid) = (it.id.clone(), it.id.clone());
         let armed = t.confirming == Some(Purge::One(it.id.clone()));
-        div()
-            .id(SharedString::from(format!("trash-{}", it.id)))
-            .flex()
-            .gap_3()
-            .items_center()
-            .px_2()
-            .py_1()
-            .rounded_md()
-            .bg(rgb(PANEL))
+        kit::row(format!("trash-{}", it.id), false)
+            .h(px(60.))
+            .cursor_default()
             .child(
                 div()
-                    .debug_selector(|| format!("trash-title-{}", it.id))
+                    .flex()
+                    .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .child(if it.title.is_empty() {
-                        it.id.clone()
-                    } else {
-                        it.title.clone()
-                    }),
+                    .child(
+                        div()
+                            .debug_selector(|| format!("trash-title-{}", it.id))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(if it.title.is_empty() {
+                                it.id.clone()
+                            } else {
+                                it.title.clone()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| format!("trash-id-{}", it.id))
+                            .text_size(px(12.))
+                            .text_color(rgb(th.dim))
+                            .child(if it.title.is_empty() {
+                                format!("deleted {}", it.deleted_at)
+                            } else {
+                                format!("{}  deleted {}", it.id, it.deleted_at)
+                            }),
+                    ),
             )
             .child(
-                div()
-                    .debug_selector(|| format!("trash-id-{}", it.id))
-                    .text_sm()
-                    .text_color(rgb(DIM))
-                    .child(if it.title.is_empty() {
-                        format!("deleted {}", it.deleted_at)
-                    } else {
-                        format!("{}  deleted {}", it.id, it.deleted_at)
-                    }),
-            )
-            .child(
-                button(
-                    format!("trash-restore-{}", it.id).into(),
-                    "Restore".into(),
-                    ACCENT,
+                kit::button(
+                    format!("trash-restore-{}", it.id),
+                    "Restore",
+                    Kind::Secondary,
+                    Size::Sm,
+                    true,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.trash.restore(&this.engine, &rid);
@@ -202,15 +213,16 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                 })),
             )
             .child(
-                button(
-                    format!("trash-purge-{}", it.id).into(),
-                    (if armed {
+                kit::button(
+                    format!("trash-purge-{}", it.id),
+                    if armed {
                         "Confirm delete"
                     } else {
                         "Delete forever"
-                    })
-                    .into(),
-                    if armed { ERR } else { WARN },
+                    },
+                    Kind::Danger,
+                    Size::Sm,
+                    true,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.trash.purge(&this.engine, Purge::One(pid.clone()));
@@ -219,32 +231,25 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             )
     });
 
-    let mut col = div()
-        .id("trash")
-        .flex()
-        .flex_col()
-        .gap_2()
-        .size_full()
-        .child(bar);
+    let mut body = kit::pad().id("trash").gap(px(12.)).overflow_y_scroll();
     if let Some(e) = &t.error {
-        col = col.child(div().text_color(rgb(ERR)).child(e.clone()));
+        body = body.child(kit::banner(true, "The trash could not be read.", e.clone()));
     }
-    let list = div()
-        .id("trash-list")
-        .flex()
-        .flex_col()
-        .gap_1()
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll();
-    let list = if t.items.is_empty() && t.error.is_none() {
-        list.child(div().text_color(rgb(DIM)).child(
-            "Trash is empty. Sessions deleted with sessions.delete_mode = trash appear here.",
+    let body = if t.items.is_empty() && t.error.is_none() {
+        body.child(kit::empty(
+            "Nothing recently deleted",
+            "Sessions deleted with sessions.delete_mode = trash appear here until the trash is emptied.",
         ))
     } else {
-        list.children(rows)
+        body.child(kit::panel().id("trash-list").children(rows))
     };
-    col.child(list).into_any_element()
+    div()
+        .flex()
+        .flex_col()
+        .size_full()
+        .child(head)
+        .child(body)
+        .into_any_element()
 }
 
 #[cfg(test)]

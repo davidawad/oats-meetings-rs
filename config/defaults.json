@@ -164,6 +164,7 @@
     "show_elapsed": true,
     "speaker_width": 96,
     "start_hidden": false,
+    "theme": "system",
     "tick": "100ms",
     "tz": ""
   }

@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -47,6 +47,9 @@ struct Shared {
     live: AtomicBool,
     paused: AtomicBool,
     stop: AtomicBool,
+    /// RMS of the mic and system samples the writer handled last (`f32` bits), for level meters.
+    mic_level: AtomicU32,
+    system_level: AtomicU32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +120,10 @@ fn write_frames(w: &mut WavWriter, m: &[f32], s: &[f32], layout: Layout) -> Resu
     }
 }
 
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+}
+
 /// Start capturing per `settings` into a WAV at `path` (parent dirs are created).
 pub fn start(
     backend: &dyn CaptureBackend,
@@ -147,6 +154,8 @@ pub fn start(
         live: AtomicBool::new(false),
         paused: AtomicBool::new(false),
         stop: AtomicBool::new(false),
+        mic_level: AtomicU32::new(0),
+        system_level: AtomicU32::new(0),
     });
     let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Box<dyn Capture>> {
         let sh = Arc::clone(&shared);
@@ -208,6 +217,16 @@ pub fn start(
                 (m, s) = (mo, so);
             }
             write_frames(&mut w, &m, &s, layout)?;
+            if sh.paused.load(Ordering::SeqCst) {
+                sh.mic_level.store(0, Ordering::SeqCst);
+                sh.system_level.store(0, Ordering::SeqCst);
+            } else {
+                for (level, x) in [(&sh.mic_level, &m), (&sh.system_level, &s)] {
+                    if !x.is_empty() {
+                        level.store(rms(x).to_bits(), Ordering::SeqCst);
+                    }
+                }
+            }
             for (t, x) in [(tap_sys.as_mut(), &s), (tap_mic.as_mut(), &m)] {
                 if let (Some(t), false) = (t, x.is_empty()) {
                     t(x);
@@ -255,6 +274,13 @@ impl Recording {
 
     pub fn paused(&self) -> bool {
         self.shared.paused.load(Ordering::SeqCst)
+    }
+
+    /// RMS (0..1) of the latest mic and system audio written, as `(mic, system)`; zero while
+    /// paused or for a disabled source.
+    pub fn levels(&self) -> (f32, f32) {
+        let get = |a: &AtomicU32| f32::from_bits(a.load(Ordering::SeqCst));
+        (get(&self.shared.mic_level), get(&self.shared.system_level))
     }
 
     pub fn set_paused(&self, paused: bool) {
@@ -316,8 +342,22 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+        let (mic, sys) = r.levels();
         let s = r.stop().unwrap();
         let data = wav::read(&p).unwrap();
+        // The meters follow the audio written: a silent channel reads zero.
+        assert_eq!(
+            mic > 0.0,
+            settings.mic_enabled && data.rms(0) > 0.0,
+            "mic {mic}"
+        );
+        if data.channels == 2 {
+            assert_eq!(
+                sys > 0.0,
+                settings.system_enabled && data.rms(1) > 0.0,
+                "sys {sys}"
+            );
+        }
         (s, data)
     }
 
@@ -437,6 +477,7 @@ mod tests {
         r.set_paused(true);
         std::thread::sleep(Duration::from_millis(100));
         let at_pause = r.duration_ms();
+        assert_eq!(r.levels(), (0.0, 0.0), "meters drop while paused");
         std::thread::sleep(Duration::from_millis(600));
         assert!(
             r.duration_ms() <= at_pause + 150,

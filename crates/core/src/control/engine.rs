@@ -602,6 +602,11 @@ impl Engine {
         self.recorder.active_state()
     }
 
+    /// Input levels of the recording in progress as `(mic, system)` RMS in 0..1, for meters.
+    pub fn recording_levels(&self) -> Option<(f32, f32)> {
+        self.recorder.levels()
+    }
+
     /// The active config, as one consistent unit.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         Arc::clone(&self.state.read().expect("state").snap)

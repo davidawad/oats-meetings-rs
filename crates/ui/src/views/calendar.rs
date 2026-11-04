@@ -1,5 +1,5 @@
-//! Calendar tab: ICS feed subscriptions (add / remove / refresh) and the upcoming meetings from
-//! their caches, over the same actions as `ctl ics-*`. Every choice is an `ics.*` config key: the
+//! Calendar tab: the upcoming meetings from the ICS feed caches as a month-style grid (one row
+//! per week of the window, today marked), beside the feed subscriptions (add / remove / refresh), over the same actions as `ctl ics-*`. Every choice is an `ics.*` config key: the
 //! upcoming window is `ics.window_days` (`ics-events` with no bounds), and the view re-reads the
 //! feeds and events at most once per `ics.poll_interval` (the scheduler's own cadence), plus after
 //! each action, and whenever the engine publishes `ics-updated` (a fetch changed a cache). Times
@@ -8,19 +8,21 @@
 
 use std::time::Instant;
 
-use chrono::DateTime;
+use chrono::{DateTime, Datelike, Duration as Days, NaiveDate};
 use chrono_tz::Tz;
 use gpui::{
-    div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, Global, KeyDownEvent,
-    SharedString,
+    div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, FontWeight, Global,
+    KeyDownEvent, SharedString,
 };
 use serde_json::{json, Value};
 
 use oats_core::control::engine::Engine;
 
+use crate::kit::{self, Kind, Size};
 use crate::model;
 use crate::state::type_key;
-use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
+use crate::theme;
+use crate::view::MainWindow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Field {
@@ -378,17 +380,7 @@ pub(crate) fn key(
 }
 
 fn chip(id: impl Into<SharedString>, label: &str, on: bool) -> gpui::Stateful<gpui::Div> {
-    let c = div()
-        .id(id.into())
-        .px_2()
-        .rounded_md()
-        .text_sm()
-        .child(label.to_string());
-    if on {
-        c.cursor_pointer().bg(rgb(ACCENT)).text_color(rgb(BG))
-    } else {
-        c.bg(rgb(PANEL)).text_color(rgb(DIM))
-    }
+    kit::button(id, label.to_string(), Kind::Secondary, Size::Sm, on)
 }
 
 fn input(
@@ -398,6 +390,7 @@ fn input(
     width: f32,
     cx: &mut Context<MainWindow>,
 ) -> impl IntoElement {
+    let th = theme::current();
     let (text, active) = match f {
         Field::Name => (&cal.name, cal.field == Some(f)),
         Field::Url => (&cal.url, cal.field == Some(f)),
@@ -422,22 +415,21 @@ fn input(
     } else {
         line.text_ellipsis()
     };
-    div()
-        .id(id)
+    kit::field(id, active)
         .debug_selector(|| id.to_string())
-        .px_2()
         .w(px(width))
         .flex_none()
-        .overflow_hidden()
-        .rounded_md()
-        .cursor_text()
-        .bg(rgb(PANEL))
-        .border_1()
-        .border_color(rgb(if active { ACCENT } else { PANEL }))
-        .text_color(rgb(if text.is_empty() && !active { DIM } else { FG }))
+        .text_size(px(13.))
+        .text_color(rgb(if text.is_empty() && !active {
+            th.faint
+        } else {
+            th.text
+        }))
         .child(
-            line.when(selected, |l| l.bg(rgb(ACCENT)).text_color(rgb(BG)))
-                .child(shown),
+            line.when(selected, |l| {
+                l.bg(rgb(th.accent)).text_color(rgb(th.accent_ink))
+            })
+            .child(shown),
         )
         .on_click(cx.listener(move |_, _, window, cx| {
             let cal = cx.default_global::<Cal>();
@@ -450,15 +442,16 @@ fn input(
         }))
 }
 
-fn feed_row(f: &FeedRow, busy: bool, cx: &mut Context<MainWindow>) -> impl IntoElement {
+fn feed_row(f: &FeedRow, busy: bool, last: bool, cx: &mut Context<MainWindow>) -> impl IntoElement {
+    let th = theme::current();
     let state = match (&f.error, &f.fetched_at, f.enabled) {
-        (_, _, false) => ("disabled".to_string(), DIM),
-        (Some(e), _, _) => (e.clone(), ERR),
+        (_, _, false) => ("disabled".to_string(), th.faint),
+        (Some(e), _, _) => (e.clone(), th.err),
         (None, Some(t), _) => (
             format!("{} events, fetched {t}", f.events.unwrap_or(0)),
-            DIM,
+            th.dim,
         ),
-        (None, None, _) => ("not fetched yet".to_string(), WARN),
+        (None, None, _) => ("not fetched yet".to_string(), th.warn),
     };
     let (refresh_name, remove_name) = (f.name.clone(), f.name.clone());
     let mut refresh_chip = chip(
@@ -470,60 +463,65 @@ fn feed_row(f: &FeedRow, busy: bool, cx: &mut Context<MainWindow>) -> impl IntoE
         refresh_chip = refresh_chip
             .on_click(cx.listener(move |w, _, _, cx| refresh(w, refresh_name.clone(), cx)));
     }
+    let mut remove_chip = kit::button(
+        format!("ics-remove-{}", f.name),
+        "Remove",
+        Kind::Danger,
+        Size::Sm,
+        !busy,
+    );
+    if !busy {
+        remove_chip = remove_chip.on_click(cx.listener(move |w, _, _, cx| {
+            remove(w, &remove_name, cx);
+            cx.notify();
+        }));
+    }
     div()
         .id(SharedString::from(format!("ics-feed-{}", f.name)))
         .flex()
         .flex_col()
         .flex_none()
-        .gap_1()
-        .px_2()
-        .py_1()
-        .rounded_md()
-        .bg(rgb(PANEL))
+        .gap(px(4.))
+        .px(px(14.))
+        .py(px(10.))
+        .when(!last, |d| d.border_b_1().border_color(rgb(th.line)))
         .child(
             div()
                 .flex()
-                .gap_2()
+                .gap(px(8.))
                 .items_center()
-                .child(div().text_color(rgb(ACCENT)).child(f.name.clone()))
-                .child(div().flex_1())
-                .child(refresh_chip)
                 .child(
-                    chip(format!("ics-remove-{}", f.name), "Remove", !busy).on_click(cx.listener(
-                        move |w, _, _, cx| {
-                            remove(w, &remove_name, cx);
-                            cx.notify();
-                        },
-                    )),
-                ),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(f.name.clone()),
+                )
+                .child(refresh_chip)
+                .child(remove_chip),
+        )
+        .child(
+            kit::mono(f.url.clone())
+                .text_size(px(11.))
+                .text_color(rgb(th.dim))
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap(),
         )
         .child(
             div()
-                .text_sm()
-                .text_color(rgb(DIM))
-                .whitespace_normal()
-                .child(f.url.clone()),
+                .text_size(px(12.))
+                .text_color(rgb(state.1))
+                .child(state.0),
         )
-        .child(div().text_sm().text_color(rgb(state.1)).child(state.0))
 }
 
 fn sources(cal: &Cal, cx: &mut Context<MainWindow>) -> impl IntoElement {
+    let th = theme::current();
     let busy = cal.refreshing.is_some();
-    let mut all = chip(
-        "ics-refresh-all",
-        match cal.refreshing.as_deref() {
-            Some(_) => "Refreshing...",
-            None => "Refresh all",
-        },
-        !busy && cal.enabled && !cal.feeds.is_empty(),
-    );
-    if !busy && cal.enabled && !cal.feeds.is_empty() {
-        all = all.on_click(cx.listener(|w, _, _, cx| refresh(w, String::new(), cx)));
-    }
     let can_add = !cal.name.trim().is_empty() && !cal.url.trim().is_empty();
-    let mut add_chip = chip("ics-add", "Add", can_add)
-        .debug_selector(|| "ics-add".into())
-        .flex_none();
+    let mut add_chip = kit::button("ics-add", "Add", Kind::Primary, Size::Sm, can_add)
+        .debug_selector(|| "ics-add".into());
     if can_add {
         add_chip = add_chip.on_click(cx.listener(|w, _, _, cx| {
             add(w, cx);
@@ -534,56 +532,54 @@ fn sources(cal: &Cal, cx: &mut Context<MainWindow>) -> impl IntoElement {
         .id("ics-sources")
         .flex()
         .flex_col()
-        .gap_2()
-        .w(px(360.))
+        .gap(px(12.))
+        .w(px(300.))
         .flex_none()
-        .overflow_y_scroll()
-        .child(
-            div()
-                .flex()
-                .gap_2()
-                .items_center()
-                .child(div().text_color(rgb(ACCENT)).child("Calendar feeds"))
-                .child(div().flex_1())
-                .child(all)
-                .child(
-                    chip("ics-reload", "Reload", true).on_click(cx.listener(|w, _, _, cx| {
-                        cx.default_global::<Cal>().load(w);
-                        cx.notify();
-                    })),
-                ),
-        );
+        .overflow_y_scroll();
     if !cal.enabled {
-        col = col.child(
-            div()
-                .text_sm()
-                .text_color(rgb(WARN))
-                .child("Calendar feeds are off (ics.enabled)."),
-        );
+        col = col.child(kit::banner(
+            false,
+            "Calendar feeds are off.",
+            "Turn on ics.enabled in Settings.",
+        ));
     }
+    let n = cal.feeds.len();
+    let mut feeds = kit::panel();
     if cal.feeds.is_empty() {
-        col = col.child(
+        feeds = feeds.child(
             div()
-                .text_sm()
-                .text_color(rgb(DIM))
+                .p(px(14.))
+                .text_size(px(13.))
+                .text_color(rgb(th.dim))
                 .child("No feeds. Add an http(s), webcal or file URL below."),
         );
     }
-    col.children(cal.feeds.iter().map(|f| feed_row(f, busy, cx)))
+    feeds = feeds.children(
+        cal.feeds
+            .iter()
+            .enumerate()
+            .map(|(i, f)| feed_row(f, busy, i + 1 == n, cx)),
+    );
+    col.child(kit::section("Feeds").pt_0().text_color(rgb(th.dim)))
+        .child(feeds)
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_none()
-                .gap_1()
-                .child(div().text_sm().text_color(rgb(DIM)).child("Add a feed"))
+            kit::panel()
+                .p(px(14.))
+                .gap(px(8.))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(th.dim))
+                        .child("Add ICS feed"),
+                )
+                .child(input(cal, Field::Name, "name", 270., cx))
                 .child(
                     div()
                         .flex()
-                        .gap_2()
+                        .gap(px(8.))
                         .items_center()
-                        .child(input(cal, Field::Name, "name", 100., cx))
-                        .child(input(cal, Field::Url, "https://... .ics", 180., cx))
+                        .child(input(cal, Field::Url, "https://... .ics", 210., cx))
                         .child(add_chip),
                 ),
         )
@@ -594,93 +590,157 @@ pub(crate) fn time_label(m: &Meeting) -> String {
     format!("{} {}", m.time, m.zone).trim_end().to_string()
 }
 
-fn upcoming(cal: &Cal) -> impl IntoElement {
+fn date_of(s: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok()
+}
+
+/// The grid's weeks: Monday-first rows from the week holding `from` through the week holding
+/// `to` (else the last meeting), so every meeting of the window has a cell.
+pub(crate) fn weeks(from: NaiveDate, to: NaiveDate) -> Vec<[NaiveDate; 7]> {
+    let mut start = from - Days::days(i64::from(from.weekday().num_days_from_monday()));
+    let mut out = vec![];
+    while start <= to {
+        out.push(std::array::from_fn(|i| start + Days::days(i as i64)));
+        start += Days::days(7);
+    }
+    out
+}
+
+fn grid(cal: &Cal) -> impl IntoElement {
+    let th = theme::current();
+    let tz = cal.tz.unwrap_or(Tz::UTC);
+    let today = chrono::Utc::now().with_timezone(&tz).date_naive();
+    let from = date_of(&cal.from).unwrap_or(today);
+    let last = cal.meetings.iter().filter_map(|m| date_of(&m.day)).max();
+    let to = date_of(&cal.to).or(last).unwrap_or(from).max(from);
     let mut col = div()
         .id("ics-upcoming")
         .flex()
         .flex_col()
-        .gap_1()
         .flex_1()
         .min_w_0()
-        .overflow_y_scroll()
-        .child(
-            div()
-                .flex_none()
-                .text_color(rgb(ACCENT))
-                .child("Upcoming meetings"),
-        );
-    if !cal.from.is_empty() {
-        col = col.child(
-            div()
-                .flex_none()
-                .text_sm()
-                .text_color(rgb(DIM))
-                .child(format!(
-                    "{} to {} (ics.window_days); times in {}",
-                    cal.from,
-                    cal.to,
-                    cal.tz.unwrap_or(Tz::UTC).name()
-                )),
-        );
-    }
+        .overflow_y_scroll();
     if let Some(e) = &cal.error {
         col = col.child(
             div()
-                .flex_none()
-                .text_sm()
-                .text_color(rgb(ERR))
-                .child(e.clone()),
+                .mb(px(12.))
+                .child(kit::banner(true, "A feed failed.", e.clone())),
         );
     }
-    if cal.meetings.is_empty() {
-        return col.child(
+    let head = div()
+        .flex()
+        .flex_none()
+        .bg(rgb(th.raised))
+        .border_b_1()
+        .border_color(rgb(th.line))
+        .children(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(|d| {
             div()
-                .text_color(rgb(DIM))
-                .child("No upcoming meetings in the cached feeds."),
-        );
-    }
-    let mut day = "";
-    for m in &cal.meetings {
-        if m.day != day {
-            day = &m.day;
-            col = col.child(
+                .flex_1()
+                .px(px(8.))
+                .py(px(8.))
+                .text_size(px(11.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(th.dim))
+                .child(d)
+        }));
+    let mut table = kit::panel().flex_none().child(head);
+    for week in weeks(from, to) {
+        let row = div()
+            .flex()
+            .flex_none()
+            .border_b_1()
+            .border_color(rgb(th.line))
+            .children(week.iter().enumerate().map(|(i, day)| {
+                let key = day.format("%Y-%m-%d").to_string();
+                let is_today = *day == today;
+                let outside = *day < from || *day > to;
+                let events = cal.meetings.iter().filter(|m| m.day == key).map(|m| {
+                    let what = if m.summary.is_empty() {
+                        "(no title)".to_string()
+                    } else {
+                        m.summary.clone()
+                    };
+                    let label = if m.time.is_empty() {
+                        what
+                    } else {
+                        format!("{} {what}", m.time)
+                    };
+                    let mut tip = vec![m.feed.clone()];
+                    if !m.time.is_empty() {
+                        tip.push(time_label(m));
+                    }
+                    if !m.location.is_empty() {
+                        tip.push(m.location.clone());
+                    }
+                    div()
+                        .mt(px(4.))
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .border_l(px(3.))
+                        .border_color(rgb(if m.time.is_empty() {
+                            th.remote[0]
+                        } else {
+                            th.accent
+                        }))
+                        .bg(rgb(if m.time.is_empty() {
+                            th.warn_soft
+                        } else {
+                            th.accent_soft
+                        }))
+                        .text_size(px(11.))
+                        .text_color(rgb(th.text))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(label)
+                });
                 div()
-                    .flex_none()
-                    .mt_2()
-                    .text_color(rgb(FG))
-                    .child(m.day.clone()),
-            );
-        }
-        let mut what = m.summary.clone();
-        if what.is_empty() {
-            what = "(no title)".into();
-        }
-        let mut meta = m.feed.clone();
-        if !m.location.is_empty() {
-            meta = format!("{meta} · {}", m.location);
-        }
+                    .flex_1()
+                    .min_w_0()
+                    .min_h(px(104.))
+                    .p(px(6.))
+                    .when(i < 6, |d| d.border_r_1().border_color(rgb(th.line)))
+                    .when(is_today, |d| d.bg(rgb(th.accent_soft)))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .font_weight(if is_today {
+                                FontWeight::BOLD
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(rgb(if is_today {
+                                th.accent
+                            } else if outside {
+                                th.line2
+                            } else {
+                                th.faint
+                            }))
+                            .child(if day.day() == 1 {
+                                day.format("%b %-d").to_string()
+                            } else {
+                                day.day().to_string()
+                            }),
+                    )
+                    .children(events)
+            }));
+        table = table.child(row);
+    }
+    col = col.child(table);
+    if cal.meetings.is_empty() {
         col = col.child(
             div()
-                .flex()
-                .flex_none()
-                .gap_2()
-                .items_start()
-                .w_full()
-                .child(div().w(px(96.)).flex_none().text_color(rgb(ACCENT)).child(
-                    if m.time.is_empty() {
-                        "all day".to_string()
-                    } else {
-                        time_label(m)
-                    },
-                ))
-                .child(div().flex_1().min_w_0().whitespace_normal().child(what))
-                .child(div().flex_none().text_sm().text_color(rgb(DIM)).child(meta)),
+                .mt(px(12.))
+                .text_color(rgb(th.dim))
+                .child("No upcoming meetings in the cached feeds."),
         );
     }
     col
 }
 
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let th = theme::current();
     let focus = cx.focus_handle();
     let cal = cx.default_global::<Cal>();
     let focus = cal.focus.get_or_insert(focus).clone();
@@ -704,6 +764,46 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         all: cal.all,
         focus: Some(focus.clone()),
     };
+    let tz = snap.tz.unwrap_or(Tz::UTC);
+    let month = date_of(&snap.from)
+        .unwrap_or_else(|| chrono::Utc::now().with_timezone(&tz).date_naive())
+        .format("%B %Y")
+        .to_string();
+    let busy = snap.refreshing.is_some();
+    let can_all = !busy && snap.enabled && !snap.feeds.is_empty();
+    let mut all = kit::button(
+        "ics-refresh-all",
+        if busy { "Refreshing..." } else { "Refresh all" },
+        Kind::Secondary,
+        Size::Md,
+        can_all,
+    );
+    if can_all {
+        all = all.on_click(cx.listener(|w, _, _, cx| refresh(w, String::new(), cx)));
+    }
+    let n = snap.feeds.len();
+    let head = kit::head("Calendar")
+        .child(kit::mono(month).text_color(rgb(th.dim)))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(th.faint))
+                .child(format!("times in {}", tz.name())),
+        )
+        .child(div().flex_1())
+        .child(kit::tag(
+            format!("{n} feed{}", if n == 1 { "" } else { "s" }),
+            false,
+        ))
+        .child(
+            kit::button("ics-reload", "Reload", Kind::Secondary, Size::Md, true).on_click(
+                cx.listener(|w, _, _, cx| {
+                    cx.default_global::<Cal>().load(w);
+                    cx.notify();
+                }),
+            ),
+        )
+        .child(all);
     div()
         .id("calendar")
         .track_focus(&focus)
@@ -716,10 +816,16 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             }
         }))
         .flex()
-        .gap_4()
+        .flex_col()
         .size_full()
-        .child(sources(&snap, cx))
-        .child(upcoming(&snap))
+        .child(head)
+        .child(
+            kit::pad()
+                .flex_row()
+                .gap(px(20.))
+                .child(grid(&snap))
+                .child(sources(&snap, cx)),
+        )
         .into_any_element()
 }
 
@@ -742,6 +848,18 @@ BEGIN:VEVENT\r\nUID:sync@test\r\nDTSTAMP:20260101T000000Z\r\nDTSTART:20260101T15
 DTEND:20260101T153000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Sync\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
     const NY: Tz = chrono_tz::America::New_York;
+
+    #[test]
+    fn the_grid_spans_monday_first_weeks_from_the_window_start_to_its_end() {
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        // 2026-11-04 is a Wednesday: the first row starts Monday the 2nd.
+        let w = weeks(d("2026-11-04"), d("2026-11-14"));
+        assert_eq!(w.len(), 2);
+        assert_eq!(w[0][0], d("2026-11-02"));
+        assert_eq!(w[1][6], d("2026-11-15"));
+        assert_eq!(weeks(d("2026-11-04"), d("2026-11-04")).len(), 1);
+        assert!(weeks(d("2026-11-04"), d("2026-11-01")).is_empty());
+    }
 
     #[test]
     fn meeting_rows_split_local_start_and_all_day() {

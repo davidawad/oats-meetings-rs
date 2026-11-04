@@ -1,5 +1,7 @@
-//! The main window: tab bar, banner, the active tab's view (see `views`), status line. Pure presentation over `State`;
-//! every control dispatches an action id through `model::dispatch`.
+//! The main window in the drafting-table design (docs/design/drafting-table): the left tab rail,
+//! the active tab's view (see `views`; Live is here), the banner and the status line, over the
+//! blueprint grid, with a red top edge while recording. Pure presentation over `State`; every
+//! control dispatches an action id through `model::dispatch`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,38 +10,36 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
-    div, prelude::*, px, rgb, Context, FocusHandle, IntoElement, Render, ScrollHandle,
-    SharedString, Window,
+    canvas, div, fill, prelude::*, px, relative, rgb, rgba, Bounds, Context, FocusHandle,
+    FontWeight, IntoElement, Render, ScrollHandle, SharedString, Subscription, Window,
 };
 use oats_core::control::engine::Engine;
 use serde_json::json;
 
-use crate::settings::{next_value, Row, Widget};
-use crate::state::{badge_text, Control, Controls, Edit, EditKey, Line, Rec, State, Tab};
+use crate::kit::{self, Icon, Kind, Size};
+use crate::state::{fmt_clock, Control, Controls, Dot, Edit, EditKey, Line, Rec, State, Tab};
+use crate::theme::{self, Theme, MONO, SANS};
 use crate::views;
-
-pub(crate) const ERR: u32 = 0xf38ba8;
-
-pub(crate) const BG: u32 = 0x1e1e2e;
-pub(crate) const PANEL: u32 = 0x313244;
-pub(crate) const FG: u32 = 0xcdd6f4;
-pub(crate) const DIM: u32 = 0x9399b2;
-pub(crate) const ACCENT: u32 = 0x89b4fa;
-pub(crate) const WARN: u32 = 0xf9e2af;
-const REC_RED: u32 = 0xf38ba8;
-const PAUSE_AMBER: u32 = 0xf9e2af;
-const OK_GREEN: u32 = 0xa6e3a1;
 
 /// An open text input's buffer: highlighted while ctrl/cmd+a has it all selected, else with a caret.
 pub(crate) fn edit_text(e: &Edit) -> gpui::Div {
+    let t = theme::current();
     if e.all {
         div()
-            .bg(rgb(ACCENT))
-            .text_color(rgb(BG))
+            .bg(rgb(t.accent))
+            .text_color(rgb(t.accent_ink))
             .child(e.buf.clone())
     } else {
         div().child(format!("{}|", e.buf))
     }
+}
+
+/// A meter's fill for an RMS level: -60 dBFS (and silence) is empty, 0 dBFS full.
+pub(crate) fn meter_fill(rms: f32) -> f32 {
+    if rms <= 0. {
+        return 0.;
+    }
+    ((20. * rms.log10() + 60.) / 60.).clamp(0., 1.)
 }
 
 pub struct MainWindow {
@@ -52,6 +52,13 @@ pub struct MainWindow {
     live_scroll: ScrollHandle,
     /// Where the view state goes when the window closes, for the next window to resume.
     keep: Option<Rc<RefCell<Option<State>>>>,
+    /// The `(mic, system)` RMS levels of the recording, read each tick for the meters.
+    pub(crate) levels: (f32, f32),
+    /// The settings row whose dropdown menu is open.
+    pub(crate) menu: Option<&'static str>,
+    /// The palette of the last frame (`ui.theme`, else the OS appearance).
+    pub(crate) theme: Theme,
+    appearance: Option<Subscription>,
 }
 
 impl MainWindow {
@@ -83,6 +90,10 @@ impl MainWindow {
             focus: None,
             live_scroll: ScrollHandle::new(),
             keep: None,
+            levels: (0., 0.),
+            menu: None,
+            theme: Theme::DARK,
+            appearance: None,
         }
     }
 
@@ -101,12 +112,16 @@ impl MainWindow {
         }
     }
 
-    /// Per host tick: reconcile with the recorder and keep the elapsed clock moving.
+    /// Per host tick: reconcile with the recorder and keep the elapsed clock and meters moving.
     pub fn tick(&mut self, cx: &mut Context<Self>) {
         let before = self.state.rec.clone();
         if self.state.pending.is_none() {
             self.state.sync_rec(&self.engine);
         }
+        self.levels = match self.state.rec {
+            Rec::Recording { .. } => self.engine.recording_levels().unwrap_or(self.levels),
+            _ => (0., 0.),
+        };
         // Until a listing arrives: the worker fills the engine's cache after the first refresh.
         let listing = self.state.devices_note.is_some();
         if listing {
@@ -157,61 +172,132 @@ impl MainWindow {
         &self,
         id: &'static str,
         label: &'static str,
+        kind: Kind,
         on: bool,
         c: Control,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let b = div().id(id).px_3().py_1().rounded_md().child(label);
+        let glyph = match c {
+            Control::Start => Some(div().size(px(10.)).rounded_full()),
+            Control::Stop => Some(div().size(px(10.)).rounded(px(2.))),
+            Control::Pause => None,
+        };
+        let b = kit::button_with(id, glyph, label, kind, Size::Big, on);
         if on {
-            b.cursor_pointer()
-                .bg(rgb(ACCENT))
-                .text_color(rgb(BG))
-                .on_click(cx.listener(move |this, _, _, cx| this.press(c, cx)))
+            b.on_click(cx.listener(move |this, _, _, cx| this.press(c, cx)))
         } else {
-            b.bg(rgb(PANEL)).text_color(rgb(DIM))
+            b
         }
     }
 
-    fn record_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let cfg = self.engine.snapshot();
-        let ui = &cfg.config.ui;
+    /// The Live tab's record strip: lamp and state word, clock, the two level meters, controls.
+    fn record_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        let ui = &self.engine.snapshot().config.ui;
         let c = if self.state.pending.is_some() {
             Controls::BUSY
         } else {
             Controls::of(&self.state.rec)
         };
-        let colour = match self.state.rec {
-            Rec::Idle => DIM,
-            Rec::Recording { .. } => REC_RED,
-            Rec::Paused { .. } => PAUSE_AMBER,
+        let recording = matches!(self.state.rec, Rec::Recording { .. });
+        let lamp = match self.state.rec {
+            Rec::Idle => t.faint,
+            Rec::Recording { .. } => t.rec,
+            Rec::Paused { .. } => t.pause,
+        };
+        let word = match (self.state.pending, &self.state.rec) {
+            (Some(p), _) => p.busy_label(),
+            (None, Rec::Idle) => "Not recording",
+            (None, Rec::Recording { .. }) => "Recording",
+            (None, Rec::Paused { .. }) => "Paused",
+        };
+        let idle = matches!(self.state.rec, Rec::Idle);
+        let clock = fmt_clock(self.state.rec.elapsed_ms(Instant::now()));
+        let (mic, sys) = (meter_fill(self.levels.0), meter_fill(self.levels.1));
+        let meter = |label: &'static str, level: f32| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .text_size(px(11.))
+                .text_color(rgb(t.dim))
+                .child(div().w(px(66.)).flex_none().child(label))
+                .child(kit::meter(if idle { 0. } else { level }))
+        };
+        let controls = if idle && self.state.pending.is_none() {
+            div().flex().gap(px(8.)).child(self.button(
+                "rec-start",
+                "Start recording",
+                Kind::Rec,
+                c.start,
+                Control::Start,
+                cx,
+            ))
+        } else {
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(self.button(
+                    "rec-pause",
+                    c.pause_label,
+                    Kind::Secondary,
+                    c.pause,
+                    Control::Pause,
+                    cx,
+                ))
+                .child(self.button("rec-stop", "Stop", Kind::Rec, c.stop, Control::Stop, cx))
         };
         div()
             .id("record-bar")
             .flex()
-            .gap_2()
+            .flex_none()
             .items_center()
-            .child(self.button("rec-start", "Start", c.start, Control::Start, cx))
-            .child(self.button("rec-pause", c.pause_label, c.pause, Control::Pause, cx))
-            .child(self.button("rec-stop", "Stop", c.stop, Control::Stop, cx))
+            .gap(px(20.))
+            .mx(px(28.))
+            .px(px(18.))
+            .py(px(14.))
+            .rounded(px(12.))
+            .border_1()
+            .border_color(rgb(if recording { t.rec_line } else { t.line }))
+            .bg(rgb(if recording { t.rec_soft } else { t.surface }))
             .child(
                 div()
                     .id("rec-badge")
                     .flex()
-                    .gap_2()
+                    .flex_none()
                     .items_center()
-                    .ml_2()
-                    .child(div().size(px(10.)).rounded_full().bg(rgb(colour)))
+                    .gap(px(10.))
+                    .min_w(px(150.))
+                    .child(div().size(px(14.)).flex_none().rounded_full().bg(rgb(lamp)))
                     .child(
                         div()
-                            .text_color(rgb(colour))
-                            .child(match self.state.pending {
-                                Some(p) => p.busy_label().to_string(),
-                                None => {
-                                    badge_text(&self.state.rec, Instant::now(), ui.show_elapsed)
-                                }
-                            }),
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(word),
                     ),
             )
+            .when(ui.show_elapsed, |d| {
+                d.child(
+                    kit::mono(clock)
+                        .flex_none()
+                        .min_w(px(170.))
+                        .text_size(px(38.))
+                        .line_height(relative(1.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(if idle { t.faint } else { t.text })),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(6.))
+                    .child(meter("You", mic))
+                    .child(meter("Remote", sys)),
+            )
+            .child(controls)
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -220,30 +306,114 @@ impl MainWindow {
         cx.notify();
     }
 
-    fn tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .gap_2()
+    /// The left rail: brand, the daily tabs, a divider, the setup tabs, the version.
+    fn rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        let lit = self.state.tab.rail();
+        let dot = self.state.rec.dot();
+        let tab = |tab: Tab, cx: &mut Context<Self>| {
+            let active = lit == tab;
+            let icon = match tab {
+                Tab::Live => Icon::Mic,
+                Tab::Sessions => Icon::List,
+                Tab::Notes => Icon::Note,
+                Tab::Templates => Icon::Template,
+                Tab::Calendar => Icon::Calendar,
+                Tab::Models => Icon::Chip,
+                Tab::Settings => Icon::Gear,
+                Tab::Trash => Icon::Trash,
+            };
+            let fg = if active { t.text } else { t.dim };
+            div()
+                .id(SharedString::from(format!("tab-{}", tab.label())))
+                .relative()
+                .h(px(34.))
+                .px(px(10.))
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(10.))
+                .rounded(px(7.))
+                .cursor_pointer()
+                .text_color(rgb(fg))
+                .font_weight(FontWeight::MEDIUM)
+                .when(active, |d| {
+                    d.bg(rgb(t.accent_soft)).child(
+                        div()
+                            .absolute()
+                            .left(px(-10.))
+                            .top(px(7.))
+                            .bottom(px(7.))
+                            .w(px(3.))
+                            .rounded_r(px(3.))
+                            .bg(rgb(t.accent)),
+                    )
+                })
+                .when(!active, |d| {
+                    d.hover(move |s| s.bg(rgb(t.raised)).text_color(rgb(t.text)))
+                })
+                .child(kit::icon(icon, fg))
+                .child(tab.label())
+                .when_some(dot.filter(|_| tab == Tab::Live), |d, dot| {
+                    d.child(
+                        div()
+                            .id("live-dot")
+                            .ml_auto()
+                            .size(px(8.))
+                            .rounded_full()
+                            .bg(rgb(match dot {
+                                Dot::Rec => t.rec,
+                                Dot::Paused => t.pause,
+                            })),
+                    )
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.switch_tab(tab, cx)))
+        };
+        let mut rail = div()
+            .w(px(176.))
             .flex_none()
-            .children(Tab::shown().into_iter().map(|t| {
-                let active = self.state.tab == t;
+            .flex()
+            .flex_col()
+            .gap(px(2.))
+            .px(px(10.))
+            .py(px(14.))
+            .bg(rgb(t.side))
+            .border_r_1()
+            .border_color(rgb(t.line))
+            .child(
                 div()
-                    .id(SharedString::from(format!("tab-{}", t.label())))
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(rgb(if active { ACCENT } else { PANEL }))
-                    .text_color(rgb(if active { BG } else { FG }))
-                    .child(t.label())
-                    .on_click(cx.listener(move |this, _, _, cx| this.switch_tab(t, cx)))
-            }))
+                    .flex()
+                    .px(px(10.))
+                    .pt(px(2.))
+                    .pb(px(14.))
+                    .font_family(MONO)
+                    .text_size(px(20.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("oats")
+                    .child(div().text_color(rgb(t.accent)).child("_")),
+            );
+        for (i, group) in Tab::RAIL.iter().enumerate() {
+            if i > 0 {
+                rail = rail.child(div().h(px(1.)).mx(px(10.)).my(px(8.)).bg(rgb(t.line)));
+            }
+            for &g in group.iter() {
+                rail = rail.child(tab(g, cx));
+            }
+        }
+        rail.child(
+            kit::mono(concat!("v", env!("CARGO_PKG_VERSION")))
+                .mt_auto()
+                .p(px(10.))
+                .text_size(px(11.))
+                .text_color(rgb(t.faint)),
+        )
     }
 
     /// A tab-bar click: views that cache engine reads reload them on entry.
     pub(crate) fn switch_tab(&mut self, t: Tab, cx: &mut Context<Self>) {
         self.state.tab = t;
         self.state.cancel_edit();
+        self.menu = None;
         match t {
             Tab::Trash => self.trash.load(&self.engine),
             // Templates may have been created, imported or deleted since the picker was read.
@@ -253,23 +423,60 @@ impl MainWindow {
         cx.notify();
     }
 
+    /// Transcript lines: a mono timestamp, the speaker tag in its colour, the text. A line by the
+    /// same speaker as the one before hides its timestamp and tag (the columns stay).
     pub(crate) fn lines(lines: &[Line], empty: &str, speaker_w: f32) -> impl IntoElement {
-        let body = div().flex().flex_col().gap_1().w_full();
+        let t = theme::current();
+        let body = div().flex().flex_col().gap(px(2.)).w_full().max_w(px(860.));
         if lines.is_empty() {
-            return body.child(div().text_color(rgb(DIM)).child(empty.to_string()));
+            return body.child(div().text_color(rgb(t.dim)).child(empty.to_string()));
         }
-        body.children(lines.iter().map(|l| {
+        body.children(lines.iter().enumerate().map(|(i, l)| {
+            let cont = i > 0 && lines[i - 1].speaker == l.speaker;
+            let c = t.speaker(&l.speaker);
+            let ts = l
+                .start
+                .map(|s| crate::state::fmt_elapsed((s.max(0.) * 1000.) as u64))
+                .unwrap_or_default();
             div()
                 .flex()
                 .items_start()
-                .gap_2()
+                .gap(px(10.))
                 .w_full()
+                .px(px(12.))
+                .py(px(7.))
+                .rounded(px(8.))
+                .child(
+                    kit::mono(ts)
+                        .w(px(48.))
+                        .flex_none()
+                        .pt(px(5.))
+                        .text_size(px(11.))
+                        .text_color(rgb(t.faint))
+                        .when(cont, |d| d.invisible()),
+                )
                 .child(
                     div()
                         .w(px(speaker_w))
                         .flex_none()
-                        .text_color(rgb(ACCENT))
-                        .child(l.speaker.clone()),
+                        .flex()
+                        .items_center()
+                        .gap(px(7.))
+                        .pt(px(4.))
+                        .font_family(MONO)
+                        .text_size(px(12.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(c))
+                        .when(cont, |d| d.invisible())
+                        .child(
+                            div()
+                                .w(px(3.))
+                                .h(px(14.))
+                                .flex_none()
+                                .rounded(px(2.))
+                                .bg(rgb(c)),
+                        )
+                        .child(div().min_w_0().overflow_hidden().child(l.speaker.clone())),
                 )
                 // flex_1 + min_w_0 lets long text wrap inside the row instead of running off the window.
                 .child(
@@ -277,38 +484,29 @@ impl MainWindow {
                         .flex_1()
                         .min_w_0()
                         .whitespace_normal()
+                        .text_size(px(17.))
+                        .line_height(relative(1.5))
                         .child(l.text.clone()),
                 )
         }))
     }
 
     /// The transcription-unavailable banner, with a button when an action fixes it.
-    fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    pub(crate) fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let p = self.state.stt_problem.as_ref()?;
-        let mut row = div()
-            .flex()
-            .gap_3()
-            .items_center()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(rgb(PANEL))
-            .text_color(rgb(WARN))
-            .child(p.message.clone());
+        let (lead, rest) = match p.message.split_once(": ") {
+            Some((a, b)) => (format!("{a}."), b.to_string()),
+            None => (p.message.clone(), String::new()),
+        };
+        let mut row = kit::banner(false, lead, rest);
         if let Some(fix) = p.fix.clone() {
             row = row.child(
-                div()
-                    .id("stt-fix")
-                    .px_3()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(rgb(ACCENT))
-                    .text_color(rgb(BG))
-                    .child("Download model")
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                kit::button("stt-fix", "Download model", Kind::Primary, Size::Sm, true).on_click(
+                    cx.listener(move |this, _, _, cx| {
                         this.state.act(&this.engine, &fix, json!({}));
                         cx.notify();
-                    })),
+                    }),
+                ),
             );
         }
         Some(row)
@@ -318,194 +516,197 @@ impl MainWindow {
         self.engine.snapshot().config.ui.speaker_width as f32
     }
 
-    fn live(&self) -> impl IntoElement {
-        let w = self.speaker_width();
-        let empty = match self.state.rec {
-            Rec::Idle if self.state.live_session.is_some() => "Empty transcript.",
-            Rec::Idle => "No recording. Press Start (or ctrl+shift+R, or `ctl record-start`).",
-            _ => "Listening... lines appear as speech is recognised.",
-        };
-        let header = match (&self.state.rec, &self.state.live_session) {
-            (Rec::Idle, Some(s)) => format!("Last recording: {s} (saved; see Sessions)"),
-            (r, _) if r.session().is_some() => {
-                format!("Recording {}", r.session().unwrap_or_default())
+    /// The configured capture devices by name, `mic · system`, for the Live status line.
+    fn devices_label(&self) -> String {
+        let cfg = self.engine.snapshot();
+        let a = &cfg.config.audio;
+        let name = |id: &str, fallback: &str| {
+            if id.is_empty() {
+                return fallback.to_string();
             }
-            _ => match &self.state.devices_note {
-                Some(note) => note.clone(),
-                None => format!("{} audio devices", self.state.devices),
-            },
-        };
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .size_full()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(DIM))
-                    .flex_none()
-                    .child(header),
-            )
-            .child(
-                div()
-                    .id("live")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.live_scroll)
-                    .child(Self::lines(&self.state.live, empty, w)),
-            )
-    }
-
-    fn setting_row(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
-        let (path, next) = (row.path, next_value(row));
-        let text_seed = match &row.widget {
-            Widget::Text(t) => Some(t.clone()),
-            Widget::Number { value, .. } => Some(value.to_string()),
-            Widget::Duration { text, .. } => Some(text.clone()),
-            _ => None,
-        };
-        let editing = self.state.edit.as_ref().filter(|e| e.path == path);
-        let value = match (&row.widget, editing) {
-            (_, Some(e)) => edit_text(e).into_any_element(),
-            (Widget::Toggle(b), _) => (if *b { "on" } else { "off" }).into_any_element(),
-            (Widget::Choice { current, .. }, _) => current.clone().into_any_element(),
-            (Widget::Text(t), _) if t.is_empty() => "(default)".into_any_element(),
-            (Widget::Text(t), _) => t.clone().into_any_element(),
-            (Widget::Number { value, .. }, _) => value.to_string().into_any_element(),
-            (Widget::Duration { text, .. }, _) => text.clone().into_any_element(),
-        };
-        let mut ctl = div()
-            .id(SharedString::from(format!("set-{path}")))
-            .px_2()
-            .rounded_md()
-            .min_w(px(160.))
-            .bg(rgb(PANEL))
-            .border_1()
-            .border_color(rgb(if editing.is_some() { ACCENT } else { PANEL }))
-            .child(value);
-        if let Some(v) = next {
-            ctl = ctl
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.state
-                        .act(&this.engine, "config-set", json!({"key": path, "value": v}));
-                    cx.notify();
-                }));
-        } else if let Some(seed) = text_seed {
-            ctl = ctl
-                .cursor_text()
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.state.begin_edit(path, &seed);
-                    if let Some(f) = &this.focus {
-                        f.focus(window, cx);
-                    }
-                    cx.notify();
-                }));
-        }
-        let mut top = div()
-            .flex()
-            .gap_3()
-            .items_center()
-            .child(div().w(px(260.)).flex_none().child(path))
-            .child(ctl);
-        if let Some(e) = editing {
-            top = top
-                .child(self.chip("save", cx, move |this, _, cx| {
-                    this.state.commit_edit(&this.engine);
-                    cx.notify();
-                }))
-                .child(self.chip("cancel", cx, move |this, _, cx| {
-                    this.state.cancel_edit();
-                    cx.notify();
-                }));
-            let _ = e;
-        }
-        let mut out = div()
-            .flex()
-            .flex_col()
-            .flex_none()
-            .gap_1()
-            .w_full()
-            .child(top);
-        if let Some(err) = editing.and_then(|e| e.error.as_ref()) {
-            out = out.child(div().text_sm().text_color(rgb(ERR)).child(err.clone()));
-        }
-        if editing.is_some() && path.ends_with(".device") {
-            out = out.child(self.device_picker(path, cx));
-        }
-        out.child(div().w_full().text_color(rgb(DIM)).text_sm().child(row.doc))
-    }
-
-    fn chip(
-        &self,
-        label: &str,
-        cx: &mut Context<Self>,
-        f: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) -> impl IntoElement {
-        div()
-            .id(SharedString::from(format!("chip-{label}")))
-            .px_2()
-            .rounded_md()
-            .cursor_pointer()
-            .bg(rgb(PANEL))
-            .text_sm()
-            .child(label.to_string())
-            .on_click(cx.listener(move |this, _, window, cx| f(this, window, cx)))
-    }
-
-    /// Devices from `devices-list`, one click to fill the input; the empty id is the default device.
-    fn device_picker(&self, path: &'static str, cx: &mut Context<Self>) -> impl IntoElement {
-        let opts = std::iter::once(("".to_string(), "(default)".to_string())).chain(
             self.state
                 .device_opts
                 .iter()
-                .map(|d| (d.id.clone(), format!("{} [{}]", d.name, d.kind))),
-        );
-        div()
-            .flex()
-            .flex_wrap()
-            .gap_1()
-            .children(opts.map(|(id, label)| {
-                div()
-                    .id(SharedString::from(format!("dev-{path}-{id}")))
-                    .px_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(rgb(PANEL))
-                    .text_sm()
-                    .child(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(e) = this.state.edit.as_mut() {
-                            e.buf = id.clone();
-                            e.error = None;
-                        }
-                        cx.notify();
-                    }))
-            }))
+                .find(|d| d.id == id)
+                .map_or_else(|| id.to_string(), |d| d.name.clone())
+        };
+        let mut out = vec![];
+        if a.mic.enabled {
+            out.push(name(&a.mic.device, "Default microphone"));
+        }
+        if a.system.enabled {
+            out.push(name(&a.system.device, "System audio"));
+        }
+        if out.is_empty() {
+            return "No inputs enabled".into();
+        }
+        out.join(" · ")
     }
 
-    fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut col = div()
-            .id("settings")
+    fn inputs(&self) -> usize {
+        let cfg = self.engine.snapshot();
+        let a = &cfg.config.audio;
+        usize::from(a.mic.enabled) + usize::from(a.system.enabled)
+    }
+
+    fn live(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.theme;
+        let w = self.speaker_width();
+        let controls = self.engine.snapshot().config.ui.record_controls;
+        let n = self.inputs();
+        let mut head = kit::head("Live").child(div().flex_1());
+        if let Some((name, _)) = &self.state.model {
+            head = head.child(kit::tag(name.clone(), true));
+        }
+        head = head.child(kit::tag(
+            format!("{n} input{}", if n == 1 { "" } else { "s" }),
+            false,
+        ));
+        let body = if self.state.live.is_empty() {
+            let (h, s) = match self.state.rec {
+                Rec::Idle if self.state.live_session.is_some() => (
+                    "Empty transcript",
+                    "The last recording has no lines. Start recording to try again.".to_string(),
+                ),
+                Rec::Idle => (
+                    "Ready when you are",
+                    "Start recording and the transcript appears here as people speak. Your voice \
+                     shows as you, everyone else as remote_1, remote_2. (Also ctrl+shift+R or \
+                     `ctl record-start`.)"
+                        .to_string(),
+                ),
+                _ => (
+                    "Listening",
+                    "Lines appear here as speech is recognised.".to_string(),
+                ),
+            };
+            kit::empty(h, s).into_any_element()
+        } else {
+            div()
+                .id("live")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .track_scroll(&self.live_scroll)
+                .pt(px(18.))
+                .px(px(16.))
+                .child(Self::lines(&self.state.live, "", w))
+                .into_any_element()
+        };
+        div()
             .flex()
             .flex_col()
-            .gap_3()
             .size_full()
-            .overflow_y_scroll();
-        for g in &self.state.settings {
-            col = col.child(
+            .child(head)
+            .children(controls.then(|| self.record_strip(cx)))
+            .children(
+                self.banner(cx)
+                    .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b)),
+            )
+            .child(
                 div()
-                    .flex_none()
-                    .text_color(rgb(ACCENT))
-                    .child(g.name.clone()),
-            );
-            for r in &g.rows {
-                col = col.child(self.setting_row(r, cx));
-            }
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .text_color(rgb(t.text))
+                    .child(body),
+            )
+    }
+
+    /// The status line: what the window is doing (the last action's result, else the session),
+    /// and on Live the model and runtime and the capture devices.
+    fn status_bar(&self) -> impl IntoElement {
+        let t = self.theme;
+        let st = &self.state;
+        let mut left = div().flex().items_center().gap(px(6.));
+        if !st.status.is_empty() {
+            let colour = if st.status.starts_with("Saved") {
+                t.ok
+            } else {
+                t.dim
+            };
+            left = left.text_color(rgb(colour)).child(st.status.clone());
+        } else if st.tab == Tab::Live {
+            left = match (&st.rec, &st.live_session) {
+                (r, _) if r.session().is_some() => left
+                    .child(div().text_color(rgb(t.ok)).child("●"))
+                    .child(format!("Saving to {}", r.session().unwrap_or_default())),
+                (Rec::Idle, Some(s)) => {
+                    left.child(format!("Last recording: {s} (saved; see Sessions)"))
+                }
+                _ => left.child(match &st.devices_note {
+                    Some(note) => note.clone(),
+                    None => format!("{} audio devices", st.devices),
+                }),
+            };
+        } else if st.tab == Tab::Sessions {
+            left = left.child(format!(
+                "{} sessions · click one to read it",
+                st.sessions.len()
+            ));
         }
-        col
+        let mut bar = div()
+            .id("status")
+            .h(px(32.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(18.))
+            .px(px(28.))
+            .border_t_1()
+            .border_color(rgb(t.line))
+            .bg(rgb(t.side))
+            .text_size(px(12.))
+            .text_color(rgb(t.dim))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .child(left);
+        if st.tab == Tab::Live {
+            if let Some((name, runtime)) = &st.model {
+                bar = bar.child(kit::mono(if runtime.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name} · {runtime}")
+                }));
+            }
+            bar = bar.child(kit::mono(self.devices_label()).ml_auto());
+        }
+        bar
+    }
+
+    /// The blueprint grid behind the content: 1px lines every 24px in the grid colour.
+    fn grid(&self) -> impl IntoElement {
+        let colour = self.theme.grid;
+        canvas(
+            |_, _, _| (),
+            move |b: Bounds<gpui::Pixels>, _, window, _| {
+                let step = px(24.);
+                let mut x = b.origin.x;
+                while x < b.origin.x + b.size.width {
+                    window.paint_quad(fill(
+                        Bounds::new(
+                            gpui::point(x, b.origin.y),
+                            gpui::size(px(1.), b.size.height),
+                        ),
+                        rgba(colour),
+                    ));
+                    x += step;
+                }
+                let mut y = b.origin.y;
+                while y < b.origin.y + b.size.height {
+                    window.paint_quad(fill(
+                        Bounds::new(gpui::point(b.origin.x, y), gpui::size(b.size.width, px(1.))),
+                        rgba(colour),
+                    ));
+                    y += step;
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 }
 
@@ -520,11 +721,17 @@ impl Drop for MainWindow {
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_window_title("Oats");
+        let pref = self.engine.snapshot().config.ui.theme;
+        self.theme = Theme::resolve(pref, window.appearance());
+        theme::set(self.theme);
+        if self.appearance.is_none() {
+            self.appearance = Some(cx.observe_window_appearance(window, |_, _, cx| cx.notify()));
+        }
+        let t = self.theme;
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
-        let controls = self.engine.snapshot().config.ui.record_controls;
         // One line per tab; each view lives in its own file under `views/`.
         let body = match self.state.tab {
-            Tab::Live => self.live().into_any_element(),
+            Tab::Live => self.live(cx).into_any_element(),
             Tab::Sessions => {
                 views::sessions::sync_hits(&mut self.state, &self.engine);
                 views::sessions::render(self, cx)
@@ -534,16 +741,30 @@ impl Render for MainWindow {
             Tab::Calendar => views::calendar::render(self, cx),
             Tab::Trash => views::trash::render(self, cx),
             Tab::Models => views::models::render(self, cx),
-            Tab::Settings => self.settings(cx).into_any_element(),
+            Tab::Settings => views::settings::render(self, cx),
         };
+        // Live shows the banner under its record strip; the other tabs above their content.
+        let banner = (self.state.tab != Tab::Live)
+            .then(|| self.banner(cx))
+            .flatten()
+            .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b));
+        let recording = matches!(self.state.rec, Rec::Recording { .. });
         div()
+            .id("window")
             .flex()
             .flex_col()
-            .gap_3()
-            .p_4()
             .size_full()
-            .bg(rgb(BG))
-            .text_color(rgb(FG))
+            .bg(rgb(t.bg))
+            .text_color(rgb(t.text))
+            .font_family(SANS)
+            .text_size(px(14.))
+            // The recording edge; transparent while idle so the layout does not jump.
+            .border_t(px(3.))
+            .border_color(if recording {
+                rgb(t.rec).into()
+            } else {
+                gpui::transparent_black()
+            })
             .track_focus(&focus)
             .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
                 let k = &ev.keystroke;
@@ -557,22 +778,32 @@ impl Render for MainWindow {
                 cx.stop_propagation();
                 cx.notify();
             }))
-            .child(self.tab_bar(cx))
-            .children(self.banner(cx))
-            .children(controls.then(|| self.record_bar(cx)))
-            .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .child(
-                div()
-                    .text_sm()
-                    .text_color(rgb(if self.state.status.starts_with("Saved") {
-                        OK_GREEN
-                    } else {
-                        DIM
-                    }))
-                    .flex_none()
-                    .child(self.state.status.clone()),
+                div().flex().flex_1().min_h_0().child(self.rail(cx)).child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.grid())
+                        .children(banner)
+                        .child(div().flex().flex_col().flex_1().min_h_0().child(body))
+                        .child(self.status_bar()),
+                ),
             )
     }
+}
+
+/// What the dump reports of the recording chrome: the red window edge and the Live-tab dot.
+pub(crate) fn chrome(rec: &Rec) -> serde_json::Value {
+    json!({
+        "edge": matches!(rec, Rec::Recording { .. }),
+        "live_dot": rec.dot().map(|d| match d {
+            Dot::Rec => "rec",
+            Dot::Paused => "paused",
+        }),
+    })
 }
 
 #[cfg(test)]
@@ -631,15 +862,26 @@ mod tests {
             (ev("recording-paused", json!({"session": "a", "paused": false, "duration_ms": 4000})), true, false),
             (ev("recording-stopped", json!({"session": "a", "duration_ms": 9000})), false, false),
         ];
-        for (line, _, _) in &steps {
+        // The red edge shows only while recording; the Live-tab dot is red, then amber when paused.
+        let chrome_of = [
+            (true, Some("rec")),
+            (true, Some("rec")),
+            (false, Some("paused")),
+            (true, Some("rec")),
+            (false, None),
+        ];
+        for ((line, _, _), (edge, dot)) in steps.iter().zip(chrome_of) {
             view.update(cx, |v, cx| {
                 v.state.tab = Tab::Live;
                 v.event(line, cx);
             });
             cx.run_until_parked();
-            view.read_with(cx, |v, _| {
+            view.update(cx, |v, cx| {
                 let c = Controls::of(&v.state.rec);
                 assert_eq!(c.start, matches!(v.state.rec, Rec::Idle));
+                let d = v.dump(cx);
+                assert_eq!(d["recording"]["chrome"]["edge"], edge, "{line}");
+                assert_eq!(d["recording"]["chrome"]["live_dot"], json!(dot), "{line}");
             });
         }
         view.read_with(cx, |v, _| {
@@ -692,6 +934,41 @@ mod tests {
     #[test]
     fn main_window_renders_every_tab() {
         render_each_tab(&[]);
+    }
+
+    #[test]
+    fn main_window_renders_every_tab_in_dark_and_light() {
+        render_each_tab(&[("ui.theme", json!("dark"))]);
+        render_each_tab(&[("ui.theme", json!("light"))]);
+    }
+
+    #[test]
+    fn ui_theme_picks_the_palette_and_the_dump_reports_it() {
+        let (engine, _d) = testutil::engine(&[("ui.theme", json!("light"))]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            assert_eq!(v.theme, Theme::LIGHT);
+            assert_eq!(v.dump(cx)["theme"], "light");
+            v.state.act(
+                &v.engine,
+                "config-set",
+                json!({"key": "ui.theme", "value": "dark"}),
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.update(cx, |v, cx| assert_eq!(v.dump(cx)["theme"], "dark"));
+    }
+
+    #[test]
+    fn meters_map_rms_onto_a_60_db_scale() {
+        assert_eq!(meter_fill(0.), 0.);
+        assert_eq!(meter_fill(0.001), 0.);
+        assert!((meter_fill(0.1) - 2. / 3.).abs() < 1e-4);
+        assert_eq!(meter_fill(1.), 1.);
+        assert_eq!(meter_fill(2.), 1.);
     }
 
     #[test]

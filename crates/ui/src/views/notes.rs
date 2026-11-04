@@ -8,15 +8,18 @@
 use std::sync::Arc;
 
 use gpui::{
-    div, prelude::*, px, rgb, AnyElement, Context, FocusHandle, Global, KeyDownEvent, SharedString,
+    anchored, deferred, div, prelude::*, px, rgb, AnyElement, Context, FocusHandle, FontWeight,
+    Global, KeyDownEvent, SharedString,
 };
 use oats_core::config::Result;
 use oats_core::control::engine::Engine;
 use serde_json::{json, Value};
 
+use crate::kit::{self, Kind, Size};
 use crate::model;
 use crate::state::{type_key, EditKey};
-use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL};
+use crate::theme::{self, MONO};
+use crate::view::MainWindow;
 
 /// What the Notes tab shows. Free of GPUI apart from the editor's focus handle.
 #[derive(Default)]
@@ -39,6 +42,8 @@ pub struct Notes {
     /// First click of a confirmed regenerate happened; the next one runs it.
     pub armed: bool,
     pub error: Option<String>,
+    /// The session dropdown in the header is open.
+    pub picking: bool,
     focus: Option<FocusHandle>,
 }
 
@@ -234,33 +239,50 @@ pub(crate) fn save(this: &mut MainWindow, cx: &mut Context<MainWindow>) {
     cx.notify();
 }
 
-fn chip(id: String, label: String, on: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(id))
-        .px_2()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(rgb(if on { ACCENT } else { PANEL }))
-        .text_color(rgb(if on { BG } else { FG }))
-        .text_sm()
-        .child(label)
-}
-
+/// The notes as a document: `#`/`##` lines are headings, `- ` / `* ` lines bullets, the rest
+/// paragraphs. `cursor` puts the editor caret after the last line.
 fn text_block(text: &str, cursor: bool) -> gpui::Div {
+    let t = theme::current();
     let mut lines: Vec<String> = text.split('\n').map(str::to_string).collect();
     if cursor {
         if let Some(l) = lines.last_mut() {
             l.push('|');
         }
     }
-    div().flex().flex_col().w_full().children(
-        lines
-            .into_iter()
-            .map(|l| div().w_full().min_h(px(18.)).whitespace_normal().child(l)),
-    )
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .max_w(px(720.))
+        .children(lines.into_iter().map(move |l| {
+            let line = div().w_full().min_h(px(22.)).whitespace_normal();
+            if cursor {
+                return line.font_family(MONO).text_size(px(13.)).child(l);
+            }
+            if let Some(h) = l.strip_prefix("## ").or_else(|| l.strip_prefix("# ")) {
+                return line
+                    .mt(px(14.))
+                    .mb(px(2.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(h.to_string());
+            }
+            if let Some(item) = l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")) {
+                return line
+                    .flex()
+                    .gap(px(8.))
+                    .text_size(px(15.))
+                    .line_height(gpui::relative(1.6))
+                    .child(div().flex_none().text_color(rgb(t.dim)).child("•"))
+                    .child(div().flex_1().min_w_0().child(item.to_string()));
+            }
+            line.text_size(px(15.))
+                .line_height(gpui::relative(1.6))
+                .child(l)
+        }))
 }
 
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let th = theme::current();
     if !cx.default_global::<Notes>().loaded {
         cx.global_mut::<Notes>().load_templates(&w.engine);
     }
@@ -278,96 +300,75 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let n = cx.global::<Notes>();
     let (session, editing, busy, armed) = (n.session.clone(), n.edit.clone(), n.busy, n.armed);
     let (text, info, error) = (n.text.clone(), n.info.clone(), n.error.clone());
-    let all = n.all;
+    let (all, picking) = (n.all, n.picking);
     let (templates, template) = (n.templates.clone(), n.template.clone());
+    let row = session
+        .as_deref()
+        .and_then(|id| w.state.sessions.iter().find(|r| r.id == id));
+    let title = |r: &crate::state::SessionRow| {
+        if r.title.is_empty() {
+            r.id.clone()
+        } else {
+            r.title.clone()
+        }
+    };
+    let shown = match (row, &session) {
+        (Some(r), _) => title(r),
+        (None, Some(id)) => id.clone(),
+        (None, None) => "Pick a session".to_string(),
+    };
 
-    let list = div()
-        .id("notes-sessions")
-        .flex()
-        .flex_col()
-        .gap_1()
-        .w(px(240.))
-        .flex_none()
-        .overflow_y_scroll()
-        .children(w.state.sessions.iter().map(|r| {
-            let id = r.id.clone();
-            let sel = session.as_deref() == Some(r.id.as_str());
-            let title = if r.title.is_empty() { &r.id } else { &r.title };
-            chip(format!("notes-session-{}", r.id), title.clone(), sel)
-                .py_1()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.global_mut::<Notes>().open(&this.engine, &id);
-                    cx.notify();
-                }))
-        }));
-
-    let picker = div()
-        .flex()
-        .flex_wrap()
-        .gap_1()
-        .items_center()
-        .child(div().text_sm().text_color(rgb(DIM)).child("Template:"))
-        .children(templates.into_iter().map(|t| {
-            let on = template.as_deref() == Some(t.as_str());
-            let pick = t.clone();
-            chip(format!("notes-template-{t}"), t, on).on_click(cx.listener(move |_, _, _, cx| {
+    // The header's session picker: a dropdown over the session list.
+    let mut picker = div().relative().flex_none().child(
+        kit::dropdown("notes-session-picker", shown.clone(), picking).on_click(cx.listener(
+            |_, _, _, cx| {
                 let n = cx.global_mut::<Notes>();
-                n.template = Some(pick.clone());
-                n.armed = false;
+                n.picking = !n.picking;
                 cx.notify();
-            }))
-        }));
-
-    let mut buttons = div().flex().gap_2().items_center();
-    if editing.is_some() {
-        buttons = buttons
-            .child(
-                chip("notes-save".into(), "Save".into(), true)
-                    .on_click(cx.listener(|this, _, _, cx| save(this, cx))),
-            )
-            .child(
-                chip("notes-cancel".into(), "Cancel".into(), false).on_click(cx.listener(
-                    |_, _, _, cx| {
-                        cx.global_mut::<Notes>().cancel_edit();
-                        cx.notify();
-                    },
-                )),
-            );
-    } else if session.is_some() {
-        let f = focus.clone();
-        buttons = buttons.child(chip("notes-edit".into(), "Edit".into(), false).on_click(
-            cx.listener(move |_, _, window, cx| {
-                cx.global_mut::<Notes>().begin_edit();
-                f.focus(window, cx);
-                cx.notify();
-            }),
-        ));
-    }
-    if editing.is_none() {
-        let label = match (busy, armed) {
-            (true, _) => "Generating...",
-            (_, true) => "Replace notes? Click again",
-            _ => "Regenerate",
-        };
-        buttons = buttons.child(
-            chip("notes-regenerate".into(), label.into(), armed)
-                .on_click(cx.listener(|this, _, _, cx| run_regenerate(this, cx))),
+            },
+        )),
+    );
+    if picking {
+        let items = w.state.sessions.iter().map(|r| {
+            let id = r.id.clone();
+            let on = session.as_deref() == Some(r.id.as_str());
+            kit::menu_item(format!("notes-session-{}", r.id), title(r), on).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    let n = cx.global_mut::<Notes>();
+                    n.picking = false;
+                    n.open(&this.engine, &id);
+                    cx.notify();
+                },
+            ))
+        });
+        picker = picker.child(
+            div().absolute().top(px(34.)).left_0().child(deferred(
+                anchored().child(
+                    kit::menu()
+                        .id("notes-session-menu")
+                        .max_h(px(420.))
+                        .overflow_y_scroll()
+                        .children(items),
+                ),
+            )),
         );
     }
+    let head = kit::head("Notes").child(div().flex_1()).child(picker);
 
     let body = match (&session, &editing) {
-        (None, _) => div()
-            .text_color(rgb(DIM))
-            .child("Select a session.")
-            .into_any_element(),
+        (None, _) => kit::empty(
+            "No session picked",
+            "Pick a session above (or select one on the Sessions tab) to read or write its notes.",
+        )
+        .into_any_element(),
         (Some(_), Some(buf)) => {
             let f = focus.clone();
             div()
                 .id("notes-editor")
-                .p_2()
-                .rounded_md()
+                .p(px(12.))
+                .rounded(px(7.))
                 .border_1()
-                .border_color(rgb(ACCENT))
+                .border_color(rgb(th.accent))
                 .cursor_text()
                 .track_focus(&focus)
                 .on_click(cx.listener(move |_, _, window, cx| f.focus(window, cx)))
@@ -386,41 +387,162 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                     cx.stop_propagation();
                     cx.notify();
                 }))
-                .child(text_block(buf, !all).when(all, |b| b.bg(rgb(ACCENT)).text_color(rgb(BG))))
+                .child(
+                    text_block(buf, !all)
+                        .when(all, |b| b.bg(rgb(th.accent)).text_color(rgb(th.accent_ink))),
+                )
                 .into_any_element()
         }
-        (Some(_), None) if text.is_empty() => div()
-            .text_color(rgb(DIM))
-            .child("No notes yet. Pick a template and Regenerate, or Edit to write them.")
-            .into_any_element(),
+        (Some(_), None) if text.is_empty() => kit::empty(
+            "No notes yet",
+            "Pick a template and Regenerate, or Edit to write them.",
+        )
+        .into_any_element(),
         (Some(_), None) => text_block(&text, false).into_any_element(),
     };
-
-    let detail = div()
+    let meta = row.map(|r| {
+        let mut m = vec![r.started_at.clone(), format!("{} lines", r.utterances)];
+        if !r.tags.is_empty() {
+            m.push(r.tags.join(", "));
+        }
+        m.join(" · ")
+    });
+    let doc = div()
+        .id("notes-body")
         .flex()
         .flex_col()
-        .gap_2()
         .flex_1()
         .min_w_0()
-        .child(picker)
-        .child(buttons)
-        .children((!info.is_empty()).then(|| div().text_sm().text_color(rgb(DIM)).child(info)))
-        .children(error.map(|e| div().text_sm().text_color(rgb(ERR)).child(e)))
-        .child(
+        .overflow_y_scroll()
+        .px(px(34.))
+        .py(px(26.))
+        .rounded(px(10.))
+        .border_1()
+        .border_color(rgb(th.line))
+        .bg(rgb(th.surface))
+        .when(session.is_some(), |d| {
+            d.child(
+                div()
+                    .text_size(px(22.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(shown.clone()),
+            )
+            .children(meta.map(|m| {
+                kit::mono(m)
+                    .mb(px(8.))
+                    .text_size(px(12.))
+                    .text_color(rgb(th.dim))
+            }))
+        })
+        .child(body);
+
+    // The aside: template choice, the actions, how the notes were made.
+    let options = templates.into_iter().map(|t| {
+        let on = template.as_deref() == Some(t.as_str());
+        let pick = t.clone();
+        div()
+            .id(SharedString::from(format!("notes-template-{t}")))
+            .flex()
+            .items_center()
+            .gap(px(9.))
+            .px(px(8.))
+            .py(px(7.))
+            .rounded(px(7.))
+            .text_size(px(13.))
+            .cursor_pointer()
+            .when(on, |d| d.bg(rgb(th.accent_soft)))
+            .when(!on, |d| d.hover(move |s| s.bg(rgb(th.raised))))
+            .child(kit::radio(on))
+            .child(t)
+            .on_click(cx.listener(move |_, _, _, cx| {
+                let n = cx.global_mut::<Notes>();
+                n.template = Some(pick.clone());
+                n.armed = false;
+                cx.notify();
+            }))
+    });
+    let card = |title: &'static str| {
+        kit::panel().p(px(14.)).child(
             div()
-                .id("notes-body")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .child(body),
+                .mb(px(8.))
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(th.dim))
+                .child(title),
+        )
+    };
+    let mut aside = div()
+        .id("notes-aside")
+        .w(px(250.))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .gap(px(12.))
+        .overflow_y_scroll()
+        .child(card("Template").children(options));
+    if editing.is_some() {
+        aside = aside
+            .child(
+                kit::button("notes-save", "Save", Kind::Primary, Size::Md, true)
+                    .on_click(cx.listener(|this, _, _, cx| save(this, cx))),
+            )
+            .child(
+                kit::button("notes-cancel", "Cancel", Kind::Secondary, Size::Md, true).on_click(
+                    cx.listener(|_, _, _, cx| {
+                        cx.global_mut::<Notes>().cancel_edit();
+                        cx.notify();
+                    }),
+                ),
+            );
+    } else {
+        let label = match (busy, armed) {
+            (true, _) => "Generating...",
+            (_, true) => "Replace notes? Click again",
+            _ => "Regenerate notes",
+        };
+        aside = aside.child(
+            kit::button(
+                "notes-regenerate",
+                label,
+                if armed { Kind::Danger } else { Kind::Primary },
+                Size::Md,
+                !busy,
+            )
+            .on_click(cx.listener(|this, _, _, cx| run_regenerate(this, cx))),
         );
+        if session.is_some() {
+            let f = focus.clone();
+            aside = aside.child(
+                kit::button("notes-edit", "Edit", Kind::Secondary, Size::Md, true).on_click(
+                    cx.listener(move |_, _, window, cx| {
+                        cx.global_mut::<Notes>().begin_edit();
+                        f.focus(window, cx);
+                        cx.notify();
+                    }),
+                ),
+            );
+        }
+    }
+    if let Some(e) = error {
+        aside = aside.child(kit::banner(true, "Notes failed.", e));
+    }
+    if !info.is_empty() {
+        aside = aside.child(
+            card("Generated by").child(
+                kit::mono(info)
+                    .text_size(px(12.))
+                    .text_color(rgb(th.dim))
+                    .whitespace_normal(),
+            ),
+        );
+    }
 
     div()
         .flex()
-        .gap_4()
+        .flex_col()
         .size_full()
-        .child(list)
-        .child(detail)
+        .child(head)
+        .child(kit::pad().flex_row().gap(px(22.)).child(doc).child(aside))
         .into_any_element()
 }
 

@@ -7,14 +7,16 @@
 //! The view's own state lives in a gpui global so the tab stays in this one file.
 
 use gpui::{
-    div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, Global, KeyDownEvent,
-    SharedString,
+    div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, FontWeight, Global,
+    KeyDownEvent, SharedString,
 };
 use serde_json::{json, Value};
 
+use crate::kit::{self, Kind, Size};
 use crate::model;
 use crate::state::type_key;
-use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL};
+use crate::theme::{self, MONO};
+use crate::view::MainWindow;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Item {
@@ -265,22 +267,43 @@ impl Templates {
     }
 }
 
-fn chip(id: &'static str, label: impl Into<SharedString>) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .px_2()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(rgb(PANEL))
-        .text_sm()
-        .child(label.into())
+fn chip(id: &'static str, label: impl Into<SharedString>, kind: Kind) -> gpui::Stateful<gpui::Div> {
+    kit::button(id, label, kind, Size::Md, true)
 }
 
 fn update(cx: &mut App, w: &MainWindow, f: impl FnOnce(&mut Templates, &MainWindow)) {
     f(cx.default_global::<Templates>(), w);
 }
 
+/// A system prompt as the code block shows it: mono, `## ` heading lines (the required headings)
+/// in the accent colour.
+fn prompt_block(prompt: &str) -> gpui::Div {
+    let t = theme::current();
+    div()
+        .flex()
+        .flex_col()
+        .p(px(18.))
+        .rounded(px(10.))
+        .border_1()
+        .border_color(rgb(t.line))
+        .bg(rgb(t.surface))
+        .font_family(MONO)
+        .text_size(px(13.))
+        .line_height(gpui::relative(1.65))
+        .whitespace_normal()
+        .children(prompt.lines().map(|l| {
+            div()
+                .min_h(px(20.))
+                .when(l.starts_with("## "), |d| d.text_color(rgb(t.accent)))
+                .when(l.starts_with("# ") || l.starts_with("//"), |d| {
+                    d.text_color(rgb(t.faint))
+                })
+                .child(l.to_string())
+        }))
+}
+
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let th = theme::current();
     if cx
         .try_global::<Templates>()
         .and_then(|t| t.items.as_ref())
@@ -299,71 +322,82 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let focus = t.focus.clone().expect("set above");
     let sel_name = selected.as_ref().map(|d| d.name.clone());
 
-    let header = div()
-        .flex()
-        .gap_3()
-        .items_center()
-        .flex_none()
-        .child(div().text_sm().text_color(rgb(DIM)).child(format!(
-            "{} templates in {dir} (templates.dir)",
-            items.len()
-        )))
+    let head = kit::head("Templates")
         .child(
-            chip("templates-reload", "Reload").on_click(cx.listener(|this, _, _, cx| {
-                update(cx, this, |t, w| t.load(w));
-                cx.notify();
-            })),
+            kit::mono(format!("{} in {dir}", items.len()))
+                .text_size(px(12.))
+                .text_color(rgb(th.dim)),
+        )
+        .child(div().flex_1())
+        .child(
+            chip("templates-reload", "Reload", Kind::Secondary).on_click(cx.listener(
+                |this, _, _, cx| {
+                    update(cx, this, |t, w| t.load(w));
+                    cx.notify();
+                },
+            )),
         )
         .child({
             let focus = focus.clone();
-            chip("templates-new", "New").on_click(cx.listener(move |this, _, window, cx| {
-                update(cx, this, |t, _| t.create());
-                focus.focus(window, cx);
-                cx.notify();
-            }))
+            chip("templates-new", "New template", Kind::Primary).on_click(cx.listener(
+                move |this, _, window, cx| {
+                    update(cx, this, |t, _| t.create());
+                    focus.focus(window, cx);
+                    cx.notify();
+                },
+            ))
         });
 
     let list = div()
         .id("templates")
-        .flex()
-        .flex_col()
-        .gap_1()
-        .w(px(280.))
+        .w(px(260.))
         .flex_none()
         .overflow_y_scroll()
-        .children(items.iter().map(|it| {
+        .child(kit::panel().children(items.iter().map(|it| {
             let name = it.name.clone();
             let sel = sel_name.as_deref() == Some(it.name.as_str());
-            div()
-                .id(SharedString::from(format!("template-{}", it.name)))
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .bg(rgb(if sel { ACCENT } else { PANEL }))
-                .text_color(rgb(if sel { BG } else { FG }))
-                .child(format!("{}  ({} headings)", it.name, it.headings.len()))
+            kit::row(SharedString::from(format!("template-{}", it.name)), sel)
+                .h(px(52.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(it.name.clone()),
+                )
+                .child(
+                    kit::mono(format!("{}", it.headings.len()))
+                        .text_size(px(12.))
+                        .text_color(rgb(th.faint)),
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     update(cx, this, |t, w| t.select(w, &name));
                     cx.notify();
                 }))
-        }));
+        })));
 
     let detail = div()
         .id("template-detail")
         .flex()
         .flex_col()
-        .gap_2()
+        .gap(px(10.))
         .flex_1()
         .min_w_0()
         .overflow_y_scroll();
     let detail = match (draft, selected) {
         (Some(d), _) => detail.child(editor(d, focus, cx)),
-        (None, None) if items.is_empty() => detail.child(div().text_color(rgb(DIM)).child(
-            "No templates. Add TOML files to the folder above, or import an OpenOats \
-             templates.json with `ctl template-import`.",
+        (None, None) if items.is_empty() => detail.child(kit::empty(
+            "No templates",
+            "Add TOML files to the folder above, or import an OpenOats templates.json with \
+             `ctl template-import`.",
         )),
-        (None, None) => detail.child(div().text_color(rgb(DIM)).child("Select a template.")),
+        (None, None) => detail.child(kit::empty(
+            "Select a template",
+            "Pick one on the left to read its prompt, or start a new one.",
+        )),
         (None, Some(d)) => {
             let mut meta = vec![];
             if !d.icon.is_empty() {
@@ -372,91 +406,82 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             if !d.openoats_id.is_empty() {
                 meta.push(format!("imported from OpenOats ({})", d.openoats_id));
             }
+            meta.push(if d.headings.is_empty() {
+                "required headings: none".to_string()
+            } else {
+                format!("required headings: {}", d.headings.join(", "))
+            });
             let focus = focus.clone();
             let actions = div()
                 .flex()
-                .gap_2()
-                .child(chip("template-edit", "Edit").on_click(cx.listener(
-                    move |this, _, window, cx| {
-                        update(cx, this, |t, _| t.edit());
-                        focus.focus(window, cx);
-                        cx.notify();
-                    },
-                )))
+                .gap(px(8.))
+                .child(
+                    chip("template-edit", "Edit template", Kind::Primary).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            update(cx, this, |t, _| t.edit());
+                            focus.focus(window, cx);
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(div().flex_1())
+                .children(confirm.then(|| {
+                    chip("template-keep", "Keep", Kind::Secondary).on_click(cx.listener(
+                        |_, _, _, cx| {
+                            cx.global_mut::<Templates>().confirm_delete = false;
+                            cx.notify();
+                        },
+                    ))
+                }))
                 .child(
                     chip(
                         "template-delete",
                         if confirm { "Really delete?" } else { "Delete" },
+                        Kind::Danger,
                     )
-                    .when(confirm, |c| c.text_color(rgb(ERR)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         update(cx, this, |t, w| t.delete(w));
                         cx.notify();
                     })),
-                )
-                .children(confirm.then(|| {
-                    chip("template-keep", "Keep").on_click(cx.listener(|_, _, _, cx| {
-                        cx.global_mut::<Templates>().confirm_delete = false;
-                        cx.notify();
-                    }))
-                }));
+                );
             detail
-                .child(div().text_color(rgb(ACCENT)).child(d.name.clone()))
+                .child(
+                    div()
+                        .text_size(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(d.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(th.dim))
+                        .child(meta.join("  ·  ")),
+                )
+                .child(prompt_block(&d.system_prompt))
                 .child(actions)
-                .children((!meta.is_empty()).then(|| {
-                    div()
-                        .text_sm()
-                        .text_color(rgb(DIM))
-                        .child(meta.join("  ·  "))
-                }))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(rgb(DIM))
-                        .child(if d.headings.is_empty() {
-                            "Required headings: none".to_string()
-                        } else {
-                            format!("Required headings: {}", d.headings.join(", "))
-                        }),
-                )
-                .child(
-                    div()
-                        .p_2()
-                        .rounded_md()
-                        .bg(rgb(PANEL))
-                        .whitespace_normal()
-                        .children(
-                            d.system_prompt
-                                .lines()
-                                .map(|l| div().min_h(px(16.)).child(l.to_string()))
-                                .collect::<Vec<_>>(),
-                        ),
-                )
         }
     };
 
     div()
         .flex()
         .flex_col()
-        .gap_2()
         .size_full()
-        .child(header)
-        .children(error.map(|e| div().text_sm().text_color(rgb(ERR)).child(e)))
-        .child(
+        .child(head)
+        .children(error.map(|e| {
             div()
-                .flex()
-                .gap_4()
-                .flex_1()
-                .min_h_0()
-                .child(list)
-                .child(detail),
-        )
+                .flex_none()
+                .mx(px(28.))
+                .mb(px(12.))
+                .child(kit::banner(true, "Templates.", e))
+        }))
+        .child(kit::pad().flex_row().gap(px(20.)).child(list).child(detail))
         .into_any_element()
 }
 
 /// The create / edit form: one box per `template-save` parameter, the active one marked with a
 /// caret. Keys go to `Templates::key` while the form has focus.
 fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl IntoElement {
+    let th = theme::current();
     let field = |id: &'static str,
                  label: &'static str,
                  f: Field,
@@ -469,25 +494,36 @@ fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl In
             lines.last_mut().expect("split yields one").push('▏');
         }
         let focus = focus.clone();
+        let mono = f == Field::Prompt;
         div()
             .flex()
             .flex_col()
-            .gap_1()
-            .child(div().text_sm().text_color(rgb(DIM)).child(label))
+            .gap(px(4.))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(th.dim))
+                    .child(label),
+            )
             .child(
                 div()
                     .id(id)
-                    .p_2()
-                    .rounded_md()
+                    .px(px(11.))
+                    .py(px(6.))
+                    .min_h(px(32.))
+                    .rounded(px(7.))
                     .cursor_text()
-                    .bg(rgb(PANEL))
+                    .bg(rgb(th.surface))
                     .border_1()
-                    .border_color(rgb(if active { ACCENT } else { PANEL }))
+                    .border_color(rgb(if active { th.accent } else { th.line2 }))
                     .whitespace_normal()
+                    .when(mono, |d| d.font_family(MONO).text_size(px(13.)))
                     .children(lines.into_iter().map(|l| {
                         div()
-                            .min_h(px(16.))
-                            .when(selected, |l| l.bg(rgb(ACCENT)).text_color(rgb(BG)))
+                            .min_h(px(18.))
+                            .when(selected, |l| {
+                                l.bg(rgb(th.accent)).text_color(rgb(th.accent_ink))
+                            })
                             .child(l)
                     }))
                     .on_click(cx.listener(move |_, _, window, cx| {
@@ -513,7 +549,7 @@ fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl In
         .track_focus(&focus)
         .flex()
         .flex_col()
-        .gap_2()
+        .gap(px(10.))
         .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
             let k = &ev.keystroke;
             let command = k.modifiers.control || k.modifiers.alt || k.modifiers.platform;
@@ -526,7 +562,12 @@ fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl In
                 cx.notify();
             }
         }))
-        .child(div().text_color(rgb(ACCENT)).child(title))
+        .child(
+            div()
+                .text_size(px(18.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
         .child(field("template-name", "Name", Field::Name, &d.name, cx))
         .child(field("template-icon", "Icon (optional)", Field::Icon, &d.icon, cx))
         .child(field(
@@ -536,39 +577,63 @@ fn editor(d: Draft, focus: FocusHandle, cx: &mut Context<MainWindow>) -> impl In
             &d.prompt,
             cx,
         ))
-        .child(div().text_sm().text_color(rgb(DIM)).child(if headings.is_empty() {
-            "Required headings: none".to_string()
-        } else {
-            format!("Required headings: {}", headings.join(", "))
-        }))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(th.dim))
+                .child(if headings.is_empty() {
+                    "Required headings: none".to_string()
+                } else {
+                    format!("Required headings: {}", headings.join(", "))
+                }),
+        )
         .child(
             div()
                 .flex()
-                .gap_2()
-                .child(chip("template-save", "Save").on_click(cx.listener(|this, _, _, cx| {
-                    update(cx, this, |t, w| t.save(w));
-                    cx.notify();
-                })))
-                .child(chip("template-cancel", "Cancel").on_click(cx.listener(|_, _, _, cx| {
-                    cx.global_mut::<Templates>().cancel();
-                    cx.notify();
-                })))
+                .gap(px(8.))
+                .items_center()
+                .child(
+                    chip("template-save", "Save template", Kind::Primary).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            update(cx, this, |t, w| t.save(w));
+                            cx.notify();
+                        },
+                    )),
+                )
+                .child(
+                    chip("template-cancel", "Cancel", Kind::Secondary).on_click(cx.listener(
+                        |_, _, _, cx| {
+                            cx.global_mut::<Templates>().cancel();
+                            cx.notify();
+                        },
+                    )),
+                )
                 .children(create.then(|| {
-                    chip(
-                        "template-overwrite",
-                        if overwrite { "Overwrite existing: on" } else { "Overwrite existing: off" },
-                    )
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        if let Some(d) = cx.global_mut::<Templates>().draft.as_mut() {
-                            d.overwrite = !d.overwrite;
-                        }
-                        cx.notify();
-                    }))
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.))
+                        .ml(px(8.))
+                        .text_size(px(13.))
+                        .child(kit::toggle("template-overwrite", overwrite).on_click(
+                            cx.listener(|_, _, _, cx| {
+                                if let Some(d) = cx.global_mut::<Templates>().draft.as_mut() {
+                                    d.overwrite = !d.overwrite;
+                                }
+                                cx.notify();
+                            }),
+                        ))
+                        .child("Overwrite existing")
                 })),
         )
-        .child(div().text_sm().text_color(rgb(DIM)).child(
-            "Tab: next field · Enter: newline in prompt · Ctrl/Cmd+Enter or Ctrl/Cmd+S: save · Esc: cancel",
-        ))
+        .child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(th.faint))
+                .child(
+                    "Tab: next field · Enter: newline in prompt · Ctrl/Cmd+Enter or Ctrl/Cmd+S: save · Esc: cancel",
+                ),
+        )
 }
 
 #[cfg(test)]

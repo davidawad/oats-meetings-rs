@@ -203,8 +203,17 @@ pub struct Ui {
     pub show_elapsed: bool,
     pub speaker_width: u32,
     pub start_hidden: bool,
+    pub theme: Theme,
     pub tick: Dur,
     pub tz: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    System,
+    Dark,
+    Light,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

@@ -265,16 +265,6 @@ const TRUE_CONSTANTS: &[(&str, &str, &str)] = &[
         "UTF8",
         "CoreFoundation kCFStringEncodingUTF8",
     ),
-    ("crates/ui/src/view.rs", "BG", "colour palette"),
-    ("crates/ui/src/view.rs", "PANEL", "colour palette"),
-    ("crates/ui/src/view.rs", "FG", "colour palette"),
-    ("crates/ui/src/view.rs", "DIM", "colour palette"),
-    ("crates/ui/src/view.rs", "ACCENT", "colour palette"),
-    ("crates/ui/src/view.rs", "ERR", "colour palette"),
-    ("crates/ui/src/view.rs", "WARN", "colour palette"),
-    ("crates/ui/src/view.rs", "REC_RED", "colour palette"),
-    ("crates/ui/src/view.rs", "PAUSE_AMBER", "colour palette"),
-    ("crates/ui/src/view.rs", "OK_GREEN", "colour palette"),
 ];
 
 fn numeric_consts(prod: &str) -> Vec<(usize, String)> {

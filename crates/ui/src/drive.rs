@@ -123,7 +123,7 @@ pub const OPS: &[(&str, &str, &str)] = &[
     (
         "models.select",
         "model",
-        "Pick a catalog model in the dropdown (sets the default; downloads it when auto_download and network.allow)",
+        "Pick a catalog model (its row's radio; sets the default, downloads it when auto_download and network.allow)",
     ),
     ("models.use", "model", "Use a catalog model (the row's Use button)"),
     ("models.download", "model", "Download a catalog model"),
@@ -368,7 +368,6 @@ impl MainWindow {
             }
             "models.select" => {
                 let model = need(args, op, "model")?.to_string();
-                cx.default_global::<models::Picker>().open = false;
                 models::select(self, &model);
             }
             "models.use" | "models.download" | "models.delete" => {
@@ -562,7 +561,13 @@ impl MainWindow {
                     "rows": l.rows.iter().map(|r| json!({
                         "id": r.id,
                         "name": r.name,
-                        "facts": r.facts,
+                        "facts": r.facts(),
+                        "size": r.size,
+                        "wer": r.wer,
+                        "speed": r.speed,
+                        "languages": r.languages,
+                        "runtime": r.runtime,
+                        "percent": r.percent,
                         "status": r.status,
                         "selected": r.selected,
                         "can_use": r.can_use,
@@ -583,6 +588,7 @@ impl MainWindow {
         json!({
             "tab": st.tab.label(),
             "tabs": Tab::shown().into_iter().map(Tab::label).collect::<Vec<_>>(),
+            "theme": self.theme.name(),
             "status": st.status,
             "banner": st.stt_problem.as_ref().map(|p| json!({"message": p.message, "fix": p.fix})),
             "recording": {
@@ -594,6 +600,7 @@ impl MainWindow {
                 "pause_label": controls.pause_label,
                 "stop": controls.stop,
                 "shown": cfg.config.ui.record_controls,
+                "chrome": crate::view::chrome(&st.rec),
             },
             "edit": edit,
             "view": view,

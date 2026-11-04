@@ -158,6 +158,7 @@ pub const ICS_ALL_DAY: &[&str] = &["include", "exclude"];
 pub const DELETE_MODES: &[&str] = &["trash", "remove"];
 pub const SECRETS_BACKENDS: &[&str] = &["env", "keyring", "env-then-keyring"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
+pub const UI_THEMES: &[&str] = &["system", "dark", "light"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
 pub const KEYS: &[Key] = &[
@@ -389,7 +390,7 @@ pub const KEYS: &[Key] = &[
         path: "ui.record_controls",
         kind: Kind::Bool,
         default: Def::B(true),
-        doc: "Show the Start, Pause / Resume and Stop buttons and the recording badge in the main window.",
+        doc: "Show the record strip (state, clock, level meters, Start, Pause / Resume and Stop) on the Live tab.",
         ui: true,
         reload: Reload::Live,
     },
@@ -397,7 +398,7 @@ pub const KEYS: &[Key] = &[
         path: "ui.show_elapsed",
         kind: Kind::Bool,
         default: Def::B(true),
-        doc: "Show the elapsed recording time in the recording badge.",
+        doc: "Show the elapsed recording time (the record strip clock and the recording badge).",
         ui: true,
         reload: Reload::Live,
     },
@@ -422,6 +423,14 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Int { min: 40, max: 400 },
         default: Def::I(96),
         doc: "Width in pixels of the speaker column in transcript views.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ui.theme",
+        kind: Kind::Enum(UI_THEMES),
+        default: Def::S("system"),
+        doc: "Window colours: dark (ink blue), light (paper), or system to follow the OS appearance.",
         ui: true,
         reload: Reload::Live,
     },

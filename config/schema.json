@@ -1275,14 +1275,14 @@
         },
         "record_controls": {
           "default": true,
-          "description": "Show the Start, Pause / Resume and Stop buttons and the recording badge in the main window.",
+          "description": "Show the record strip (state, clock, level meters, Start, Pause / Resume and Stop) on the Live tab.",
           "type": "boolean",
           "x-reload": "live",
           "x-ui": true
         },
         "show_elapsed": {
           "default": true,
-          "description": "Show the elapsed recording time in the recording badge.",
+          "description": "Show the elapsed recording time (the record strip clock and the recording badge).",
           "type": "boolean",
           "x-reload": "live",
           "x-ui": true
@@ -1301,6 +1301,18 @@
           "description": "Start with the main window closed (tray / ctl window-show opens it); off opens it at launch.",
           "type": "boolean",
           "x-reload": "lock",
+          "x-ui": true
+        },
+        "theme": {
+          "default": "system",
+          "description": "Window colours: dark (ink blue), light (paper), or system to follow the OS appearance.",
+          "enum": [
+            "system",
+            "dark",
+            "light"
+          ],
+          "type": "string",
+          "x-reload": "live",
           "x-ui": true
         },
         "tick": {

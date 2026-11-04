@@ -43,6 +43,21 @@ impl Tab {
             .collect()
     }
 
+    /// The left rail: the daily tabs, then (below a divider) the setup tabs. Trash is not in the
+    /// rail; it is the "Recently deleted" view under Sessions (still `ui-select`able as a tab).
+    pub const RAIL: [&'static [Tab]; 2] = [
+        &[Tab::Live, Tab::Sessions, Tab::Notes],
+        &[Tab::Templates, Tab::Calendar, Tab::Models, Tab::Settings],
+    ];
+
+    /// The rail entry lit for this tab: Trash lives under Sessions.
+    pub fn rail(self) -> Tab {
+        match self {
+            Tab::Trash => Tab::Sessions,
+            t => t,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Tab::Live => "Live",
@@ -146,6 +161,29 @@ pub fn fmt_elapsed(ms: u64) -> String {
         format!("{h}:{m:02}:{s:02}")
     } else {
         format!("{m:02}:{s:02}")
+    }
+}
+
+/// The record strip's clock: always `HH:MM:SS`.
+pub fn fmt_clock(ms: u64) -> String {
+    let t = ms / 1000;
+    format!("{:02}:{:02}:{:02}", t / 3600, t / 60 % 60, t % 60)
+}
+
+/// The dot on the Live tab: red while recording, amber while paused, none when idle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dot {
+    Rec,
+    Paused,
+}
+
+impl Rec {
+    pub fn dot(&self) -> Option<Dot> {
+        match self {
+            Rec::Idle => None,
+            Rec::Recording { .. } => Some(Dot::Rec),
+            Rec::Paused { .. } => Some(Dot::Paused),
+        }
     }
 }
 
@@ -290,6 +328,9 @@ pub struct State {
     pub devices_note: Option<String>,
     pub status: String,
     pub sessions_ui: crate::views::sessions::Ui,
+    /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
+    /// status line.
+    pub model: Option<(String, String)>,
 }
 
 fn s(v: &Value, k: &str) -> String {
@@ -353,6 +394,17 @@ impl State {
                 })
             });
         self.settings = settings::build(&engine.resolved().flat);
+        self.model = model::dispatch(engine, "stt-model-list", json!({}))
+            .ok()
+            .and_then(|v| {
+                let m = v["models"]
+                    .as_array()?
+                    .iter()
+                    .find(|m| m["selected"].as_bool() == Some(true))?
+                    .clone();
+                let name = m["name"].as_str().or(m["id"].as_str())?.to_string();
+                Some((name, m["runtime"].as_str().unwrap_or_default().to_string()))
+            });
         if let Some(id) = self.selected.clone() {
             self.select(engine, &id);
         }
@@ -983,7 +1035,40 @@ mod tests {
     }
 
     #[test]
+    fn the_rail_holds_every_shown_tab_but_trash_which_lights_sessions() {
+        let rail: Vec<Tab> = Tab::RAIL.iter().flat_map(|g| g.iter().copied()).collect();
+        let mut want = Tab::ALL.to_vec();
+        want.retain(|t| *t != Tab::Trash);
+        assert_eq!(rail, want);
+        assert_eq!(Tab::Trash.rail(), Tab::Sessions);
+        assert_eq!(Tab::Models.rail(), Tab::Models);
+    }
+
+    #[test]
+    fn the_live_dot_follows_the_recorder() {
+        let now = Instant::now();
+        let s = || "a".to_string();
+        assert_eq!(Rec::Idle.dot(), None);
+        let rec = Rec::Recording {
+            session: s(),
+            base_ms: 0,
+            resumed: now,
+        };
+        assert_eq!(rec.dot(), Some(Dot::Rec));
+        assert_eq!(
+            Rec::Paused {
+                session: s(),
+                base_ms: 0
+            }
+            .dot(),
+            Some(Dot::Paused)
+        );
+    }
+
+    #[test]
     fn elapsed_formats() {
+        assert_eq!(fmt_clock(0), "00:00:00");
+        assert_eq!(fmt_clock(3_723_000), "01:02:03");
         assert_eq!(fmt_elapsed(0), "00:00");
         assert_eq!(fmt_elapsed(61_999), "01:01");
         assert_eq!(fmt_elapsed(3_723_000), "1:02:03");

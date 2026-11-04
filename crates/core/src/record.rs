@@ -410,6 +410,13 @@ impl Recorder {
         )
     }
 
+    /// The `(mic, system)` RMS levels of the recording in progress; None when idle or while a
+    /// start or stop holds the recorder (never blocks).
+    pub fn levels(&self) -> Option<(f32, f32)> {
+        let g = self.active.try_lock().ok()?;
+        g.as_ref().map(|a| a.rec.levels())
+    }
+
     pub fn start(
         &self,
         st: &AudioSettings,

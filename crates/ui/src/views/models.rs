@@ -1,16 +1,18 @@
-//! Models tab (Settings > Models): every model in the STT catalog from `stt-model-list`, whatever
-//! runtime runs it (whisper.cpp or sherpa-onnx). At the top, a dropdown of the catalog shows each
-//! model's size, published WER, speed (RTFx) and downloaded state; picking one sets the default
-//! (`config-set stt.local.model`) and, when `stt.local.auto_download` and `network.allow` are both
-//! on, downloads it (`stt-model-fetch`). Below, one row per model with buttons to use it, download
-//! it or delete it (`stt-model-delete`). Nothing is cached here: the list is read on each render,
-//! and every `model-download` event re-renders, so progress stays current.
+//! Models tab: every model in the STT catalog from `stt-model-list`, whatever runtime runs it
+//! (whisper.cpp or sherpa-onnx), as a table with aligned size, WER and speed (RTFx) columns. The
+//! radio picks the default (`config-set stt.local.model`) and, when `stt.local.auto_download` and
+//! `network.allow` are both on, downloads it (`stt-model-fetch`); each row's action column offers
+//! Use, Download (with progress while it runs) or Delete (`stt-model-delete`), and a failed
+//! download shows as an error banner under the table. Nothing is cached here: the list is read on
+//! each render, and every `model-download` event re-renders, so progress stays current.
 
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, Global, SharedString};
+use gpui::{div, prelude::*, px, relative, rgb, AnyElement, Context, FontWeight, SharedString};
 use oats_core::control::engine::Engine;
 use serde_json::{json, Value};
 
-use crate::view::{MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
+use crate::kit::{self, Kind, Size};
+use crate::theme::{self, MONO};
+use crate::view::MainWindow;
 
 /// One model as the view shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,9 +21,19 @@ pub struct ModelRow {
     pub id: String,
     /// Display name.
     pub name: String,
-    /// Size, WER, speed and languages, e.g. `661.2 MB, WER 6.0%, RTFx 6000, en, sherpa-onnx`.
-    pub facts: String,
+    /// Download size, e.g. `661.2 MB`.
+    pub size: String,
+    /// Published word error rate, e.g. `6.0%` (`n/a` when the catalog has none).
+    pub wer: String,
+    /// Speed as a real-time factor, e.g. `6000×` (empty when unpublished).
+    pub speed: String,
+    /// `en`, `en/de`, or `99 languages`.
+    pub languages: String,
+    /// The runtime that runs it: `whisper.cpp`, `sherpa-onnx`.
+    pub runtime: String,
     pub status: String,
+    /// Download progress 0..=100 while downloading, when the size is known.
+    pub percent: Option<u64>,
     pub selected: bool,
     pub present: bool,
     /// This build has the model's runtime.
@@ -49,6 +61,20 @@ impl Listing {
     }
 }
 
+impl ModelRow {
+    /// Size, WER, speed, languages and runtime in one line, e.g.
+    /// `661.2 MB, WER 6.0%, RTFx 6000, en, sherpa-onnx` (the `ui-state` summary).
+    pub fn facts(&self) -> String {
+        let mut f = vec![self.size.clone(), format!("WER {}", self.wer)];
+        if let Some(r) = self.speed.strip_suffix('×') {
+            f.push(format!("RTFx {r}"));
+        }
+        f.push(self.languages.clone());
+        f.push(self.runtime.clone());
+        f.join(", ")
+    }
+}
+
 fn mb(bytes: u64) -> String {
     if bytes >= 1_000_000_000 {
         format!("{:.2} GB", bytes as f64 / 1_000_000_000.0)
@@ -57,26 +83,16 @@ fn mb(bytes: u64) -> String {
     }
 }
 
-fn facts(m: &Value) -> String {
-    let mut f = vec![mb(m["size"].as_u64().unwrap_or(0))];
-    f.push(match m["wer"].as_f64() {
-        Some(w) => format!("WER {w:.1}%"),
-        None => "WER n/a".into(),
-    });
-    if let Some(r) = m["rtfx"].as_f64() {
-        f.push(format!("RTFx {r:.0}"));
-    }
+fn languages(m: &Value) -> String {
     let langs: Vec<&str> = m["languages"]
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
-    f.push(match langs.len() {
+    match langs.len() {
         0 => "?".into(),
         1..=3 => langs.join("/"),
         n => format!("{n} languages"),
-    });
-    f.push(m["runtime"].as_str().unwrap_or("?").to_string());
-    f.join(", ")
+    }
 }
 
 /// Turn an `stt-model-list` reply into rows. Pure, so the button rules are unit-tested.
@@ -96,6 +112,7 @@ pub fn listing(v: &Value) -> Listing {
             let compiled = m["compiled"].as_bool().unwrap_or(true);
             let dl = &m["download"];
             let downloading = dl["state"] == "downloading";
+            let percent = dl["percent"].as_u64().filter(|_| downloading);
             let failed = !present && dl["state"] == "failed";
             let status = if downloading {
                 match dl["percent"].as_u64() {
@@ -127,8 +144,18 @@ pub fn listing(v: &Value) -> Listing {
                     .as_str()
                     .map_or_else(|| id.clone(), str::to_string),
                 id,
-                facts: facts(m),
+                size: mb(m["size"].as_u64().unwrap_or(0)),
+                wer: m["wer"]
+                    .as_f64()
+                    .map_or_else(|| "n/a".into(), |w| format!("{w:.1}%")),
+                speed: m["rtfx"]
+                    .as_f64()
+                    .map(|r| format!("{r:.0}×"))
+                    .unwrap_or_default(),
+                languages: languages(m),
+                runtime: m["runtime"].as_str().unwrap_or("?").to_string(),
                 status,
+                percent,
                 selected,
                 present,
                 compiled,
@@ -222,198 +249,240 @@ pub fn select(w: &mut MainWindow, model: &str) {
     }
 }
 
-/// Whether the model dropdown is open.
-#[derive(Default)]
-pub struct Picker {
-    pub open: bool,
-}
-
-impl Global for Picker {}
-
-fn button(model: &str, op: Op, on: bool, cx: &mut Context<MainWindow>) -> impl IntoElement {
-    let b = div()
-        .id(SharedString::from(format!(
-            "model-{}-{}",
-            op.label().to_lowercase(),
-            model
-        )))
-        .px_3()
-        .rounded_md()
-        .child(op.label());
-    if !on {
-        return b.bg(rgb(PANEL)).text_color(rgb(DIM));
-    }
-    let name = model.to_string();
-    b.cursor_pointer()
-        .bg(rgb(ACCENT))
-        .text_color(rgb(BG))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            apply(this, op, &name);
-            cx.notify();
-        }))
-}
-
-fn state_word(r: &ModelRow) -> &str {
-    if r.present {
-        "downloaded"
-    } else if r.downloading {
-        "downloading"
-    } else {
-        "not downloaded"
-    }
-}
-
-/// The dropdown: a button naming the active model, and when open, one option per catalog model.
-fn picker(l: &Listing, cx: &mut Context<MainWindow>) -> impl IntoElement {
-    let open = cx.try_global::<Picker>().is_some_and(|p| p.open);
-    let current = l.selected().map_or_else(
-        || "none".to_string(),
-        |r| format!("{} ({}; {})", r.name, r.facts, state_word(r)),
-    );
-    let mut col = div().flex().flex_col().flex_none().gap_1().child(
+/// A row's action column: the state badge or button its state calls for, and Delete when the file
+/// is there.
+fn action(r: &ModelRow, cx: &mut Context<MainWindow>) -> impl IntoElement {
+    let t = theme::current();
+    let mut col = div()
+        .w(px(170.))
+        .flex_none()
+        .flex()
+        .flex_col()
+        .items_end()
+        .gap(px(4.));
+    let badge = |label: String, colour: u32| {
         div()
             .flex()
-            .gap_2()
             .items_center()
-            .child(div().text_color(rgb(DIM)).child("Default model"))
-            .child(
-                div()
-                    .id("models-picker")
-                    .flex_1()
-                    .min_w_0()
-                    .px_2()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(rgb(PANEL))
-                    .text_color(rgb(FG))
-                    .child(format!("{current} {}", if open { "▴" } else { "▾" }))
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        let p = cx.default_global::<Picker>();
-                        p.open = !p.open;
-                        cx.notify();
-                    })),
-            ),
-    );
-    if open {
-        for r in &l.rows {
-            let id = r.id.clone();
-            let colour = if r.selected {
-                ACCENT
-            } else if r.compiled {
-                FG
-            } else {
-                DIM
-            };
-            let mut opt = div()
-                .id(SharedString::from(format!("models-pick-{}", r.id)))
-                .flex()
-                .gap_3()
-                .px_2()
-                .rounded_md()
-                .bg(rgb(PANEL))
+            .gap(px(6.))
+            .text_size(px(12.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(rgb(colour))
+            .child(div().size(px(7.)).rounded_full().bg(rgb(colour)))
+            .child(label)
+    };
+    let mut buttons = div().flex().gap(px(6.)).items_center();
+    if r.downloading {
+        col = col.child(badge(
+            match r.percent {
+                Some(p) => format!("Downloading {p}%"),
+                None => "Downloading".into(),
+            },
+            t.accent,
+        ));
+        col = col.child(
+            div()
+                .h(px(4.))
+                .w(px(150.))
+                .rounded(px(2.))
+                .bg(rgb(t.line))
                 .child(
                     div()
-                        .w(px(300.))
-                        .flex_none()
-                        .text_color(rgb(colour))
-                        .child(r.name.clone()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_color(rgb(DIM))
-                        .child(r.facts.clone()),
-                )
-                .child(
-                    div()
-                        .w(px(120.))
-                        .flex_none()
-                        .text_color(rgb(DIM))
-                        .child(state_word(r).to_string()),
-                );
-            if r.compiled {
-                opt = opt
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.default_global::<Picker>().open = false;
-                        select(this, &id);
-                        cx.notify();
-                    }));
-            }
-            col = col.child(opt);
-        }
+                        .h_full()
+                        .rounded(px(2.))
+                        .w(relative(r.percent.unwrap_or(0) as f32 / 100.))
+                        .bg(rgb(t.accent)),
+                ),
+        );
+        return col;
     }
-    col
+    if r.selected && r.present {
+        buttons = buttons.child(badge("In use".into(), t.ok));
+    } else if r.selected {
+        buttons = buttons.child(badge("Default".into(), t.accent));
+    }
+    for (op, on) in [
+        (Op::Use, r.can_use && r.present),
+        (Op::Download, r.can_download),
+        (Op::Delete, r.can_delete && !r.selected),
+    ] {
+        if !on {
+            continue;
+        }
+        let name = r.id.clone();
+        let kind = if op == Op::Delete {
+            Kind::Danger
+        } else {
+            Kind::Secondary
+        };
+        buttons = buttons.child(
+            kit::button(
+                format!("model-{}-{}", op.label().to_lowercase(), r.id),
+                op.label(),
+                kind,
+                Size::Sm,
+                true,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                apply(this, op, &name);
+                cx.notify();
+            })),
+        );
+    }
+    if !r.compiled {
+        buttons = buttons.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(t.faint))
+                .child("Not in this build"),
+        );
+    }
+    col.child(buttons)
+}
+
+fn num(text: impl Into<SharedString>, w: f32) -> gpui::Div {
+    let t = theme::current();
+    div()
+        .w(px(w))
+        .flex_none()
+        .text_right()
+        .font_family(MONO)
+        .text_size(px(12.))
+        .text_color(rgb(t.dim))
+        .child(text.into())
 }
 
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let t = theme::current();
     let l = load(&w.engine);
-    let mut col = div()
+    let head = kit::head("Speech models").child(div().flex_1()).child(
+        div()
+            .text_size(px(12.))
+            .text_color(rgb(t.dim))
+            .child("Runs on this machine. Audio never leaves it."),
+    );
+    let header = div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(14.))
+        .h(px(32.))
+        .px(px(16.))
+        .bg(rgb(t.raised))
+        .border_b_1()
+        .border_color(rgb(t.line))
+        .text_size(px(11.))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(t.faint))
+        .child(div().w(px(22.)).flex_none())
+        .child(div().flex_1().child("Model"))
+        .child(div().w(px(84.)).flex_none().text_right().child("Size"))
+        .child(div().w(px(70.)).flex_none().text_right().child("WER"))
+        .child(div().w(px(80.)).flex_none().text_right().child("Speed"))
+        .child(div().w(px(170.)).flex_none());
+    let mut table = kit::panel().child(header);
+    for r in &l.rows {
+        let id = r.id.clone();
+        let mut name = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .font_weight(if r.selected {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::MEDIUM
+            })
+            .child(r.name.clone());
+        if r.selected {
+            name = name.child(kit::tag("Default", true));
+        }
+        let mut row = kit::row(format!("model-{}", r.id), r.selected)
+            .h(px(64.))
+            .child(div().w(px(22.)).flex_none().child(kit::radio(r.selected)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(2.))
+                    .child(name)
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(if r.failed { t.err } else { t.dim }))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(format!("{} · {} · {}", r.languages, r.runtime, r.status)),
+                    ),
+            )
+            .child(num(r.size.clone(), 84.))
+            .child(num(r.wer.clone(), 70.))
+            .child(num(r.speed.clone(), 80.))
+            .child(action(r, cx));
+        // The row (its radio) picks the default, as the old dropdown did.
+        if r.compiled && !r.selected {
+            row = row.on_click(cx.listener(move |this, _, _, cx| {
+                select(this, &id);
+                cx.notify();
+            }));
+        }
+        table = table.child(row);
+    }
+    let mut body = div()
         .id("models")
         .flex()
         .flex_col()
-        .gap_2()
-        .size_full()
+        .gap(px(14.))
+        .flex_1()
+        .min_h_0()
         .overflow_y_scroll()
+        .px(px(28.))
+        .pb(px(22.))
         .child(
             div()
                 .flex_none()
-                .text_color(rgb(DIM))
+                .text_size(px(12.))
+                .text_color(rgb(t.dim))
                 .child(l.header.clone()),
-        )
-        .child(picker(&l, cx));
-    if let Some(n) = &l.note {
-        col = col.child(div().flex_none().text_color(rgb(WARN)).child(n.clone()));
-    }
-    for r in l.rows {
-        let colour = if r.failed {
-            ERR
-        } else if r.downloading {
-            WARN
-        } else {
-            DIM
-        };
-        let name = div()
-            .w(px(300.))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .text_color(rgb(if r.selected { ACCENT } else { FG }))
-                    .child(if r.selected {
-                        format!("{} (active)", r.name)
-                    } else {
-                        r.name.clone()
-                    }),
-            )
-            .child(div().text_color(rgb(DIM)).child(r.facts.clone()));
-        col = col.child(
-            div()
-                .id(SharedString::from(format!("model-{}", r.id)))
-                .flex()
-                .flex_none()
-                .gap_3()
-                .items_center()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .bg(rgb(PANEL))
-                .child(name)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_color(rgb(colour))
-                        .child(r.status.clone()),
-                )
-                .child(button(&r.id, Op::Use, r.can_use, cx))
-                .child(button(&r.id, Op::Download, r.can_download, cx))
-                .child(button(&r.id, Op::Delete, r.can_delete, cx)),
         );
+    if let Some(n) = &l.note {
+        body = body.child(kit::banner(false, "A model file is set.", n.clone()));
     }
-    col.into_any_element()
+    body = body.child(table);
+    for r in l.rows.iter().filter(|r| r.failed) {
+        let id = r.id.clone();
+        let why = r.status.trim_start_matches("download failed: ").to_string();
+        let mut b = kit::banner(
+            true,
+            format!("{} failed to download.", r.name),
+            format!("{why}. Check the network setting and try again."),
+        );
+        if r.can_download {
+            b = b.child(
+                kit::button(
+                    format!("model-retry-{}", r.id),
+                    "Retry",
+                    Kind::Secondary,
+                    Size::Sm,
+                    true,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    apply(this, Op::Download, &id);
+                    cx.notify();
+                })),
+            );
+        }
+        body = body.child(b);
+    }
+    div()
+        .flex()
+        .flex_col()
+        .size_full()
+        .child(head)
+        .child(body)
+        .into_any_element()
 }
 
 #[cfg(test)]
@@ -450,13 +519,29 @@ mod tests {
         assert!(!l.auto_fetch, "network.allow is off");
         let r = &l.rows;
         assert_eq!(r[0].status, "downloaded, 77.7 MB");
-        assert_eq!(r[0].facts, "77.7 MB, WER 12.8%, en, whisper.cpp");
+        assert_eq!(r[0].facts(), "77.7 MB, WER 12.8%, en, whisper.cpp");
+        assert_eq!(
+            (r[0].size.as_str(), r[0].wer.as_str()),
+            ("77.7 MB", "12.8%")
+        );
+        assert_eq!(r[1].percent, Some(42));
         assert!(r[0].can_use && r[0].can_delete && !r[0].can_download);
         assert_eq!(r[1].status, "downloading 42%");
         assert!(r[1].selected && !r[1].can_use && !r[1].can_download && !r[1].can_delete);
         assert_eq!(l.selected().unwrap().id, "base.en");
         assert!(r[2].failed && r[2].status.contains("HTTP 404") && r[2].can_download);
-        assert_eq!(r[3].facts, "661.2 MB, WER 6.0%, RTFx 6000, en, sherpa-onnx");
+        assert_eq!(
+            r[3].facts(),
+            "661.2 MB, WER 6.0%, RTFx 6000, en, sherpa-onnx"
+        );
+        assert_eq!(
+            (r[3].size.as_str(), r[3].wer.as_str(), r[3].speed.as_str()),
+            ("661.2 MB", "6.0%", "6000×")
+        );
+        assert_eq!(
+            (r[3].languages.as_str(), r[3].runtime.as_str()),
+            ("en", "sherpa-onnx")
+        );
         assert!(r[3].can_download && !r[3].can_delete && r[3].can_use);
         assert!(!r[4].can_use && !r[4].can_download);
         assert!(
@@ -502,8 +587,8 @@ mod tests {
         cx.run_until_parked();
         let l = load(&engine);
         assert_eq!(l.rows.len(), oats_core::stt::catalog::all().len());
-        assert!(l.rows.iter().any(|r| r.facts.ends_with("sherpa-onnx")));
-        assert!(l.rows.iter().any(|r| r.facts.ends_with("whisper.cpp")));
+        assert!(l.rows.iter().any(|r| r.runtime == "sherpa-onnx"));
+        assert!(l.rows.iter().any(|r| r.runtime == "whisper.cpp"));
         assert_eq!(
             l.selected().map(|r| r.id.as_str()),
             Some("parakeet-tdt-0.6b-v2"),
@@ -511,12 +596,7 @@ mod tests {
         );
         let tiny = l.rows.iter().find(|r| r.id == "tiny.en").unwrap();
         assert!(tiny.can_delete && tiny.status.contains("downloaded"));
-        // The dropdown opens, and picking an entry makes it the default.
-        view.update(cx, |_, cx| {
-            cx.default_global::<Picker>().open = true;
-            cx.notify();
-        });
-        cx.run_until_parked();
+        // Picking a row makes it the default.
         view.update(cx, |v, cx| {
             select(v, "tiny.en");
             cx.notify();

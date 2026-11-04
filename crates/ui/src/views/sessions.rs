@@ -1,19 +1,23 @@
-//! Sessions tab: the session list (searchable) and the selected session's transcript, with rename,
-//! tag, delete and (for one saved without a transcript) transcribe through the `session-*` actions
-//! `ctl` uses. Text inputs reuse the window's single
-//! `Edit` under the `session:*` paths; `commit` is where Enter / save lands for them.
+//! Sessions tab: the session list (searchable, grouped by day) and the selected session's
+//! transcript, with rename, tag, delete and (for one saved without a transcript) transcribe through
+//! the `session-*` actions `ctl` uses. Where the OS trash can be listed, "Recently deleted" opens
+//! the trash view (`views::trash`). Text inputs reuse the window's single `Edit` under the
+//! `session:*` paths; `commit` is where Enter / save lands for them.
 
 use std::sync::Arc;
 
-use gpui::{div, prelude::*, px, rgb, AnyElement, Context, SharedString, Window};
+use chrono::{DateTime, Duration as Days, Utc};
+use gpui::{div, prelude::*, px, rgb, AnyElement, Context, FontWeight, SharedString, Window};
 use oats_core::config::typed::DeleteMode;
 use oats_core::control::engine::Engine;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+use crate::kit::{self, Icon, Kind, Size};
 use crate::model;
-use crate::state::{Edit, SessionRow, State};
-use crate::view::{edit_text, MainWindow, ACCENT, BG, DIM, ERR, FG, PANEL, WARN};
+use crate::state::{Edit, SessionRow, State, Tab};
+use crate::theme::{self, MONO};
+use crate::view::{edit_text, MainWindow};
 
 pub(crate) const RENAME: &str = "session:rename";
 pub(crate) const TAG: &str = "session:tag";
@@ -230,22 +234,14 @@ pub(crate) fn transcribe(this: &mut MainWindow, id: String, cx: &mut Context<Mai
 fn chip(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
-    colour: u32,
+    kind: Kind,
     cx: &mut Context<MainWindow>,
     f: impl Fn(&mut MainWindow, &mut Window, &mut Context<MainWindow>) + 'static,
 ) -> impl IntoElement {
-    let (id, label): (SharedString, SharedString) = (id.into(), label.into());
+    let id: SharedString = id.into();
     let sel = id.to_string();
-    div()
-        .id(id)
+    kit::button(id, label, kind, Size::Sm, true)
         .debug_selector(|| sel)
-        .px_2()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(rgb(PANEL))
-        .text_color(rgb(colour))
-        .text_sm()
-        .child(label)
         .on_click(cx.listener(move |this, _, window, cx| f(this, window, cx)))
 }
 
@@ -273,34 +269,32 @@ fn input(
     seed: String,
     cx: &mut Context<MainWindow>,
 ) -> AnyElement {
+    let t = theme::current();
     let editing = w.state.edit.as_ref().filter(|e| e.path == path);
     let (text, colour) = match editing {
-        Some(e) => (edit_text(e).into_any_element(), FG),
-        None if shown.is_empty() => (hint.to_string().into_any_element(), DIM),
-        None => (shown.to_string().into_any_element(), FG),
+        Some(e) => (edit_text(e).into_any_element(), t.text),
+        None if shown.is_empty() => (hint.to_string().into_any_element(), t.faint),
+        None => (shown.to_string().into_any_element(), t.text),
     };
-    let mut row = div().flex().gap_1().items_center().child(
-        div()
-            .id(SharedString::from(format!("input-{path}")))
-            .flex_1()
-            .min_w_0()
-            .px_2()
-            .rounded_md()
-            .bg(rgb(PANEL))
-            .border_1()
-            .border_color(rgb(if editing.is_some() { ACCENT } else { PANEL }))
-            .text_color(rgb(colour))
-            .cursor_text()
-            .child(text)
-            .on_click(cx.listener(move |this, _, window, cx| open(this, path, &seed, window, cx))),
-    );
-    // The search filters as it is typed: its only affordance is the clear chip under it.
+    let mut field = kit::field(format!("input-{path}"), editing.is_some())
+        .flex_1()
+        .text_color(rgb(colour))
+        .on_click(cx.listener(move |this, _, window, cx| open(this, path, &seed, window, cx)));
+    if path == SEARCH {
+        field = field.child(kit::icon(Icon::Search, t.dim).size(px(14.)));
+    }
+    let mut row = div()
+        .flex()
+        .gap(px(6.))
+        .items_center()
+        .child(field.child(text));
+    // The search filters as it is typed: its only affordance is the clear chip beside it.
     if editing.is_some() && path != SEARCH {
         row = row
             .child(chip(
                 format!("{path}-save"),
-                "save",
-                FG,
+                "Save",
+                Kind::Primary,
                 cx,
                 |this, _, cx| {
                     commit(&mut this.state, &this.engine);
@@ -309,8 +303,8 @@ fn input(
             ))
             .child(chip(
                 format!("{path}-cancel"),
-                "cancel",
-                FG,
+                "Cancel",
+                Kind::Secondary,
                 cx,
                 |this, _, cx| {
                     this.state.cancel_edit();
@@ -318,9 +312,9 @@ fn input(
                 },
             ));
     }
-    let mut col = div().flex().flex_col().gap_1().flex_none().child(row);
+    let mut col = div().flex().flex_col().gap(px(4.)).flex_none().child(row);
     if let Some(err) = editing.and_then(|e| e.error.clone()) {
-        col = col.child(div().text_sm().text_color(rgb(ERR)).child(err));
+        col = col.child(div().text_size(px(12.)).text_color(rgb(t.err)).child(err));
     }
     col.into_any_element()
 }
@@ -338,10 +332,37 @@ fn title_of(s: &SessionRow) -> String {
     }
 }
 
+/// A session's day heading and start time on the display zone's clock (`ui.tz`): "Today",
+/// "Yesterday", else "Mon, Nov 2". An unparsable start groups under its own text.
+pub(crate) fn day_and_time(
+    started_at: &str,
+    tz: chrono_tz::Tz,
+    now: DateTime<Utc>,
+) -> (String, String) {
+    let Ok(at) = DateTime::parse_from_rfc3339(started_at) else {
+        return (
+            started_at.get(..10).unwrap_or("Undated").to_string(),
+            String::new(),
+        );
+    };
+    let at = at.with_timezone(&tz);
+    let today = now.with_timezone(&tz).date_naive();
+    let day = at.date_naive();
+    let label = if day == today {
+        "Today".to_string()
+    } else if Some(day) == today.checked_sub_signed(Days::days(1)) {
+        "Yesterday".to_string()
+    } else {
+        at.format("%a, %b %-d %Y").to_string()
+    };
+    (label, at.format("%H:%M").to_string())
+}
+
 fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let t = theme::current();
     let q = query(&w.state).to_string();
     let rows = visible(&w.state);
-    let mut search = div().flex().flex_col().gap_1().flex_none().child(input(
+    let mut search = div().flex().flex_col().gap(px(6.)).flex_none().child(input(
         w,
         SEARCH,
         &q,
@@ -353,80 +374,141 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         search = search.child(
             div()
                 .flex()
-                .gap_2()
+                .gap(px(8.))
                 .items_center()
-                .text_sm()
-                .text_color(rgb(DIM))
+                .text_size(px(12.))
+                .text_color(rgb(t.dim))
                 .child(format!("{} of {}", rows.len(), w.state.sessions.len()))
-                .child(chip("search-clear", "clear", FG, cx, |this, _, cx| {
-                    if this.state.edit.as_ref().is_some_and(|e| e.path == SEARCH) {
-                        this.state.cancel_edit();
-                    }
-                    this.state.sessions_ui.query.clear();
-                    cx.notify();
-                })),
+                .child(chip(
+                    "search-clear",
+                    "Clear",
+                    Kind::Secondary,
+                    cx,
+                    |this, _, cx| {
+                        if this.state.edit.as_ref().is_some_and(|e| e.path == SEARCH) {
+                            this.state.cancel_edit();
+                        }
+                        this.state.sessions_ui.query.clear();
+                        cx.notify();
+                    },
+                )),
         );
     }
-    let empty = if w.state.sessions.is_empty() {
-        "No sessions yet."
-    } else {
-        "No session matches."
-    };
-    let items = div()
+    let words: Vec<String> = q
+        .split_whitespace()
+        .map(|w| w.trim_start_matches('#').to_lowercase())
+        .collect();
+    let tz = crate::views::calendar::display_zone(&w.engine);
+    let now = Utc::now();
+    let mut items = div()
         .id("sessions")
         .flex()
         .flex_col()
-        .gap_1()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
-        .when(rows.is_empty(), |d| {
-            d.child(div().text_color(rgb(DIM)).child(empty))
-        })
-        .children(rows.into_iter().map(|s| {
-            let id = s.id.clone();
-            let sel = w.state.selected.as_deref() == Some(s.id.as_str());
-            let mut label = format!("{}  ({} lines)", title_of(s), s.utterances);
-            if !s.tags.is_empty() {
-                label.push_str(&format!("  #{}", s.tags.join(" #")));
+        .overflow_y_scroll();
+    if rows.is_empty() {
+        items = items.child(if w.state.sessions.is_empty() {
+            kit::empty(
+                "No sessions yet",
+                "Record on the Live tab; each recording is saved here.",
+            )
+        } else {
+            kit::empty(
+                "No session matches",
+                "Try fewer words, or clear the search.",
+            )
+        });
+    }
+    // Rows come newest first, so one pass groups them by day.
+    let mut group: Option<(String, gpui::Div)> = None;
+    for s in rows {
+        let (day, time) = day_and_time(&s.started_at, tz, now);
+        if group.as_ref().is_none_or(|(d, _)| *d != day) {
+            if let Some((d, panel)) = group.take() {
+                items = items.child(kit::section(d)).child(panel);
             }
-            let snip = w.state.sessions_ui.hits.get(&s.id).cloned();
-            div()
-                .id(SharedString::from(format!("session-{}", s.id)))
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .bg(rgb(if sel { ACCENT } else { PANEL }))
-                .text_color(rgb(if sel { BG } else { FG }))
-                .child(label)
-                .when_some(snip, |d, snip| {
-                    d.child(
+            group = Some((day, kit::panel()));
+        }
+        let id = s.id.clone();
+        let sel = w.state.selected.as_deref() == Some(s.id.as_str());
+        let snip = w
+            .state
+            .sessions_ui
+            .hits
+            .get(&s.id)
+            .cloned()
+            .unwrap_or_else(|| format!("{} lines · {}", s.utterances, s.id));
+        let row = kit::row(format!("session-{}", s.id), sel)
+            .h(px(60.))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(1.))
+                    .child(
                         div()
-                            .text_sm()
-                            .text_color(rgb(if sel { BG } else { DIM }))
-                            .child(snip),
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(title_of(s)),
                     )
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this
-                        .state
-                        .edit
-                        .as_ref()
-                        .is_some_and(|e| e.path != SEARCH && is_ours(e.path))
-                    {
-                        this.state.cancel_edit();
-                    }
-                    this.state.sessions_ui.confirm = None;
-                    this.state.select(&this.engine, &id);
-                    cx.notify();
-                }))
-        }));
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(t.dim))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(snip),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(px(5.))
+                    .children(s.tags.iter().map(|tag| {
+                        let hit = words
+                            .iter()
+                            .any(|w| !w.is_empty() && tag.to_lowercase().contains(w));
+                        kit::tag(tag.clone(), hit)
+                    })),
+            )
+            .child(
+                kit::mono(time)
+                    .flex_none()
+                    .text_size(px(12.))
+                    .text_color(rgb(t.dim)),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this
+                    .state
+                    .edit
+                    .as_ref()
+                    .is_some_and(|e| e.path != SEARCH && is_ours(e.path))
+                {
+                    this.state.cancel_edit();
+                }
+                this.state.sessions_ui.confirm = None;
+                this.state.select(&this.engine, &id);
+                cx.notify();
+            }));
+        if let Some((_, panel)) = group.as_mut() {
+            *panel = std::mem::replace(panel, div()).child(row);
+        }
+    }
+    if let Some((d, panel)) = group {
+        items = items.child(kit::section(d)).child(panel);
+    }
     div()
         .flex()
         .flex_col()
-        .gap_2()
-        .w(px(300.))
+        .gap(px(8.))
+        .w(px(400.))
         .flex_none()
         .child(search)
         .child(items)
@@ -445,29 +527,31 @@ pub fn delete_label(mode: DeleteMode) -> &'static str {
 
 /// Title, rename, tags and delete for the selected session.
 fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyElement {
+    let t = theme::current();
     let cfg = w.engine.snapshot();
     let del_label = delete_label(cfg.config.sessions.delete_mode);
     let armed = w.state.sessions_ui.confirm.as_deref() == Some(s.id.as_str());
     let (id, id2) = (s.id.clone(), s.id.clone());
     let mut actions = div()
         .flex()
-        .gap_2()
+        .flex_wrap()
+        .gap(px(8.))
         .items_center()
-        .child(chip("session-rename", "Rename", FG, cx, {
+        .child(chip("session-rename", "Rename", Kind::Secondary, cx, {
             let seed = s.title.clone();
             move |this, window, cx| open(this, RENAME, &seed, window, cx)
         }))
         .child(chip(
             "session-tag-add",
-            "+ Tag",
-            FG,
+            "Tag",
+            Kind::Secondary,
             cx,
             |this, window, cx| open(this, TAG, "", window, cx),
         ))
         .child(chip(
             "session-delete",
             if armed { "Confirm" } else { del_label },
-            if armed { ERR } else { WARN },
+            Kind::Danger,
             cx,
             move |this, _, cx| {
                 delete(&mut this.state, &this.engine, &id);
@@ -484,7 +568,7 @@ fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyEl
             } else {
                 "Transcribe"
             },
-            ACCENT,
+            Kind::Primary,
             cx,
             move |this, _, cx| transcribe(this, sid.clone(), cx),
         ));
@@ -494,21 +578,22 @@ fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyEl
             .child(
                 div()
                     .debug_selector(|| "delete-confirm-text".into())
-                    .text_sm()
-                    .text_color(rgb(ERR))
+                    .text_size(px(13.))
+                    .text_color(rgb(t.err))
                     .child(confirm_text(del_label, s)),
             )
             .children((!s.title.is_empty()).then(|| {
                 div()
                     .debug_selector(|| "delete-confirm-id".into())
-                    .text_sm()
-                    .text_color(rgb(DIM))
+                    .font_family(MONO)
+                    .text_size(px(12.))
+                    .text_color(rgb(t.dim))
                     .child(format!("({id2})"))
             }))
             .child(chip(
                 "session-delete-cancel",
-                "cancel",
-                FG,
+                "Cancel",
+                Kind::Secondary,
                 cx,
                 |this, _, cx| {
                     this.state.sessions_ui.confirm = None;
@@ -519,37 +604,41 @@ fn manage(w: &MainWindow, s: &SessionRow, cx: &mut Context<MainWindow>) -> AnyEl
     let tags = div()
         .flex()
         .flex_wrap()
-        .gap_1()
-        .children(s.tags.iter().map(|t| {
-            let (sid, tag) = (s.id.clone(), t.clone());
-            chip(
-                format!("tag-{}-{t}", s.id),
-                format!("#{t}  x"),
-                ACCENT,
-                cx,
-                move |this, _, cx| {
+        .gap(px(5.))
+        .children(s.tags.iter().map(|tg| {
+            let (sid, tag) = (s.id.clone(), tg.clone());
+            let sel = format!("tag-{}-{tg}", s.id);
+            div()
+                .id(SharedString::from(sel.clone()))
+                .debug_selector(|| sel)
+                .cursor_pointer()
+                .child(kit::tag(format!("{tg}  ×"), true))
+                .on_click(cx.listener(move |this, _, _, cx| {
                     untag(&mut this.state, &this.engine, &sid, &tag);
                     cx.notify();
-                },
-            )
+                }))
         }));
     let editing = w.state.edit.as_ref().map(|e| e.path);
     let mut col = div()
         .flex()
         .flex_col()
-        .gap_2()
+        .gap(px(10.))
         .flex_none()
         .child(
             div()
                 .flex()
-                .gap_3()
-                .items_center()
-                .child(div().text_color(rgb(ACCENT)).child(title_of(s)))
+                .flex_col()
+                .gap(px(2.))
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(rgb(DIM))
-                        .child(format!("{}  {}", s.id, s.started_at)),
+                        .text_size(px(18.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title_of(s)),
+                )
+                .child(
+                    kit::mono(format!("{}  ·  {}", s.id, s.started_at))
+                        .text_size(px(12.))
+                        .text_color(rgb(t.dim)),
                 ),
         )
         .child(actions)
@@ -577,32 +666,54 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         .as_deref()
         .and_then(|id| w.state.sessions.iter().find(|s| s.id == id))
         .cloned();
-    let mut detail = div().flex().flex_col().gap_2().flex_1().min_w_0();
+    let mut head = kit::head("Sessions").child(div().flex_1());
+    if Tab::shown().contains(&Tab::Trash) {
+        head = head.child(
+            kit::button(
+                "sessions-trash",
+                "Recently deleted",
+                Kind::Secondary,
+                Size::Md,
+                true,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.switch_tab(Tab::Trash, cx))),
+        );
+    }
+    let mut detail = div().flex().flex_col().gap(px(12.)).flex_1().min_w_0();
     if let Some(s) = &selected {
         detail = detail.child(manage(w, s, cx));
     }
-    detail = detail.child(
-        div()
-            .id("transcript")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(MainWindow::lines(
-                &w.state.transcript,
-                if w.state.selected.is_some() {
-                    "Empty transcript."
-                } else {
-                    "Select a session."
-                },
-                w.speaker_width(),
-            )),
-    );
+    let transcript = div()
+        .id("transcript")
+        .flex_1()
+        .min_h_0()
+        .overflow_y_scroll()
+        .py(px(8.));
+    let transcript = if w.state.selected.is_none() {
+        transcript.child(kit::empty(
+            "Select a session",
+            "Pick one on the left to read its transcript.",
+        ))
+    } else {
+        transcript.child(MainWindow::lines(
+            &w.state.transcript,
+            "Empty transcript.",
+            w.speaker_width(),
+        ))
+    };
+    detail = detail.child(kit::panel().flex_1().min_h_0().child(transcript));
     div()
         .flex()
-        .gap_4()
+        .flex_col()
         .size_full()
-        .child(list(w, cx))
-        .child(detail)
+        .child(head)
+        .child(
+            kit::pad()
+                .flex_row()
+                .gap(px(22.))
+                .child(list(w, cx))
+                .child(detail),
+        )
         .into_any_element()
 }
 
@@ -897,6 +1008,33 @@ mod tests {
             "a trash button the app cannot undo has no Trash tab, and vice versa"
         );
         assert_eq!(delete_label(DeleteMode::Remove), "Delete");
+    }
+
+    #[test]
+    fn rows_group_under_today_yesterday_or_their_date_on_the_display_clock() {
+        let now = DateTime::parse_from_rfc3339("2026-11-04T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let utc = chrono_tz::Tz::UTC;
+        assert_eq!(
+            day_and_time("2026-11-04T09:30:00Z", utc, now),
+            ("Today".into(), "09:30".into())
+        );
+        assert_eq!(
+            day_and_time("2026-11-03T23:00:00Z", utc, now).0,
+            "Yesterday"
+        );
+        // 02:00Z on the 4th is still the 3rd in New York.
+        let ny = chrono_tz::America::New_York;
+        assert_eq!(
+            day_and_time("2026-11-04T02:00:00Z", ny, now),
+            ("Yesterday".into(), "21:00".into())
+        );
+        assert_eq!(
+            day_and_time("2026-10-27T10:00:00Z", utc, now).0,
+            "Tue, Oct 27 2026"
+        );
+        assert_eq!(day_and_time("", utc, now).0, "Undated");
     }
 
     #[test]

@@ -211,7 +211,8 @@ fn reconcile(want: bool, open: bool, raise: bool, activate_on_show: bool) -> Rec
 
 /// The main window's options. Shown either way; key (and so app-activating) only when `focus`.
 pub fn window_options(cx: &App, focus: bool) -> WindowOptions {
-    let want = size(px(960.), px(640.));
+    // The design's frame (docs/design/drafting-table): 1100x720, never below 860x560.
+    let want = size(px(1100.), px(720.));
     let mut bounds = Bounds::centered(None, want, cx);
     // A display that reports no visible area yet would clamp the window to 0x0 (dot-4uzgol.56).
     if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
@@ -221,6 +222,7 @@ pub fn window_options(cx: &App, focus: bool) -> WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // Wayland app_id / X11 WM_CLASS; matches packaging/linux/*.desktop StartupWMClass.
         app_id: Some(APP_ID.to_string()),
+        window_min_size: Some(size(px(860.), px(560.))),
         show: true,
         focus,
         ..Default::default()
@@ -430,39 +432,42 @@ pub fn run_with(
         lock: Some(handle.instance_lock()),
     }));
     let h2 = Rc::clone(&host);
-    gpui_platform::application().run(move |cx: &mut App| {
-        cx.set_quit_mode(QuitMode::Explicit);
-        cx.bind_keys(bindings(cx));
-        cx.set_menus(menus(capture_supported));
-        let eng = Arc::clone(&h2.borrow().engine);
-        cx.on_action(move |a: &Do, cx: &mut App| {
-            // Off the UI thread: a record-start loads the ASR model and must not freeze the window.
-            let (eng, id) = (Arc::clone(&eng), a.id.clone());
-            cx.background_executor()
-                .spawn(async move {
-                    if let Err(e) = model::dispatch(&eng, &id, json!({})) {
-                        if e.code != "not_implemented" {
-                            oats_core::elog!("oats-meetings-rs: {id}: {e}");
+    gpui_platform::application()
+        .with_assets(crate::kit::Assets)
+        .run(move |cx: &mut App| {
+            cx.set_quit_mode(QuitMode::Explicit);
+            crate::theme::load_fonts(cx);
+            cx.bind_keys(bindings(cx));
+            cx.set_menus(menus(capture_supported));
+            let eng = Arc::clone(&h2.borrow().engine);
+            cx.on_action(move |a: &Do, cx: &mut App| {
+                // Off the UI thread: a record-start loads the ASR model and must not freeze the window.
+                let (eng, id) = (Arc::clone(&eng), a.id.clone());
+                cx.background_executor()
+                    .spawn(async move {
+                        if let Err(e) = model::dispatch(&eng, &id, json!({})) {
+                            if e.code != "not_implemented" {
+                                oats_core::elog!("oats-meetings-rs: {id}: {e}");
+                            }
                         }
-                    }
-                })
-                .detach();
+                    })
+                    .detach();
+            });
+            // Show the window through the engine so `window-changed` and the control API agree.
+            if !h2.borrow().engine.snapshot().config.ui.start_hidden {
+                h2.borrow_mut().launch_show = true;
+                let _ = model::dispatch(&h2.borrow().engine, "window-show", json!({}));
+            }
+            let h3 = Rc::clone(&h2);
+            cx.spawn(async move |cx: &mut AsyncApp| loop {
+                // ui.tick is read each round, so a reload changes the cadence at once.
+                let every = h3.borrow().engine.snapshot().config.ui.tick.as_duration();
+                cx.background_executor().timer(every).await;
+                cx.update(|cx| tick(&h3, cx));
+            })
+            .detach();
+            // No cx.activate here: the app never takes focus on its own (dot-4uzgol.54).
         });
-        // Show the window through the engine so `window-changed` and the control API agree.
-        if !h2.borrow().engine.snapshot().config.ui.start_hidden {
-            h2.borrow_mut().launch_show = true;
-            let _ = model::dispatch(&h2.borrow().engine, "window-show", json!({}));
-        }
-        let h3 = Rc::clone(&h2);
-        cx.spawn(async move |cx: &mut AsyncApp| loop {
-            // ui.tick is read each round, so a reload changes the cadence at once.
-            let every = h3.borrow().engine.snapshot().config.ui.tick.as_duration();
-            cx.background_executor().timer(every).await;
-            cx.update(|cx| tick(&h3, cx));
-        })
-        .detach();
-        // No cx.activate here: the app never takes focus on its own (dot-4uzgol.54).
-    });
     engine.set_ui(None);
     handle.shutdown();
     watchdog.cancel();
