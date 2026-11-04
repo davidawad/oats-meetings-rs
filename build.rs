@@ -3,9 +3,12 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=assets/icon/derived/oats-meetings-rs.ico");
-    // macOS: the Swift runtime for screencapturekit (see crates/audio/build.rs).
+    // macOS: the Swift runtime for screencapturekit (see crates/audio/build.rs), and @loader_path
+    // for the sherpa-onnx dylibs copied beside the binary (crates/core/Cargo.toml). Link args do not
+    // propagate from a dependency's build.rs, so the binary emits both itself (dot-4uzgol.73).
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     }
     embed();
 }
