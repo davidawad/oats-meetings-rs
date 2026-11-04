@@ -2,6 +2,7 @@
 # macOS only (iconutil, plutil). Proof is dot-4uzgol.15. Usage: make-app.sh <release-binary> <out-dir>
 set -euo pipefail
 [ "$(uname)" = Darwin ] || { echo "make-app: macOS only" >&2; exit 1; }
+# shellcheck source=packaging/macos/sign.sh
 . "$(dirname "$0")/sign.sh"
 bin=$1
 out=$2
