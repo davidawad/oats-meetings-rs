@@ -33,6 +33,14 @@ pub struct EchoSettings {
     /// The adapting filter is reset to the output filter when its residual exceeds this
     /// percentage of the output filter's (`audio.echo_divergence`).
     pub divergence_percent: u32,
+    /// Far-end activity before the filter counts as converged (`audio.echo_warmup`): until
+    /// then it adapts with `warmup_step_permille` and mutes the mic where echo dominates.
+    pub warmup: Duration,
+    /// NLMS step during the warmup, per-mille (`audio.echo_warmup_step`).
+    pub warmup_step_permille: u32,
+    /// During the warmup a mic stretch whose residual is below this percentage of its energy is
+    /// mostly echo and is muted (`audio.echo_dominance`).
+    pub dominance_percent: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -139,6 +147,10 @@ pub struct EchoCanceller {
     fft: Fft,
     step: f32,
     divergence: f32,
+    warmup_step: f32,
+    dominance: f32,
+    /// Reference blocks with sound still to see before the warmup ends.
+    warmup_left: usize,
     /// The last 2b reference samples (overlap-save input).
     x_time: Vec<f32>,
     /// Reference spectra, newest first, one per partition.
@@ -149,6 +161,9 @@ pub struct EchoCanceller {
     /// Tail-averaged residual energy of each path.
     s_fg: f32,
     s_bg: f32,
+    /// Tail-averaged mic energy and adapting-path residual, for the warmup mute.
+    s_mic: f32,
+    s_res: f32,
     ref_in: VecDeque<f32>,
     mic_in: VecDeque<f32>,
     ref_out: VecDeque<f32>,
@@ -169,12 +184,17 @@ impl EchoCanceller {
             fft: Fft::new(n),
             step: s.step_permille as f32 / 1000.0,
             divergence: s.divergence_percent as f32 / 100.0,
+            warmup_step: s.warmup_step_permille.max(s.step_permille) as f32 / 1000.0,
+            dominance: s.dominance_percent as f32 / 100.0,
+            warmup_left: samples(s.warmup).div_ceil(b),
             x_time: vec![0.0; n],
             xf: (0..parts).map(|_| vec![C::default(); n]).collect(),
             fg: (0..parts).map(|_| vec![C::default(); n]).collect(),
             bg: (0..parts).map(|_| vec![C::default(); n]).collect(),
             s_fg: 0.0,
             s_bg: 0.0,
+            s_mic: 0.0,
+            s_res: 0.0,
             ref_in: VecDeque::new(),
             mic_in: std::iter::repeat_n(0.0, delay).collect(),
             ref_out: std::iter::repeat_n(0.0, delay).collect(),
@@ -248,9 +268,28 @@ impl EchoCanceller {
         self.estimate(&self.bg, &mut yb);
         let e_fg: Vec<f32> = d.iter().zip(&yf[b..]).map(|(d, y)| d - y.re).collect();
         let e_bg: Vec<f32> = d.iter().zip(&yb[b..]).map(|(d, y)| d - y.re).collect();
+        let energy = |e: &[f32]| e.iter().map(|v| v * v).sum::<f32>();
+        let a = 1.0 / self.fg.len() as f32;
+
+        // Warmup (dot-4uzgol.75): a fresh filter removes only a few dB of the first far-end
+        // sentence, enough for it to be transcribed as local speech. Until `warmup` of far-end
+        // sound has passed, adapt with the larger step and mute the mic wherever the adapting
+        // filter already explains most of it: echo, not local speech, which the reference
+        // cannot predict. A silent reference predicts nothing, so it never mutes.
+        let warm = self.warmup_left > 0;
+        if warm && energy(&self.x_time[b..]) > 0.0 {
+            self.warmup_left -= 1;
+        }
+        self.s_mic += a * (energy(&d) - self.s_mic);
+        self.s_res += a * (energy(&e_bg) - self.s_res);
+        let mute = warm && self.s_res < self.dominance * self.s_mic;
         let k = self.skip.min(b);
         self.skip -= k;
-        mic_out.extend_from_slice(&e_fg[k..]);
+        if mute {
+            mic_out.extend(std::iter::repeat_n(0.0, b - k));
+        } else {
+            mic_out.extend_from_slice(&e_fg[k..]);
+        }
         ref_out.extend(self.ref_out.drain(..b).skip(k));
         self.emitted += b - k;
 
@@ -258,8 +297,6 @@ impl EchoCanceller {
         // coefficients when it does better by the `divergence` factor, and a background that
         // local speech has pulled worse by that factor is reset to the foreground. Residual
         // energies are averaged over the tail.
-        let energy = |e: &[f32]| e.iter().map(|v| v * v).sum::<f32>();
-        let a = 1.0 / self.fg.len() as f32;
         self.s_fg += a * (energy(&e_fg) - self.s_fg);
         self.s_bg += a * (energy(&e_bg) - self.s_bg);
         if self.s_bg * self.divergence < self.s_fg {
@@ -287,10 +324,11 @@ impl EchoCanceller {
         }
         let mean = norm.iter().sum::<f32>() / n as f32 + n as f32 * f32::EPSILON;
         norm.iter_mut().for_each(|v| *v += mean);
+        let step = if warm { self.warmup_step } else { self.step };
         let g = &mut yb;
         for (w, x) in self.bg.iter_mut().zip(&self.xf) {
             for k in 0..n {
-                let mu = self.step / norm[k];
+                let mu = step / norm[k];
                 let v = x[k].conj_mul(ef[k]);
                 g[k] = C {
                     re: v.re * mu,
@@ -320,6 +358,9 @@ mod tests {
             block: 256,
             step_permille: 500,
             divergence_percent: 200,
+            warmup: Duration::ZERO,
+            warmup_step_permille: 500,
+            dominance_percent: 50,
         }
     }
 
@@ -372,8 +413,12 @@ mod tests {
 
     #[test]
     fn local_sound_unrelated_to_the_reference_is_kept() {
-        // A far-end tone the mic does not hear and a local tone: nothing to cancel.
-        let mut c = EchoCanceller::new(&settings(200, 40));
+        // A far-end tone the mic does not hear and a local tone: nothing to cancel, and nothing
+        // for the warmup to mute.
+        let mut c = EchoCanceller::new(&EchoSettings {
+            warmup: Duration::from_secs(1),
+            ..settings(200, 40)
+        });
         let (mic, far) = (tone(880.0, 96_000), tone(440.0, 96_000));
         let (mut m, mut r) = (vec![], vec![]);
         c.process(&mic, &far, &mut m, &mut r);
@@ -388,7 +433,10 @@ mod tests {
 
     #[test]
     fn silent_reference_leaves_the_mic_alone() {
-        let mut c = EchoCanceller::new(&settings(20, 7));
+        let mut c = EchoCanceller::new(&EchoSettings {
+            warmup: Duration::from_secs(1),
+            ..settings(20, 7)
+        });
         let mic = noise(48_000, 0.3, 3);
         let (mut m, mut r) = (vec![], vec![]);
         c.process(&mic, &vec![0.0; mic.len()], &mut m, &mut r);

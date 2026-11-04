@@ -11,8 +11,11 @@
     "echo_cancel": true,
     "echo_delay": "40ms",
     "echo_divergence": 200,
+    "echo_dominance": 50,
     "echo_step": 500,
     "echo_tail": "200ms",
+    "echo_warmup": "3s",
+    "echo_warmup_step": 1000,
     "layout": "split",
     "mic": {
       "device": "",
@@ -118,6 +121,7 @@
       "url": "https://api.openai.com/v1"
     },
     "echo_overlap": 60,
+    "echo_similarity": 75,
     "echo_window": "1s",
     "feed": "500ms",
     "final": {

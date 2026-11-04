@@ -94,12 +94,17 @@ pub struct Tuning {
 
 /// Speaker echo the canceller left behind (dot-4uzgol.65): a "you" utterance that says what
 /// remote speech said at nearly the same time is the speakers heard by the mic, not the user.
+/// The echo is often misheard ("Oaks meeting" for "Oats Meetings", dot-4uzgol.75), so words
+/// match by spelling similarity, not only exactly.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EchoDedupe {
-    /// `stt.echo_window`, seconds.
+    /// `stt.echo_window` plus `audio.echo_delay`, seconds.
     pub window: f64,
     /// `stt.echo_overlap` as a fraction of the "you" utterance's words.
     pub overlap: f32,
+    /// `stt.echo_similarity` as a fraction: the least letter edit-distance similarity at which
+    /// two words count as the same.
+    pub similarity: f32,
 }
 
 fn samples_of(d: crate::config::typed::Dur) -> usize {
@@ -115,8 +120,9 @@ impl Tuning {
             final_piece_samples: samples_of(c.final_piece).max(1),
             feed_samples: samples_of(c.feed).max(1),
             echo: cfg.audio.echo_cancel.then(|| EchoDedupe {
-                window: c.echo_window.0 as f64 / 1000.0,
+                window: (c.echo_window.0 + cfg.audio.echo_delay.0) as f64 / 1000.0,
                 overlap: c.echo_overlap as f32 / 100.0,
+                similarity: c.echo_similarity as f32 / 100.0,
             }),
         }
     }
@@ -129,7 +135,31 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Enough of `you`'s words are in the `them` utterances within the window around it.
+/// Letter edit-distance similarity of two words: 1 minus the Levenshtein distance over the
+/// longer word's length ("oaks" / "oats" 0.75, "meeting" / "meetings" 0.875).
+fn similarity(a: &str, b: &str) -> f32 {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let longest = a.len().max(b.len());
+    if longest == 0 {
+        return 1.0;
+    }
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let next = (diag + usize::from(ca != cb))
+                .min(row[j] + 1)
+                .min(row[j + 1] + 1);
+            diag = row[j + 1];
+            row[j + 1] = next;
+        }
+    }
+    (longest - row[b.len()]) as f32 / longest as f32
+}
+
+/// Enough of `you`'s words are, or nearly are (`similarity`), in the `them` utterances within
+/// the window around it.
 fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
     let near: std::collections::HashSet<String> = them
         .iter()
@@ -137,7 +167,10 @@ fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
         .flat_map(|t| words(&t.text))
         .collect();
     let w = words(&you.text);
-    let hits = w.iter().filter(|x| near.contains(*x)).count();
+    let hits = w
+        .iter()
+        .filter(|x| near.contains(*x) || near.iter().any(|t| similarity(x, t) >= d.similarity))
+        .count();
     !w.is_empty() && hits as f32 >= d.overlap * w.len() as f32
 }
 
@@ -1653,8 +1686,9 @@ mod tests {
         assert_eq!(
             echo,
             Some(EchoDedupe {
-                window: 1.0,
-                overlap: 0.6
+                window: 1.04,
+                overlap: 0.6,
+                similarity: 0.75,
             })
         );
         let all = vec![
@@ -1687,6 +1721,51 @@ mod tests {
         ];
         assert_eq!(drop_echoes(partial.clone(), "you", strict).len(), 2);
         assert_eq!(drop_echoes(partial, "you", echo).len(), 1); // 3 of 4 words >= 60%
+    }
+
+    #[test]
+    fn words_match_by_letter_edit_distance() {
+        assert_eq!(similarity("oaks", "oats"), 0.75);
+        assert_eq!(similarity("meeting", "meetings"), 0.875);
+        assert_eq!(similarity("testing", "testing"), 1.0);
+        assert_eq!(similarity("monday", "friday"), 0.5);
+        assert_eq!(similarity("", "a"), 0.0);
+        assert_eq!(similarity("a", "i"), 0.0);
+    }
+
+    #[test]
+    fn a_misheard_echo_is_dropped_but_double_talk_is_kept() {
+        // dot-4uzgol.75, carbon session_2026-11-04_20-19-01: the speakers' first sentence came
+        // back on the mic misheard. Exact words matched 1 of 3, below stt.echo_overlap.
+        let echo = tuning_with(&[]).echo;
+        let leak = vec![
+            utt("remote_1", "Testing Oats Meetings.", 5.0),
+            utt("you", "Testing Oaks meeting.", 5.1),
+        ];
+        let kept = drop_echoes(leak.clone(), "you", echo);
+        assert_eq!(kept, leak[..1]);
+        // stt.echo_similarity 100 is the exact-word match that let it through.
+        let exact = tuning_with(&[("stt.echo_similarity", json!(100))]).echo;
+        assert_eq!(drop_echoes(leak, "you", exact).len(), 2);
+        // The user talking over the same sentence with their own words, some of which are
+        // near the remote ones ("meeting", "test"): true double talk, kept.
+        let talk = vec![
+            utt("remote_1", "Testing Oats Meetings.", 5.0),
+            utt("you", "Yes, I can hear the test meeting fine.", 5.2),
+        ];
+        assert_eq!(drop_echoes(talk.clone(), "you", echo), talk);
+        // The near-duplicate long after the remote speech: the user repeating it, kept.
+        let later = vec![
+            utt("remote_1", "Testing Oats Meetings.", 5.0),
+            utt("you", "Testing Oaks meeting.", 20.0),
+        ];
+        assert_eq!(drop_echoes(later.clone(), "you", echo), later);
+        // The window takes audio.echo_delay on top of stt.echo_window.
+        let wide = tuning_with(&[
+            ("stt.echo_window", json!("2s")),
+            ("audio.echo_delay", json!("500ms")),
+        ]);
+        assert_eq!(wide.echo.unwrap().window, 2.5);
     }
 
     fn live_run(tuning: Tuning, them: &[f32]) -> Vec<Utt> {

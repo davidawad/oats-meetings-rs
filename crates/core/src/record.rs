@@ -139,6 +139,9 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
             block: int("audio.echo_block") as usize,
             step_permille: int("audio.echo_step"),
             divergence_percent: int("audio.echo_divergence"),
+            warmup: dur("audio.echo_warmup")?,
+            warmup_step_permille: int("audio.echo_warmup_step"),
+            dominance_percent: int("audio.echo_dominance"),
         })
     } else {
         None
@@ -187,6 +190,9 @@ pub fn settings_of(c: &Config) -> AudioSettings {
             block: c.audio.echo_block as usize,
             step_permille: c.audio.echo_step,
             divergence_percent: c.audio.echo_divergence,
+            warmup: c.audio.echo_warmup.as_duration(),
+            warmup_step_permille: c.audio.echo_warmup_step,
+            dominance_percent: c.audio.echo_dominance,
         }),
     }
 }

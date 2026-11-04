@@ -114,6 +114,9 @@ pub(crate) fn test_settings() -> AudioSettings {
             block: 256,
             step_permille: 500,
             divergence_percent: 200,
+            warmup: Duration::ZERO,
+            warmup_step_permille: 500,
+            dominance_percent: 50,
         }),
         ..AudioSettings::new(Timing {
             open_timeout: Duration::from_secs(15),

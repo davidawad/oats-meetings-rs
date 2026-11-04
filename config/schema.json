@@ -107,6 +107,15 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "echo_dominance": {
+          "default": 50,
+          "description": "Percent: during audio.echo_warmup, mic sound whose echo-cancelled residual is below this share of its energy is mostly speaker echo and is muted; local speech, which system audio cannot predict, stays.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "echo_step": {
           "default": 500,
           "description": "Echo-canceller adaptation step in per-mille (500 = 0.5): larger converges faster, smaller is steadier.",
@@ -127,6 +136,29 @@
           "x-max-ms": 1000,
           "x-min": "10ms",
           "x-min-ms": 10,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_warmup": {
+          "default": "3s",
+          "description": "System-audio sound the echo canceller hears before it counts as converged: until then it adapts with audio.echo_warmup_step and mutes the mic where echo dominates (audio.echo_dominance), so the first remote sentence is not transcribed as you. 0 turns the warmup off.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "0s",
+          "x-min-ms": 0,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_warmup_step": {
+          "default": 1000,
+          "description": "Echo-canceller adaptation step in per-mille during audio.echo_warmup (never below audio.echo_step).",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
           "x-reload": "live",
           "x-ui": false
         },
@@ -924,9 +956,18 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "echo_similarity": {
+          "default": 75,
+          "description": "Percent: a local-speaker word counts as appearing in remote speech (stt.echo_overlap) when its letter edit-distance similarity to a remote word is at least this, so a misheard echo ('Oaks meeting' for 'Oats Meetings') is still dropped. 100 asks for the exact word.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "echo_window": {
           "default": "1s",
-          "description": "With audio.echo_cancel, a local-speaker utterance within this time of remote speech that says the same words is dropped as speaker echo.",
+          "description": "With audio.echo_cancel, a local-speaker utterance within this time (plus audio.echo_delay) of remote speech that says the same, or nearly the same (stt.echo_similarity), words is dropped as speaker echo.",
           "format": "duration",
           "pattern": "^[0-9]+(ms|s|m|h|d)$",
           "type": "string",

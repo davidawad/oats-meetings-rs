@@ -30,6 +30,9 @@ fn settings(delay_ms: u64) -> EchoSettings {
         block: 256,
         step_permille: 500,
         divergence_percent: 200,
+        warmup: Duration::ZERO,
+        warmup_step_permille: 500,
+        dominance_percent: 50,
     }
 }
 
@@ -137,4 +140,68 @@ fn local_speech_survives_while_the_far_end_echo_goes() {
         local_db >= MIN_REDUCTION_DB,
         "local speech only {local_db:.1} dB above the error"
     );
+}
+
+/// `settings` with the shipped warmup (`audio.echo_warmup` 3s, `audio.echo_warmup_step` 1000,
+/// `audio.echo_dominance` 50).
+fn warm(delay_ms: u64) -> EchoSettings {
+    EchoSettings {
+        warmup: Duration::from_secs(3),
+        warmup_step_permille: 1_000,
+        ..settings(delay_ms)
+    }
+}
+
+/// Echo reduction over the first second of far-end speech: the first sentence.
+fn first_second_db(s: &EchoSettings) -> f64 {
+    let far = fixture("them.wav");
+    let echo = room(&far, 12.0);
+    let (out, _) = cancel(&mut EchoCanceller::new(s), &echo, &far);
+    let n = ms(1000.0);
+    10.0 * (energy(&echo[..n]) / energy(&out[..n]).max(f64::MIN_POSITIVE)).log10()
+}
+
+#[test]
+fn a_fresh_filter_leaks_the_first_sentence_and_the_warmup_mutes_it() {
+    // dot-4uzgol.75: the leaked sentence was the first one. A cold filter removes only a few
+    // dB of it, which the recogniser still transcribes as "you".
+    let cold = first_second_db(&settings(40));
+    assert!(
+        cold < MIN_REDUCTION_DB / 2.0,
+        "cold filter already at {cold:.1} dB"
+    );
+    let warmed = first_second_db(&warm(40));
+    eprintln!("first second: cold {cold:.1} dB, warmup {warmed:.1} dB");
+    assert!(
+        warmed >= MIN_REDUCTION_DB,
+        "first sentence reduced by only {warmed:.1} dB with the warmup"
+    );
+}
+
+#[test]
+fn local_speech_over_the_first_sentence_survives_the_warmup() {
+    // Double talk from the first sample: the reference cannot predict local speech, so the
+    // warmup must not mute it.
+    let far = fixture("them.wav");
+    let near = fixture("you.wav");
+    let echo = room(&far, 12.0);
+    let n = far.len().min(near.len());
+    let local: Vec<f32> = near[..n].iter().map(|v| 0.5 * v).collect();
+    let mic: Vec<f32> = echo[..n].iter().zip(&local).map(|(e, l)| e + l).collect();
+    let (out, _) = cancel(&mut EchoCanceller::new(&warm(0)), &mic, &far[..n]);
+    // Every 50 ms of the warmup where the user talks still carries the user's voice.
+    let w = ms(50.0);
+    let span = ms(3000.0).min(n) / w * w;
+    let mean = energy(&local[..span]) / (span / w) as f64;
+    let mut talking = 0;
+    for i in (0..span).step_by(w) {
+        let l = energy(&local[i..i + w]);
+        if l < mean / 10.0 {
+            continue;
+        }
+        talking += 1;
+        let o = energy(&out[i..i + w]);
+        assert!(o >= l / 4.0, "local speech at {i} muted: {o:.4} of {l:.4}");
+    }
+    assert!(talking >= 20, "{talking} talking windows");
 }
