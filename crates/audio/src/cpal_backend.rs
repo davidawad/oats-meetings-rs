@@ -4,15 +4,51 @@
 //! the pod build (symbol lookup error at run time), while the pulse and pipewire backends cover Linux.
 //!
 //! The cpal stream is not `Send`, so it lives on its own thread until stopped.
+//!
+//! Dropping a cpal 0.15 macOS stream does not stop it when cpal registered a disconnect listener
+//! (any device not opened as the default): the listener holds a clone of the stream, so the
+//! AudioUnit outlives every handle and its input callback keeps running with the mic open
+//! (dot-4uzgol.80). Stopping therefore pauses the stream (`AudioOutputUnitStop`) and empties the
+//! `Slot` the callback calls through, so whatever the stream leaks no longer reaches the recorder.
+
+use std::sync::Mutex;
+
+use crate::backend::OnSamples;
+
+/// The callback a stream calls through. `release` drops it (and everything it holds) even when
+/// the stream that shares the slot is never freed; later calls are no-ops.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+pub(crate) struct Slot(Mutex<Option<OnSamples>>);
+
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+impl Slot {
+    pub(crate) fn new(on_samples: OnSamples) -> Self {
+        Self(Mutex::new(Some(on_samples)))
+    }
+
+    pub(crate) fn call(&self, samples: &[f32]) {
+        if let Ok(mut g) = self.0.lock() {
+            if let Some(cb) = g.as_mut() {
+                cb(samples);
+            }
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        let cb = self.0.lock().map(|mut g| g.take());
+        drop(cb);
+    }
+}
 
 #[cfg(any(windows, target_os = "macos"))]
 mod imp {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc, Mutex};
+    use std::sync::{mpsc, Arc};
     use std::thread::JoinHandle;
 
+    use super::Slot;
     use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
     use crate::error::{AudioError, Result};
     use crate::resample::{downmix, Resampler};
@@ -114,7 +150,7 @@ mod imp {
     fn build<T>(
         device: &cpal::Device,
         cfg: &StreamConfig,
-        on_samples: Arc<Mutex<OnSamples>>,
+        on_samples: Arc<Slot>,
     ) -> std::result::Result<cpal::Stream, cpal::BuildStreamError>
     where
         T: SizedSample,
@@ -133,9 +169,7 @@ mod imp {
                 out.clear();
                 rs.push(&mono, &mut out);
                 if !out.is_empty() {
-                    if let Ok(mut cb) = on_samples.lock() {
-                        cb(&out);
-                    }
+                    on_samples.call(&out);
                 }
             },
             |e| {
@@ -201,7 +235,8 @@ mod imp {
             let flag = Arc::clone(&stop);
             let timing = self.timing;
             let (tx, rx) = mpsc::channel::<Result<()>>();
-            let cb = Arc::new(Mutex::new(on_samples));
+            let cb = Arc::new(Slot::new(on_samples));
+            let slot = Arc::clone(&cb);
             let th = std::thread::spawn(move || {
                 let started = (|| -> Result<cpal::Stream> {
                     let host = cpal::default_host();
@@ -210,10 +245,19 @@ mod imp {
                             .map_err(|e| err("backend_unavailable", "cpal outputs", e))?
                             .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
                     } else if cfg!(target_os = "macos") {
-                        // `devices()`, not `input_devices()`: the latter probes every device.
-                        host.devices()
-                            .map_err(|e| err("backend_unavailable", "cpal devices", e))?
-                            .find(|d| d.name().ok().as_deref() == Some(name.as_str()))
+                        // The default device as cpal's default: cpal adds no disconnect listener
+                        // to it, so dropping the stream frees its AudioUnit.
+                        let default = host
+                            .default_input_device()
+                            .filter(|d| d.name().ok().as_deref() == Some(name.as_str()));
+                        match default {
+                            Some(d) => Some(d),
+                            // `devices()`, not `input_devices()`: the latter probes every device.
+                            None => host
+                                .devices()
+                                .map_err(|e| err("backend_unavailable", "cpal devices", e))?
+                                .find(|d| d.name().ok().as_deref() == Some(name.as_str())),
+                        }
                     } else {
                         host.input_devices()
                             .map_err(|e| err("backend_unavailable", "cpal inputs", e))?
@@ -246,7 +290,10 @@ mod imp {
                         }
                     }
                     .map_err(|e| err("capture_failed", &name, e))?;
-                    stream.play().map_err(|e| err("capture_failed", &name, e))?;
+                    if let Err(e) = stream.play() {
+                        let _ = stream.pause();
+                        return Err(err("capture_failed", &name, e));
+                    }
                     Ok(stream)
                 })();
                 match started {
@@ -255,12 +302,17 @@ mod imp {
                         while !flag.load(Ordering::SeqCst) {
                             std::thread::sleep(timing.poll);
                         }
+                        // Pause first: dropping alone may leave the AudioUnit running (see the
+                        // module doc).
+                        let _ = stream.pause();
                         drop(stream);
                     }
                     Err(e) => {
                         let _ = tx.send(Err(e));
                     }
                 }
+                // Started, failed or timed out: nothing the stream leaked may call back.
+                slot.release();
             });
             match rx.recv_timeout(timing.open_timeout) {
                 Ok(Ok(())) => Ok(Box::new(CpalCapture { stop, th: Some(th) })),
@@ -294,3 +346,29 @@ mod imp {
 
 #[cfg(any(windows, target_os = "macos"))]
 pub use imp::CpalBackend;
+
+#[cfg(test)]
+mod slot_tests {
+    use super::Slot;
+    use std::sync::Arc;
+
+    #[test]
+    fn release_frees_the_callback_of_a_stream_that_is_never_dropped() {
+        let held = Arc::new(());
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (h, n) = (Arc::clone(&held), Arc::clone(&calls));
+        let slot = Arc::new(Slot::new(Box::new(move |_: &[f32]| {
+            let _ = &h;
+            n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })));
+        // The stream's copy, kept alive forever as cpal's disconnect listener keeps it.
+        let leaked = Arc::clone(&slot);
+        leaked.call(&[0.0]);
+        slot.release();
+        assert_eq!(Arc::strong_count(&held), 1, "the callback outlived release");
+        leaked.call(&[0.0]);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        slot.release();
+        std::mem::forget(leaked);
+    }
+}

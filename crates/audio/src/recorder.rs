@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
 
 use serde::Serialize;
@@ -44,6 +44,7 @@ struct Shared {
     mic_in: AtomicU64,
     /// False until every capture is open: sources connect at different speeds (a cold `parec` takes
     /// ~2 s), and audio delivered before the last one is up would put the channels out of step.
+    /// Cleared first on stop, so a callback that runs late queues nothing.
     live: AtomicBool,
     paused: AtomicBool,
     stop: AtomicBool,
@@ -158,11 +159,14 @@ pub fn start(
         system_level: AtomicU32::new(0),
     });
     let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Box<dyn Capture>> {
-        let sh = Arc::clone(&shared);
+        // Weak: a backend that never frees its callback (cpal's macOS stream, dot-4uzgol.80)
+        // must not keep the queues alive, or fill them, after the recording is gone.
+        let weak: Weak<Shared> = Arc::downgrade(&shared);
         backend.open(
             kind,
             device,
             Box::new(move |samples: &[f32]| {
+                let Some(sh) = weak.upgrade() else { return };
                 if sh.paused.load(Ordering::SeqCst) || !sh.live.load(Ordering::SeqCst) {
                     return;
                 }
@@ -192,8 +196,14 @@ pub fn start(
                 .map_err(|e| AudioError::new(e.code, format!("microphone: {}", e.message)))?,
         );
     }
+    let mut w = match WavWriter::create(path, layout.channels(), SAMPLE_RATE) {
+        Ok(w) => w,
+        Err(e) => {
+            stop_captures(&shared, &mut captures);
+            return Err(e);
+        }
+    };
     shared.live.store(true, Ordering::SeqCst);
-    let mut w = WavWriter::create(path, layout.channels(), SAMPLE_RATE)?;
     let sh = Arc::clone(&shared);
     let (out_path, channels) = (path.to_path_buf(), layout.channels());
     let poll = settings.timing.poll;
@@ -258,6 +268,16 @@ pub fn start(
     })
 }
 
+/// Close the queues to the callbacks, then stop (and drop) every capture: nothing queues after
+/// this, and no capture keeps a device open.
+fn stop_captures(shared: &Shared, captures: &mut Vec<Box<dyn Capture>>) {
+    shared.live.store(false, Ordering::SeqCst);
+    for c in captures.iter_mut() {
+        c.stop();
+    }
+    captures.clear();
+}
+
 impl Recording {
     pub fn path(&self) -> &Path {
         &self.path
@@ -288,9 +308,7 @@ impl Recording {
     }
 
     pub fn stop(mut self) -> Result<Summary> {
-        for c in &mut self.captures {
-            c.stop();
-        }
+        stop_captures(&self.shared, &mut self.captures);
         self.shared.stop.store(true, Ordering::SeqCst);
         self.writer
             .take()
@@ -303,9 +321,7 @@ impl Recording {
 impl Drop for Recording {
     fn drop(&mut self) {
         // Dropped without `stop` (engine shutdown): finish the file so it stays a valid WAV.
-        for c in &mut self.captures {
-            c.stop();
-        }
+        stop_captures(&self.shared, &mut self.captures);
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(w) = self.writer.take() {
             let _ = w.join();
@@ -460,6 +476,148 @@ mod tests {
         let e = start(&FakeBackend::default(), &st, &p, None).err().unwrap();
         assert_eq!(e.code, "device_not_found");
         assert!(e.message.starts_with("microphone:"));
+    }
+
+    /// A backend whose streams are never freed (cpal's macOS stream, dot-4uzgol.80): it keeps
+    /// every callback forever, and the test plays audio through them after stop.
+    #[derive(Default)]
+    struct Leaky {
+        kept: Arc<Mutex<Vec<crate::backend::OnSamples>>>,
+        opened: Arc<std::sync::atomic::AtomicUsize>,
+        released: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    struct LeakyCapture {
+        released: Arc<std::sync::atomic::AtomicUsize>,
+        done: bool,
+    }
+
+    impl Capture for LeakyCapture {
+        fn stop(&mut self) {
+            if !std::mem::replace(&mut self.done, true) {
+                self.released.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    impl Drop for LeakyCapture {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+
+    impl CaptureBackend for Leaky {
+        fn name(&self) -> &'static str {
+            "leaky"
+        }
+
+        fn list_devices(&self) -> Result<Vec<crate::backend::DeviceInfo>> {
+            Ok(vec![])
+        }
+
+        fn open(
+            &self,
+            _: DeviceKind,
+            device: &str,
+            on: crate::backend::OnSamples,
+        ) -> Result<Box<dyn Capture>> {
+            if device == "nope" {
+                return Err(AudioError::new("device_not_found", "nope"));
+            }
+            self.kept.lock().unwrap().push(on);
+            self.opened.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(LeakyCapture {
+                released: Arc::clone(&self.released),
+                done: false,
+            }))
+        }
+    }
+
+    impl Leaky {
+        fn play(&self) {
+            for cb in self.kept.lock().unwrap().iter_mut() {
+                cb(&[0.25; 480]);
+            }
+        }
+
+        fn all_released(&self) -> bool {
+            self.opened.load(Ordering::SeqCst) == self.released.load(Ordering::SeqCst)
+        }
+    }
+
+    /// Record from `Leaky`, run `between` on the live recording, stop, then keep playing through
+    /// the leaked callbacks: the queues must be freed and every capture released.
+    fn leaky_session(between: impl Fn(&Recording, &Leaky)) {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.wav");
+        let b = Leaky::default();
+        let r = start(&b, &crate::settings::test_settings(), &p, None).unwrap();
+        b.play();
+        between(&r, &b);
+        let shared = Arc::downgrade(&r.shared);
+        r.stop().unwrap();
+        assert!(
+            shared.upgrade().is_none(),
+            "the callbacks keep the queues alive"
+        );
+        assert!(b.all_released(), "a capture was not stopped");
+        b.play();
+        assert!(shared.upgrade().is_none());
+    }
+
+    #[test]
+    fn stop_releases_the_queues_even_when_the_backend_leaks_its_callbacks() {
+        leaky_session(|_, _| {});
+    }
+
+    #[test]
+    fn stop_while_paused_or_after_resume_releases_the_queues() {
+        leaky_session(|r, b| {
+            r.set_paused(true);
+            b.play();
+        });
+        leaky_session(|r, b| {
+            r.set_paused(true);
+            b.play();
+            r.set_paused(false);
+            b.play();
+        });
+    }
+
+    #[test]
+    fn dropping_a_recording_releases_its_captures() {
+        let d = tempfile::tempdir().unwrap();
+        let b = Leaky::default();
+        let r = start(
+            &b,
+            &crate::settings::test_settings(),
+            &d.path().join("a.wav"),
+            None,
+        );
+        let shared = Arc::downgrade(&r.as_ref().unwrap().shared);
+        drop(r);
+        assert!(shared.upgrade().is_none() && b.all_released());
+        b.play();
+    }
+
+    #[test]
+    fn a_failed_start_releases_the_captures_it_opened() {
+        let d = tempfile::tempdir().unwrap();
+        let b = Leaky::default();
+        let st = AudioSettings {
+            mic_device: "nope".into(),
+            ..crate::settings::test_settings()
+        };
+        assert!(start(&b, &st, &d.path().join("a.wav"), None).is_err());
+        assert_eq!(b.opened.load(Ordering::SeqCst), 1, "system opened first");
+        assert!(b.all_released());
+        b.play();
+        // The WAV cannot be created (its path is a directory): both opened captures are stopped.
+        let b = Leaky::default();
+        assert!(start(&b, &crate::settings::test_settings(), d.path(), None).is_err());
+        assert_eq!(b.opened.load(Ordering::SeqCst), 2);
+        assert!(b.all_released());
+        b.play();
     }
 
     #[test]
