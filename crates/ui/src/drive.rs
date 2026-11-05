@@ -604,6 +604,7 @@ impl MainWindow {
             },
             "edit": edit,
             "view": view,
+            "frames": self.frames,
         })
     }
 }

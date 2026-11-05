@@ -173,6 +173,33 @@ pub fn order_front(window: &Window) {
     let _ = window;
 }
 
+/// Ask AppKit to display the window's view on its next display cycle (`setNeedsDisplay:`). GPUI
+/// on macOS draws from a display link that runs only while the window is occlusion-visible; a
+/// window behind other apps' windows (an app launched with `open -g` that never activated) gets no
+/// frames, and screen capture keeps showing its last one (dot-4uzgol.79). AppKit's display
+/// callback (`displayLayer:`) draws a dirty GPUI window without the display link. Elsewhere a
+/// no-op.
+pub fn request_display(window: &Window) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyObject, Bool};
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
+            return;
+        };
+        let RawWindowHandle::AppKit(h) = handle.as_raw() else {
+            return;
+        };
+        // SAFETY: as in `apply_raw`.
+        unsafe {
+            let view = h.ns_view.as_ptr() as *mut AnyObject;
+            let _: () = msg_send![view, setNeedsDisplay: Bool::YES];
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
+}
+
 #[cfg(target_os = "windows")]
 fn apply_raw(handle: RawWindowHandle, plan: Plan) -> Applied {
     use windows::Win32::Foundation::HWND;

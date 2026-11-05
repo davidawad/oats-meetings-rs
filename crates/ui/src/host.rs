@@ -108,6 +108,8 @@ struct Host {
     quitting: bool,
     /// How many times the app took focus (`cx.activate`); only explicit show requests do.
     activations: usize,
+    /// Ticks that asked the platform to display a window GPUI reports not visible (dot-4uzgol.79).
+    nudges: usize,
     /// Released at quit, before `cx.quit()`: on macOS the run loop exits the process and the code
     /// after `run()` never runs (dot-4uzgol.60).
     lock: Option<InstanceLock>,
@@ -362,6 +364,21 @@ fn tick(host: &Shared, cx: &mut App) {
         };
         let _ = r.reply.send(out);
     }
+    // A window GPUI is not presenting (behind other apps' windows, never activated) gets no frame
+    // from the display link: what this tick changed would show only on the next user input. Ask
+    // the platform to display it; GPUI draws only when the view is dirty (dot-4uzgol.79).
+    if let Some(w) = h.window {
+        let hidden = w.update(cx, |_, window, _| {
+            let hidden = !window.is_visible();
+            if hidden {
+                capture::request_display(window);
+            }
+            hidden
+        });
+        if matches!(hidden, Ok(true)) {
+            h.nudges += 1;
+        }
+    }
     let supported = h.engine.capture_hiding_supported();
     if supported != h.capture_supported {
         // privacy.hide_method changed at runtime: relabel the menus, and re-show the tray.
@@ -429,6 +446,7 @@ pub fn run_with(
         launch_show: false,
         quitting: false,
         activations: 0,
+        nudges: 0,
         lock: Some(handle.instance_lock()),
     }));
     let h2 = Rc::clone(&host);
@@ -512,6 +530,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            nudges: 0,
             lock: None,
         }));
         let mut cx = TestAppContext::single();
@@ -557,6 +576,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            nudges: 0,
             lock: None,
         }))
     }
@@ -719,6 +739,53 @@ mod tests {
     }
 
     #[test]
+    fn bus_events_draw_the_window_even_while_the_platform_is_not_presenting_it() {
+        let (engine, _d) = testutil::engine(&[]);
+        let host = host_of(&engine);
+        let mut cx = TestAppContext::single();
+        ctl(&host, &mut cx, "window-show", json!({})).unwrap();
+        let w = host.borrow().window.expect("window opened");
+        let frames = |cx: &mut TestAppContext| w.update(cx, |v, _, _| v.frames).unwrap();
+        let state = |cx: &mut TestAppContext| {
+            w.update(cx, |v, _, cx| v.dump(cx)["recording"]["state"].clone())
+                .unwrap()
+        };
+        // Presented: the display link draws, no nudge.
+        ctl(&host, &mut cx, "ui-state", json!({})).unwrap();
+        assert_eq!(host.borrow().nudges, 0);
+        // Behind other apps' windows of an app that never activated (dot-4uzgol.79).
+        cx.simulate_window_visibility_change(w.into(), gpui::WindowVisibility::Hidden);
+        cx.run_until_parked();
+        for i in 0..3 {
+            let start = json!({"session": format!("session_{i}")});
+            for (action, params, want) in [
+                ("record-start", start, "recording"),
+                ("record-stop", json!({}), "idle"),
+            ] {
+                let (f, n) = (frames(&mut cx), host.borrow().nudges);
+                ctl(&host, &mut cx, action, params).unwrap();
+                assert_eq!(state(&mut cx), want, "{action}");
+                assert!(frames(&mut cx) > f, "{action}: the bus event drew no frame");
+                assert!(
+                    host.borrow().nudges > n,
+                    "{action}: the hidden window was not asked to display"
+                );
+            }
+        }
+        // Presented again: no more nudges.
+        cx.simulate_window_visibility_change(w.into(), gpui::WindowVisibility::Visible);
+        cx.run_until_parked();
+        let n = host.borrow().nudges;
+        ctl(&host, &mut cx, "ui-state", json!({})).unwrap();
+        assert_eq!(host.borrow().nudges, n);
+        assert!(
+            ctl(&host, &mut cx, "ui-state", json!({})).unwrap()["frames"]
+                .as_u64()
+                .is_some_and(|f| f > 0)
+        );
+    }
+
+    #[test]
     fn ticks_raise_the_window_only_on_a_show_request() {
         let (engine, _d) = testutil::engine(&[]);
         let host: Shared = Rc::new(RefCell::new(Host {
@@ -737,6 +804,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            nudges: 0,
             lock: None,
         }));
         let mut cx = TestAppContext::single();
@@ -779,6 +847,7 @@ mod tests {
             launch_show: false,
             quitting: false,
             activations: 0,
+            nudges: 0,
             lock: None,
         }))
     }

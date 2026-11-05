@@ -59,6 +59,9 @@ pub struct MainWindow {
     /// The palette of the last frame (`ui.theme`, else the OS appearance).
     pub(crate) theme: Theme,
     appearance: Option<Subscription>,
+    /// How many times this view rendered: `ui-state` reports it, so a frozen frame shows up as a
+    /// count that stops moving while the state changes (dot-4uzgol.79).
+    pub(crate) frames: u64,
 }
 
 impl MainWindow {
@@ -94,6 +97,7 @@ impl MainWindow {
             menu: None,
             theme: Theme::DARK,
             appearance: None,
+            frames: 0,
         }
     }
 
@@ -720,6 +724,7 @@ impl Drop for MainWindow {
 
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.frames += 1;
         window.set_window_title("Oats");
         let pref = self.engine.snapshot().config.ui.theme;
         self.theme = Theme::resolve(pref, window.appearance());
