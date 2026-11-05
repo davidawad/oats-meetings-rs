@@ -232,6 +232,16 @@ timeout = "1m"
 # Base URL of the OpenAI-compatible transcription API.
 url = "https://api.openai.com/v1"
 
+[stt.diarization]
+# Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them.
+enabled = true
+# Most remote speakers the diarizer tells apart; past this an utterance joins the most similar speaker heard.
+max_speakers = 8
+# A remote utterance shorter than this never starts a new speaker (too little audio for a reliable voice print); it joins the most similar one.
+min_new = "1s"
+# Percent voice-print (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.
+threshold = 70
+
 [stt.final]
 # Re-transcribe the whole recording when it stops and write transcript.final.jsonl.
 enabled = true

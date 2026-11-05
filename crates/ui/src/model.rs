@@ -200,6 +200,10 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("secret-delete", "secrets never pass through the window"),
     ("secret-has", "secrets never pass through the window"),
     ("stt-transcribe", "batch file transcription (ctl)"),
+    (
+        "session-speaker-name",
+        "naming remote_1..N is ctl for now (notes show the name)",
+    ),
     ("template-import", "one-shot migration verb (ctl)"),
     ("kb-search", "agent query (ctl)"),
     (

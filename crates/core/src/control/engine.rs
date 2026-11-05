@@ -936,6 +936,15 @@ impl Engine {
                 self.session_event(session, "rename");
                 Ok(v)
             }
+            Action::SessionSpeakerName {
+                session,
+                speaker,
+                name,
+            } => {
+                let v = self.store().name_speaker(session, speaker, name)?;
+                self.session_event(session, "speaker-name");
+                Ok(v)
+            }
             Action::SessionTag {
                 session,
                 tag,

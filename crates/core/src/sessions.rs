@@ -371,6 +371,29 @@ impl Store {
         Ok(summary(&l))
     }
 
+    /// Name `speaker` (a transcript label: `you`, `remote_1`, `remote_2` ...) of session `id` in
+    /// its `speakerNames`, OpenOats' map; an empty `name` removes the entry.
+    pub fn name_speaker(&self, id: &str, speaker: &str, name: &str) -> Result<Value> {
+        if speaker.trim().is_empty() {
+            return Err(ConfigError::new(
+                "invalid_argument",
+                "speaker must not be empty",
+            ));
+        }
+        let mut l = self.find(id)?;
+        let names = l.meta.entry("speakerNames").or_insert_with(|| json!({}));
+        if !names.is_object() {
+            *names = json!({});
+        }
+        let m = names.as_object_mut().expect("speakerNames object");
+        match name.trim() {
+            "" => m.remove(speaker.trim()),
+            n => m.insert(speaker.trim().to_string(), json!(n)),
+        };
+        write_meta(&l.dir, &l.meta)?;
+        Ok(summary(&l))
+    }
+
     pub fn tag(&self, id: &str, tag: &str, remove: bool) -> Result<Value> {
         if tag.trim().is_empty() {
             return Err(ConfigError::new(
@@ -1026,6 +1049,18 @@ mod tests {
         let g = s.get(id).unwrap();
         assert_eq!(g["metadata"]["engine"], "parakeet");
         assert_eq!(g["metadata"]["speakerNames"]["remote_1"], "Dana");
+        // Diarized remote speakers are named by label; the existing names stay.
+        let v = s.name_speaker(id, "remote_2", " Lee ").unwrap();
+        assert_eq!(
+            v["speaker_names"],
+            json!({"remote_1": "Dana", "remote_2": "Lee"})
+        );
+        let v = s.name_speaker(id, "remote_1", "").unwrap();
+        assert_eq!(v["speaker_names"], json!({"remote_2": "Lee"}));
+        assert_eq!(
+            s.name_speaker(id, " ", "x").unwrap_err().code,
+            "invalid_argument"
+        );
         assert_eq!(s.delete(id, DeleteMode::Remove).unwrap()["deleted"], true);
         assert_eq!(s.get(id).unwrap_err().code, "not_found");
         assert_eq!(

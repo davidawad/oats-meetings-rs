@@ -69,6 +69,28 @@ impl Mel {
     /// (the encoder's `mel_length`). Audio past `(frames - 1) * hop` samples is ignored.
     pub fn features(&self, pcm: &[f32], frames: usize) -> (Vec<f32>, usize) {
         let s = &self.spec;
+        let (mut out, valid) = self.log_mel(pcm, frames);
+        let frames = frames.max(1);
+        for b in 0..s.mels {
+            let row = &mut out[b * frames..b * frames + valid];
+            let mean = row.iter().map(|&x| f64::from(x)).sum::<f64>() / valid as f64;
+            let var = row
+                .iter()
+                .map(|&x| (f64::from(x) - mean).powi(2))
+                .sum::<f64>()
+                / (valid.max(2) - 1) as f64;
+            let std = var.sqrt() + f64::from(s.std_guard);
+            for x in row.iter_mut() {
+                *x = ((f64::from(*x) - mean) / std) as f32;
+            }
+        }
+        (out, valid)
+    }
+
+    /// `features` before the per-mel normalisation: the log mel power, which keeps the speaker's
+    /// spectral shape (the speaker diarizer's input, dot-4uzgol.77).
+    pub fn log_mel(&self, pcm: &[f32], frames: usize) -> (Vec<f32>, usize) {
+        let s = &self.spec;
         let frames = frames.max(1);
         let n = (frames - 1) * s.hop;
         let len = pcm.len().min(n);
@@ -120,19 +142,6 @@ impl Mel {
             for (b, (first, w)) in self.filters.iter().enumerate() {
                 let e: f32 = w.iter().zip(&power[*first..]).map(|(a, p)| a * p).sum();
                 out[b * frames + f] = (e + s.log_guard).ln();
-            }
-        }
-        for b in 0..s.mels {
-            let row = &mut out[b * frames..b * frames + valid];
-            let mean = row.iter().map(|&x| f64::from(x)).sum::<f64>() / valid as f64;
-            let var = row
-                .iter()
-                .map(|&x| (f64::from(x) - mean).powi(2))
-                .sum::<f64>()
-                / (valid.max(2) - 1) as f64;
-            let std = var.sqrt() + f64::from(s.std_guard);
-            for x in row.iter_mut() {
-                *x = ((f64::from(*x) - mean) / std) as f32;
             }
         }
         (out, valid)

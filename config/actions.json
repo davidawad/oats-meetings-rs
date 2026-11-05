@@ -430,6 +430,29 @@
       "status": "implemented"
     },
     {
+      "doc": "Name a speaker of a session by its transcript label (you, remote_1, remote_2 ...); notes use the name. An empty name clears it.",
+      "effect": "write",
+      "name": "session-speaker-name",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "speaker",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Add a tag to a session, or remove it with remove=true.",
       "effect": "write",
       "name": "session-tag",

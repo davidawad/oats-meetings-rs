@@ -75,6 +75,7 @@ actions! {
     SessionList, "session-list", "List sessions, optionally in a time window (RFC 3339).", "implemented", "read", { from: Option<String>, to: Option<String> };
     SessionGet, "session-get", "One session with its metadata.", "implemented", "read", { session: String };
     SessionRename, "session-rename", "Rename (retitle) a session.", "implemented", "write", { session: String, name: String };
+    SessionSpeakerName, "session-speaker-name", "Name a speaker of a session by its transcript label (you, remote_1, remote_2 ...); notes use the name. An empty name clears it.", "implemented", "write", { session: String, speaker: String, name: String };
     SessionTag, "session-tag", "Add a tag to a session, or remove it with remove=true.", "implemented", "write", { session: String, tag: String, remove: Option<bool> };
     SessionDelete, "session-delete", "Delete a session; needs confirm=true while sessions.confirm_delete is on.", "implemented", "write", { session: String, confirm: Option<bool> };
     TrashList, "trash-list", "Sessions in the OS trash (moved there by session-delete with sessions.delete_mode=trash), newest first. Linux and Windows; macOS says unsupported.", "implemented", "read", {};

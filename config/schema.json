@@ -959,6 +959,51 @@
           },
           "type": "object"
         },
+        "diarization": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "default": true,
+              "description": "Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "max_speakers": {
+              "default": 8,
+              "description": "Most remote speakers the diarizer tells apart; past this an utterance joins the most similar speaker heard.",
+              "maximum": 32,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "min_new": {
+              "default": "1s",
+              "description": "A remote utterance shorter than this never starts a new speaker (too little audio for a reliable voice print); it joins the most similar one.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1m",
+              "x-max-ms": 60000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "threshold": {
+              "default": 70,
+              "description": "Percent voice-print (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
         "echo_overlap": {
           "default": 60,
           "description": "Percent of a local-speaker utterance's words that must appear in near-simultaneous remote speech for it to be dropped as echo (stt.echo_window).",

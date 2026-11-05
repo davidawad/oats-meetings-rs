@@ -14,7 +14,8 @@
 //! transcribes fixed windows as audio arrives (cut at the quietest point near the window end);
 //! the final pass transcribes each whole channel again. Both write OpenOats-layout JSONL into the
 //! session store (`transcript.live.jsonl`, `transcript.final.jsonl`), speakers `stt.speaker_you`
-//! / `stt.speaker_them`.
+//! / `stt.speaker_them`. With `stt.diarization.enabled` the system-audio channel is split by
+//! voice (`diarize`): `remote_1`, `remote_2`, ... one label per remote speaker; the mic stays "you".
 //!
 //! Stable error codes: `backend_unavailable`, `model_not_found`, `model_load_failed`,
 //! `asr_failed`, `network_denied`, `invalid_combination`, `secret_*` (see secrets), `stt_timeout`,
@@ -26,6 +27,7 @@ pub mod catalog;
 pub mod cloud;
 #[cfg(target_os = "macos")]
 pub mod coreml;
+pub mod diarize;
 #[cfg(feature = "whisper")]
 pub mod local;
 pub mod mel;
@@ -225,6 +227,8 @@ pub struct Settings {
     pub error_snippet: usize,
     pub max_response: u64,
     pub tuning: Tuning,
+    /// `stt.diarization.*`; `None` when it is off.
+    pub diarize: Option<diarize::Diarization>,
 }
 
 fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
@@ -298,6 +302,7 @@ impl Settings {
             error_snippet: cfg.network.error_snippet as usize,
             max_response: c.cloud.max_response,
             tuning: Tuning::from_config(cfg),
+            diarize: diarize::Diarization::from_config(cfg),
         })
     }
 
@@ -661,6 +666,8 @@ pub struct Live {
     held: Vec<Utt>,
     /// Recent remote utterances, to check the held ones against.
     heard: Vec<Utt>,
+    /// Splits the remote channel by voice (`with_diarization`).
+    diarizer: Option<diarize::Diarizer>,
 }
 
 /// `pcm` cut into pieces of at most `max` samples, each cut at the quietest 10 ms frame in the
@@ -744,7 +751,43 @@ impl Live {
             bufs: [ChanBuf::default(), ChanBuf::default()],
             held: Vec::new(),
             heard: Vec::new(),
+            diarizer: None,
         }
+    }
+
+    /// Label remote utterances by voice (`remote_1`, `remote_2`, ...) rather than all `them`.
+    pub fn with_diarization(mut self, d: Option<diarize::Diarization>) -> Live {
+        self.diarizer = d.map(diarize::Diarizer::new);
+        self
+    }
+
+    /// The live transcriber `s` configures.
+    pub fn for_settings(asr: Arc<dyn Asr>, s: &Settings) -> Live {
+        Live::new(
+            asr,
+            &s.language,
+            s.chunk_secs,
+            s.tuning,
+            &s.speaker_you,
+            &s.speaker_them,
+        )
+        .with_diarization(s.diarize)
+    }
+
+    /// Transcribe `chunk` of channel `ch`, which starts at `offset` seconds.
+    fn recognise(&mut self, ch: usize, chunk: &[f32], offset: f64) -> Result<Vec<Utt>> {
+        let mut us = run_asr(
+            &*self.asr,
+            chunk,
+            offset,
+            &self.names[ch],
+            &self.language,
+            &self.tuning,
+        )?;
+        if let (1, Some(d)) = (ch, self.diarizer.as_mut()) {
+            d.label_live(&mut us, chunk, offset, &self.names[1]);
+        }
+        Ok(us)
     }
 
     fn secs(samples: usize) -> f64 {
@@ -789,14 +832,7 @@ impl Live {
             let chunk: Vec<f32> = self.bufs[ch].pcm.drain(..cut).collect();
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += cut;
-            fresh.extend(run_asr(
-                &*self.asr,
-                &chunk,
-                offset,
-                &self.names[ch],
-                &self.language,
-                &self.tuning,
-            )?);
+            fresh.extend(self.recognise(ch, &chunk, offset)?);
         }
         Ok(self.settle(ch, fresh, false))
     }
@@ -809,14 +845,7 @@ impl Live {
             let chunk = std::mem::take(&mut self.bufs[ch].pcm);
             let offset = self.bufs[ch].base as f64 / f64::from(SAMPLE_RATE);
             self.bufs[ch].base += chunk.len();
-            let fresh = run_asr(
-                &*self.asr,
-                &chunk,
-                offset,
-                &self.names[ch],
-                &self.language,
-                &self.tuning,
-            )?;
+            let fresh = self.recognise(ch, &chunk, offset)?;
             out.extend(self.settle(ch, fresh, ch == 0));
         }
         Ok(out)
@@ -846,6 +875,18 @@ fn final_channel(
         )?);
     }
     Ok(out)
+}
+
+/// The final pass over both channels: each transcribed whole, the remote one split by voice
+/// (when diarization is on), echo of remote speech dropped from "you", in time order.
+fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<Vec<Utt>> {
+    let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
+    let mut them = final_channel(asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?;
+    if let Some(d) = s.diarize {
+        diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
+    }
+    all.extend(them);
+    Ok(by_time(drop_echoes(all, &s.speaker_you, s.tuning.echo)))
 }
 
 fn by_time(mut v: Vec<Utt>) -> Vec<Utt> {
@@ -974,14 +1015,7 @@ fn passes(
     };
     let (mut live_n, mut final_n) = (0usize, 0usize);
     if s.live_enabled {
-        let mut live = Live::new(
-            Arc::clone(asr),
-            &s.language,
-            s.chunk_secs,
-            s.tuning,
-            &s.speaker_you,
-            &s.speaker_them,
-        );
+        let mut live = Live::for_settings(Arc::clone(asr), s);
         let step = s.tuning.feed_samples;
         let total = chans.you.len().max(chans.them.len());
         let mut pos = 0;
@@ -1005,15 +1039,7 @@ fn passes(
         write(live.flush()?)?;
     }
     if s.final_enabled {
-        let mut all = final_channel(&**asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
-        all.extend(final_channel(
-            &**asr,
-            &chans.them,
-            &s.speaker_them,
-            &s.language,
-            &s.tuning,
-        )?);
-        let all = by_time(drop_echoes(all, &s.speaker_you, s.tuning.echo));
+        let all = final_utts(&**asr, s, chans)?;
         let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
         store.write_transcript(id, "final", &lines)?;
         all.iter().for_each(|u| emit("final", u));

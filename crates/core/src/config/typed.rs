@@ -344,9 +344,19 @@ pub struct SttFinal {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct SttDiarization {
+    pub enabled: bool,
+    pub max_speakers: u32,
+    pub threshold: u32,
+    pub min_new: Dur,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Stt {
     pub backend: SttBackend,
     pub cloud: SttCloud,
+    pub diarization: SttDiarization,
     #[serde(rename = "final")]
     pub final_: SttFinal,
     pub echo_overlap: u32,

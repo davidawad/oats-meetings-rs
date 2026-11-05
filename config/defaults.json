@@ -121,6 +121,12 @@
       "timeout": "1m",
       "url": "https://api.openai.com/v1"
     },
+    "diarization": {
+      "enabled": true,
+      "max_speakers": 8,
+      "min_new": "1s",
+      "threshold": 70
+    },
     "echo_overlap": 60,
     "echo_similarity": 75,
     "echo_window": "1s",

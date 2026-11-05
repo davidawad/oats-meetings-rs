@@ -14,7 +14,7 @@ use oats_audio::resample::Decimate3;
 use oats_audio::Source;
 use serde_json::{json, Value};
 
-use super::{by_time, drop_echoes, final_channel, utterance_json, wav, Asr, Live, Settings, Utt};
+use super::{by_time, final_utts, utterance_json, wav, Asr, Live, Settings, Utt};
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
 use crate::sessions::Store;
@@ -61,14 +61,7 @@ fn live_worker(
     started: DateTime<Utc>,
 ) -> LiveOutcome {
     let s = &plan.settings;
-    let mut live = Live::new(
-        Arc::clone(&plan.asr),
-        &s.language,
-        s.chunk_secs,
-        s.tuning,
-        &s.speaker_you,
-        &s.speaker_them,
-    );
+    let mut live = Live::for_settings(Arc::clone(&plan.asr), s);
     let mut out = LiveOutcome {
         utterances: 0,
         error: None,
@@ -192,16 +185,7 @@ impl Transcriber {
     fn final_pass(&self, wav_path: &Path) -> Result<usize> {
         let s = &self.plan.settings;
         let chans = wav::read(wav_path)?;
-        let asr = &*self.plan.asr;
-        let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
-        all.extend(final_channel(
-            asr,
-            &chans.them,
-            &s.speaker_them,
-            &s.language,
-            &s.tuning,
-        )?);
-        let all = by_time(drop_echoes(all, &s.speaker_you, s.tuning.echo));
+        let all = final_utts(&*self.plan.asr, s, &chans)?;
         let lines: Vec<Value> = all
             .iter()
             .map(|u| utterance_json(u, self.started))
