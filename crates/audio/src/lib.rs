@@ -3,12 +3,14 @@
 //!
 //! Backends: `pulse` (Pulse or PipeWire's pulse server: `pactl` + `parec`), `pipewire` (`pw-dump` +
 //! `pw-record`), `cpal` (WASAPI loopback + mic, Windows only). `screencapturekit`
-//! (macOS: ScreenCaptureKit system audio + cpal mic, TCC denial is `permission_denied`).
+//! (macOS: system audio from a Core Audio process tap on 14.2+, else ScreenCaptureKit, per
+//! `audio.system_backend`; cpal mic; TCC denial is `permission_denied`).
 //! All backends deliver mono f32 at the recorder's sample rate through a callback.
 
 pub mod aec;
 pub mod backend;
 pub mod coreaudio_hal;
+pub mod coreaudio_tap;
 pub mod cpal_backend;
 pub mod error;
 pub mod fake;
@@ -25,7 +27,7 @@ pub mod wav;
 pub use backend::{select, Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
 pub use error::{AudioError, Result};
 pub use recorder::{Recording, Source, Summary};
-pub use settings::{AudioSettings, BackendChoice, Layout, Timing};
+pub use settings::{AudioSettings, BackendChoice, Layout, SystemBackend, Timing};
 
 /// Fixed output rate of the recorder and of every backend's callback.
 pub const SAMPLE_RATE: u32 = 48_000;

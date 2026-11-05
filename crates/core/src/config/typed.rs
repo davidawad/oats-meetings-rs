@@ -74,6 +74,14 @@ pub enum AudioBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum AudioSystemBackend {
+    Auto,
+    Tap,
+    Screencapturekit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum AudioLayout {
     Split,
     Mix,
@@ -114,6 +122,7 @@ pub struct Audio {
     pub open_timeout: Dur,
     pub poll_interval: Dur,
     pub system: AudioEndpoint,
+    pub system_backend: AudioSystemBackend,
     pub transcribe: AudioTranscribe,
 }
 

@@ -9,7 +9,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::{TimeZone, Utc};
-use oats_audio::{AudioError, AudioSettings, BackendChoice, CaptureBackend, Layout, Recording};
+use oats_audio::{
+    AudioError, AudioSettings, BackendChoice, CaptureBackend, Layout, Recording, SystemBackend,
+};
 use serde_json::{json, Map, Value};
 
 use crate::config::resolve::Flat;
@@ -148,6 +150,7 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
     };
     Ok(AudioSettings {
         backend: BackendChoice::parse(&s("audio.backend")).map_err(audio_err)?,
+        system_backend: SystemBackend::parse(&s("audio.system_backend")).map_err(audio_err)?,
         layout: Layout::parse(&s("audio.layout")).map_err(audio_err)?,
         system_enabled: b("audio.system.enabled"),
         system_device: s("audio.system.device"),
@@ -163,7 +166,7 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
 
 /// The same settings from the typed config (what a reload candidate is validated as).
 pub fn settings_of(c: &Config) -> AudioSettings {
-    use crate::config::typed::{AudioBackend, AudioLayout};
+    use crate::config::typed::{AudioBackend, AudioLayout, AudioSystemBackend};
     AudioSettings {
         backend: match c.audio.backend {
             AudioBackend::Auto => BackendChoice::Auto,
@@ -171,6 +174,11 @@ pub fn settings_of(c: &Config) -> AudioSettings {
             AudioBackend::Pipewire => BackendChoice::Pipewire,
             AudioBackend::Cpal => BackendChoice::Cpal,
             AudioBackend::Screencapturekit => BackendChoice::ScreenCaptureKit,
+        },
+        system_backend: match c.audio.system_backend {
+            AudioSystemBackend::Auto => SystemBackend::Auto,
+            AudioSystemBackend::Tap => SystemBackend::Tap,
+            AudioSystemBackend::Screencapturekit => SystemBackend::ScreenCaptureKit,
         },
         layout: match c.audio.layout {
             AudioLayout::Split => Layout::Split,

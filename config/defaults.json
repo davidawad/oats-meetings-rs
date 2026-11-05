@@ -27,6 +27,7 @@
       "device": "",
       "enabled": true
     },
+    "system_backend": "auto",
     "transcribe": "auto"
   },
   "config": {

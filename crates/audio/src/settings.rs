@@ -7,6 +7,7 @@ use crate::error::{AudioError, Result};
 
 pub const BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];
 pub const LAYOUTS: &[&str] = &["split", "mix"];
+pub const SYSTEM_BACKENDS: &[&str] = &["auto", "tap", "screencapturekit"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendChoice {
@@ -29,6 +30,35 @@ impl BackendChoice {
                 return Err(AudioError::new(
                     "invalid_value",
                     format!("audio.backend '{other}'; allowed: {}", BACKENDS.join(", ")),
+                ))
+            }
+        })
+    }
+}
+
+/// The macOS system-audio source (`audio.system_backend`). `Auto` is a Core Audio process tap on
+/// macOS 14.2 and later (System Audio Recording permission) with ScreenCaptureKit (Screen
+/// Recording) as the fallback; the other two force one source. Other OSes ignore it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemBackend {
+    Auto,
+    Tap,
+    ScreenCaptureKit,
+}
+
+impl SystemBackend {
+    pub fn parse(s: &str) -> Result<Self> {
+        Ok(match s {
+            "auto" => Self::Auto,
+            "tap" => Self::Tap,
+            "screencapturekit" => Self::ScreenCaptureKit,
+            other => {
+                return Err(AudioError::new(
+                    "invalid_value",
+                    format!(
+                        "audio.system_backend '{other}'; allowed: {}",
+                        SYSTEM_BACKENDS.join(", ")
+                    ),
                 ))
             }
         })
@@ -76,6 +106,8 @@ pub struct Timing {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioSettings {
     pub backend: BackendChoice,
+    /// The macOS system-audio source; ignored elsewhere.
+    pub system_backend: SystemBackend,
     pub layout: Layout,
     pub system_enabled: bool,
     /// Empty means the platform default loopback / monitor.
@@ -94,6 +126,7 @@ impl AudioSettings {
     pub fn new(timing: Timing) -> Self {
         Self {
             backend: BackendChoice::Auto,
+            system_backend: SystemBackend::Auto,
             layout: Layout::Split,
             system_enabled: true,
             system_device: String::new(),
@@ -137,6 +170,13 @@ mod tests {
         for l in LAYOUTS {
             Layout::parse(l).unwrap();
         }
+        for b in SYSTEM_BACKENDS {
+            SystemBackend::parse(b).unwrap();
+        }
+        assert_eq!(
+            SystemBackend::parse("sck").unwrap_err().code,
+            "invalid_value"
+        );
         assert_eq!(
             BackendChoice::parse("alsa").unwrap_err().code,
             "invalid_value"

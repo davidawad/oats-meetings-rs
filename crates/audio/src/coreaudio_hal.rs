@@ -124,6 +124,8 @@ pub fn buffer_list_channels(bytes: &[u8]) -> u32 {
 
 #[cfg(target_os = "macos")]
 pub use native::SystemHal;
+#[cfg(target_os = "macos")]
+pub(crate) use native::{read_global, SYSTEM_OBJECT};
 
 #[cfg(target_os = "macos")]
 mod native {
@@ -168,7 +170,7 @@ mod native {
     }
 
     /// `kAudioObjectSystemObject`.
-    const SYSTEM_OBJECT: u32 = 1;
+    pub(crate) const SYSTEM_OBJECT: u32 = 1;
     /// `kAudioObjectPropertyElementMain`.
     const ELEMENT_MAIN: u32 = 0;
     /// `kCFStringEncodingUTF8`.
@@ -195,18 +197,37 @@ mod native {
 
     /// A fixed-size property (an id, a rate, a CFStringRef).
     fn read<T: Copy>(id: u32, selector: &[u8; 4], scope: &[u8; 4]) -> Option<T> {
+        read_qualified::<T, u8>(id, selector, scope, None)
+    }
+
+    /// A fixed-size global-scope property, with an optional qualifier (a pid for
+    /// `kAudioHardwarePropertyTranslatePIDToProcessObject`). The process-tap backend reads with it.
+    pub(crate) fn read_global<T: Copy, Q>(
+        id: u32,
+        selector: &[u8; 4],
+        qualifier: Option<&Q>,
+    ) -> Option<T> {
+        read_qualified(id, selector, SCOPE_GLOBAL, qualifier)
+    }
+
+    fn read_qualified<T: Copy, Q>(
+        id: u32,
+        selector: &[u8; 4],
+        scope: &[u8; 4],
+        qualifier: Option<&Q>,
+    ) -> Option<T> {
         let a = addr(selector, scope);
         let mut v = MaybeUninit::<T>::uninit();
         let mut size = u32::try_from(size_of::<T>()).ok()?;
+        let (q_size, q) = match qualifier {
+            Some(q) => (
+                u32::try_from(size_of::<Q>()).ok()?,
+                std::ptr::from_ref(q).cast::<c_void>(),
+            ),
+            None => (0, std::ptr::null()),
+        };
         let st = unsafe {
-            AudioObjectGetPropertyData(
-                id,
-                &a,
-                0,
-                std::ptr::null(),
-                &mut size,
-                v.as_mut_ptr().cast(),
-            )
+            AudioObjectGetPropertyData(id, &a, q_size, q, &mut size, v.as_mut_ptr().cast())
         };
         (st == 0 && size as usize == size_of::<T>()).then(|| unsafe { v.assume_init() })
     }

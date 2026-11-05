@@ -1,37 +1,52 @@
-//! macOS capture (dot-4uzgol.6): system audio through ScreenCaptureKit, microphone through cpal
-//! (CoreAudio). Mics are listed from CoreAudio HAL properties (`coreaudio_hal`), not cpal.
+//! macOS capture (dot-4uzgol.6, dot-4uzgol.76): system audio through a Core Audio process tap
+//! (`coreaudio_tap`, macOS 14.2+) or ScreenCaptureKit, microphone through cpal (CoreAudio). Mics
+//! are listed from CoreAudio HAL properties (`coreaudio_hal`), not cpal.
 //!
-//! Why ScreenCaptureKit and not a CoreAudio process tap: SCK has a stable public API on macOS 13+
-//! (a process tap needs 14.2+), takes one `SCContentFilter` over a display with no per-process
-//! aggregate-device plumbing, hands back 48 kHz PCM, and its TCC consent is the Screen Recording
-//! permission the user already understands. A tap would avoid the Screen Recording grant, but it
-//! is a newer, thinner surface; the `permission_denied` error names the exact pane either way.
+//! Which system-audio source: `audio.system_backend`. `auto` (the default) takes the tap on 14.2
+//! and later, because its TCC consent is System Audio Recording rather than Screen Recording, and
+//! falls back to ScreenCaptureKit on older macOS or when the tap fails for a reason other than a
+//! denial. `tap` and `screencapturekit` force one. The tap is gated on its own error (there is no
+//! public preflight for System Audio Recording); only the ScreenCaptureKit path preflights Screen
+//! Recording, so a tap recording never touches that grant.
 //!
 //! Everything that decides behaviour is pure and compiles on every OS so the pods test it: the
-//! permission gate (`Permissions`), the error classification, the PCM decode, and the backend
-//! that joins them over a `Sources` trait. Only the real `Sources` and `Permissions` (SCK,
-//! cpal, AVFoundation) are macOS-only.
+//! permission gate (`Permissions`), the source plan and fallback, the error classification, the
+//! PCM decode, and the backend that joins them over a `Sources` trait. Only the real `Sources` and
+//! `Permissions` (tap, SCK, cpal, AVFoundation) are macOS-only.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
+use crate::coreaudio_tap::OsVersion;
 use crate::error::{AudioError, Result};
+use crate::resample::{downmix, Resampler};
+use crate::settings::SystemBackend;
+use crate::SAMPLE_RATE;
 
+/// The `audio.backend` value (and device `backend`) of the whole macOS backend, kept from when
+/// ScreenCaptureKit was its only system-audio source.
 pub const NAME: &str = "screencapturekit";
-/// The only system-audio device: everything the default display session plays.
-pub const SYSTEM_DEVICE: &str = "screencapturekit:system";
+/// The only system-audio device: everything the machine plays, whichever source records it.
+pub const SYSTEM_DEVICE: &str = "macos:system";
+/// The id `SYSTEM_DEVICE` had before the tap; a saved `audio.system.device` keeps resolving.
+pub const LEGACY_SYSTEM_DEVICE: &str = "screencapturekit:system";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
     Microphone,
     ScreenRecording,
+    /// The Core Audio tap's consent (`NSAudioCaptureUsageDescription`).
+    SystemAudioRecording,
 }
 
 impl Permission {
-    fn pane(self) -> &'static str {
+    pub(crate) fn pane(self) -> &'static str {
         match self {
             Self::Microphone => "Privacy & Security > Microphone",
             Self::ScreenRecording => "Privacy & Security > Screen & System Audio Recording",
+            Self::SystemAudioRecording => {
+                "Privacy & Security > Screen & System Audio Recording > System Audio Recording Only"
+            }
         }
     }
 }
@@ -90,7 +105,7 @@ pub fn classify_sck_failure(code: Option<i32>, message: &str) -> AudioError {
     }
 }
 
-/// How a ScreenCaptureKit buffer encodes samples.
+/// How a system-audio buffer (ScreenCaptureKit or tap) encodes samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PcmFormat {
     F32,
@@ -132,21 +147,151 @@ pub fn decode_mono(bufs: &[(u32, &[u8])], fmt: PcmFormat) -> Vec<f32> {
         .collect()
 }
 
+/// Mono buffers at the source rate in, mono at `SAMPLE_RATE` out to `on_samples`; the resampler is
+/// rebuilt when the source rate changes. Both system-audio sources feed through one.
+pub struct SystemOut {
+    on_samples: OnSamples,
+    resampler: Option<(u32, Resampler)>,
+    mono: Vec<f32>,
+    out: Vec<f32>,
+}
+
+impl SystemOut {
+    pub fn new(on_samples: OnSamples) -> Self {
+        Self {
+            on_samples,
+            resampler: None,
+            mono: vec![],
+            out: vec![],
+        }
+    }
+
+    pub fn push(&mut self, rate: u32, mono: &[f32]) {
+        if rate == 0 {
+            return;
+        }
+        if self.resampler.as_ref().map(|(r, _)| *r) != Some(rate) {
+            self.resampler = Some((rate, Resampler::new(rate, SAMPLE_RATE)));
+        }
+        self.out.clear();
+        if let Some((_, rs)) = self.resampler.as_mut() {
+            self.mono.clear();
+            downmix(mono, 1, &mut self.mono);
+            rs.push(&self.mono, &mut self.out);
+        }
+        if !self.out.is_empty() {
+            (self.on_samples)(&self.out);
+        }
+    }
+}
+
+/// One way to record system audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemSource {
+    /// Core Audio process tap (macOS 14.2+, System Audio Recording).
+    Tap,
+    /// ScreenCaptureKit (macOS 13+, Screen Recording).
+    ScreenCaptureKit,
+}
+
+impl SystemSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Tap => "Core Audio tap",
+            Self::ScreenCaptureKit => "ScreenCaptureKit",
+        }
+    }
+}
+
+/// The sources to try, in order, for `audio.system_backend` on macOS `os` (`None`: unknown, so
+/// the tap is tried and its own failure decides).
+pub fn system_plan(choice: SystemBackend, os: Option<OsVersion>) -> Result<Vec<SystemSource>> {
+    let tap_ok = os.is_none_or(OsVersion::supports_tap);
+    Ok(match choice {
+        SystemBackend::ScreenCaptureKit => vec![SystemSource::ScreenCaptureKit],
+        SystemBackend::Auto if tap_ok => vec![SystemSource::Tap, SystemSource::ScreenCaptureKit],
+        SystemBackend::Auto => vec![SystemSource::ScreenCaptureKit],
+        SystemBackend::Tap if tap_ok => vec![SystemSource::Tap],
+        SystemBackend::Tap => {
+            return Err(AudioError::new(
+                "unsupported_platform",
+                format!(
+                    "audio.system_backend 'tap' needs macOS 14.2 or later (this is {}); use auto or screencapturekit",
+                    os.map(|v| v.to_string()).unwrap_or_default()
+                ),
+            ))
+        }
+    })
+}
+
+/// Whether a failed source gives way to the next one. A denial does not: falling back from a
+/// denied tap would ask for Screen Recording, the grant the tap exists to avoid.
+pub fn falls_back(e: &AudioError) -> bool {
+    e.code != "permission_denied"
+}
+
 /// The real capture calls, behind a trait so the gate and the device logic test without a Mac.
 pub trait Sources: Send + Sync {
     fn list_mics(&self) -> Result<Vec<DeviceInfo>>;
-    fn open_system(&self, on_samples: OnSamples) -> Result<Box<dyn Capture>>;
+    fn open_system(&self, source: SystemSource, on_samples: OnSamples) -> Result<Box<dyn Capture>>;
     fn open_mic(&self, device: &str, on_samples: OnSamples) -> Result<Box<dyn Capture>>;
 }
 
 pub struct MacosBackend {
     perms: Arc<dyn Permissions>,
     sources: Arc<dyn Sources>,
+    system: Result<Vec<SystemSource>>,
 }
 
 impl MacosBackend {
-    pub fn with(perms: Arc<dyn Permissions>, sources: Arc<dyn Sources>) -> Self {
-        Self { perms, sources }
+    /// `system` is the `system_plan` to record system audio with.
+    pub fn with(
+        perms: Arc<dyn Permissions>,
+        sources: Arc<dyn Sources>,
+        system: Result<Vec<SystemSource>>,
+    ) -> Self {
+        Self {
+            perms,
+            sources,
+            system,
+        }
+    }
+
+    fn open_system(&self, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+        let plan = self.system.clone()?;
+        // A failed attempt consumes its callback, so every attempt feeds one shared sink.
+        let shared = Arc::new(Mutex::new(on_samples));
+        let mut failed: Vec<String> = vec![];
+        let mut last = None;
+        for source in plan {
+            let feed = Arc::clone(&shared);
+            let on: OnSamples = Box::new(move |x: &[f32]| {
+                if let Ok(mut f) = feed.lock() {
+                    f(x);
+                }
+            });
+            let r = match source {
+                SystemSource::Tap => self.sources.open_system(source, on),
+                SystemSource::ScreenCaptureKit => {
+                    require(self.perms.as_ref(), Permission::ScreenRecording)
+                        .and_then(|()| self.sources.open_system(source, on))
+                }
+            };
+            match r {
+                Ok(c) => return Ok(c),
+                Err(e) if !falls_back(&e) => return Err(e),
+                Err(e) => {
+                    failed.push(format!("{}: {}", source.label(), e.message));
+                    last = Some(e);
+                }
+            }
+        }
+        let mut e = last
+            .unwrap_or_else(|| AudioError::new("capture_failed", "no system-audio source to try"));
+        if failed.len() > 1 {
+            e.message = failed.join("; then ");
+        }
+        Err(e)
     }
 }
 
@@ -156,9 +301,20 @@ impl CaptureBackend for MacosBackend {
     }
 
     fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
+        let via = match self.system.as_deref() {
+            Ok([first, rest @ ..]) => {
+                let fallback: Vec<&str> = rest.iter().map(|s| s.label()).collect();
+                if fallback.is_empty() {
+                    first.label().to_string()
+                } else {
+                    format!("{}, else {}", first.label(), fallback.join(", "))
+                }
+            }
+            _ => "unavailable".to_string(),
+        };
         let mut v = vec![DeviceInfo {
             id: SYSTEM_DEVICE.into(),
-            name: "System audio (ScreenCaptureKit)".into(),
+            name: format!("System audio ({via})"),
             kind: DeviceKind::Loopback,
             backend: NAME,
             default: true,
@@ -175,7 +331,7 @@ impl CaptureBackend for MacosBackend {
     ) -> Result<Box<dyn Capture>> {
         match kind {
             DeviceKind::Loopback => {
-                if !device.is_empty() && device != SYSTEM_DEVICE {
+                if !device.is_empty() && device != SYSTEM_DEVICE && device != LEGACY_SYSTEM_DEVICE {
                     return Err(AudioError::new(
                         "device_not_found",
                         format!(
@@ -183,8 +339,7 @@ impl CaptureBackend for MacosBackend {
                         ),
                     ));
                 }
-                require(self.perms.as_ref(), Permission::ScreenRecording)?;
-                self.sources.open_system(on_samples)
+                self.open_system(on_samples)
             }
             DeviceKind::Mic => {
                 require(self.perms.as_ref(), Permission::Microphone)?;
@@ -208,16 +363,16 @@ mod native {
 
     use super::*;
     use crate::coreaudio_hal::{self, SystemHal};
+    use crate::coreaudio_tap;
     use crate::cpal_backend::CpalBackend;
-    use crate::resample::{downmix, Resampler};
     use crate::settings::Timing;
-    use crate::SAMPLE_RATE;
 
-    /// The real backend: SCK system audio, cpal mic, TCC state from the system.
-    pub fn native(timing: Timing) -> MacosBackend {
+    /// The real backend: tap or SCK system audio per `system`, cpal mic, TCC state from the system.
+    pub fn native(timing: Timing, system: SystemBackend) -> MacosBackend {
         MacosBackend::with(
             Arc::new(SystemPermissions),
             Arc::new(NativeSources { timing }),
+            system_plan(system, coreaudio_tap::os_version()),
         )
     }
 
@@ -230,7 +385,8 @@ mod native {
     extern "C" {}
 
     /// Reads TCC without prompting: `CGPreflightScreenCaptureAccess` never asks, and
-    /// `+[AVCaptureDevice authorizationStatusForMediaType:]` only reports.
+    /// `+[AVCaptureDevice authorizationStatusForMediaType:]` only reports. System Audio Recording
+    /// has no public preflight: it reads as `NotDetermined` and the tap's own error decides.
     pub struct SystemPermissions;
 
     impl Permissions for SystemPermissions {
@@ -247,6 +403,7 @@ mod native {
                     }
                 }
                 Permission::Microphone => av_mic_state(),
+                Permission::SystemAudioRecording => PermissionState::NotDetermined,
             }
         }
     }
@@ -283,7 +440,20 @@ mod native {
             CpalBackend::new(self.timing).open_input_named(&name, on_samples)
         }
 
-        fn open_system(&self, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
+        fn open_system(
+            &self,
+            source: SystemSource,
+            on_samples: OnSamples,
+        ) -> Result<Box<dyn Capture>> {
+            match source {
+                SystemSource::Tap => coreaudio_tap::open(self.timing, on_samples),
+                SystemSource::ScreenCaptureKit => self.open_sck(on_samples),
+            }
+        }
+    }
+
+    impl NativeSources {
+        fn open_sck(&self, on_samples: OnSamples) -> Result<Box<dyn Capture>> {
             let stop = Arc::new(AtomicBool::new(false));
             let flag = Arc::clone(&stop);
             let timing = self.timing;
@@ -347,15 +517,8 @@ mod native {
         classify_sck_failure(e.stream_error_code().map(|c| c as i32), &e.to_string())
     }
 
-    struct AudioOut {
-        on_samples: OnSamples,
-        resampler: Option<(u32, Resampler)>,
-        mono: Vec<f32>,
-        out: Vec<f32>,
-    }
-
     struct Handler {
-        state: Mutex<AudioOut>,
+        state: Mutex<SystemOut>,
     }
 
     impl SCStreamOutputTrait for Handler {
@@ -380,21 +543,8 @@ mod native {
             let bufs: Vec<(u32, &[u8])> =
                 list.iter().map(|b| (b.number_channels, b.data())).collect();
             let mono = decode_mono(&bufs, fmt);
-            let Ok(mut st) = self.state.lock() else {
-                return;
-            };
-            let st = &mut *st;
-            if st.resampler.as_ref().map(|(r, _)| *r) != Some(rate) {
-                st.resampler = Some((rate, Resampler::new(rate, SAMPLE_RATE)));
-            }
-            st.out.clear();
-            if let Some((_, rs)) = st.resampler.as_mut() {
-                st.mono.clear();
-                downmix(&mono, 1, &mut st.mono);
-                rs.push(&st.mono, &mut st.out);
-            }
-            if !st.out.is_empty() {
-                (st.on_samples)(&st.out);
+            if let Ok(mut st) = self.state.lock() {
+                st.push(rate, &mono);
             }
         }
     }
@@ -431,12 +581,7 @@ mod native {
             .add_output_handler(Sink, SCStreamOutputType::Screen)
             .map_err(|e| sck_err(&e))?;
         let handler = Handler {
-            state: Mutex::new(AudioOut {
-                on_samples,
-                resampler: None,
-                mono: vec![],
-                out: vec![],
-            }),
+            state: Mutex::new(SystemOut::new(on_samples)),
         };
         stream
             .add_output_handler(handler, SCStreamOutputType::Audio)
@@ -450,6 +595,7 @@ mod native {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     struct FakePerms {
         mic: PermissionState,
@@ -461,6 +607,8 @@ mod tests {
             match which {
                 Permission::Microphone => self.mic,
                 Permission::ScreenRecording => self.screen,
+                // The tap is never preflighted; a fake that reports it would hide that.
+                Permission::SystemAudioRecording => unreachable!("tap permission is preflighted"),
             }
         }
     }
@@ -468,6 +616,10 @@ mod tests {
     #[derive(Default)]
     struct FakeSources {
         opened: AtomicUsize,
+        /// Every system source asked for, in order.
+        tried: Mutex<Vec<SystemSource>>,
+        /// The error code a source fails with.
+        fail: Vec<(SystemSource, &'static str)>,
     }
 
     struct Noop;
@@ -485,8 +637,17 @@ mod tests {
                 default: true,
             }])
         }
-        fn open_system(&self, _: OnSamples) -> Result<Box<dyn Capture>> {
+        fn open_system(
+            &self,
+            source: SystemSource,
+            mut on_samples: OnSamples,
+        ) -> Result<Box<dyn Capture>> {
+            self.tried.lock().unwrap().push(source);
+            if let Some((_, code)) = self.fail.iter().find(|(s, _)| *s == source) {
+                return Err(AudioError::new(code, format!("{source:?} failed")));
+            }
             self.opened.fetch_add(1, Ordering::SeqCst);
+            on_samples(&[0.25]);
             Ok(Box::new(Noop))
         }
         fn open_mic(&self, _: &str, _: OnSamples) -> Result<Box<dyn Capture>> {
@@ -495,12 +656,34 @@ mod tests {
         }
     }
 
+    /// The pre-tap behaviour: ScreenCaptureKit only.
     fn backend(mic: PermissionState, screen: PermissionState) -> (MacosBackend, Arc<FakeSources>) {
-        let s = Arc::new(FakeSources::default());
+        planned(
+            mic,
+            screen,
+            Ok(vec![SystemSource::ScreenCaptureKit]),
+            vec![],
+        )
+    }
+
+    fn planned(
+        mic: PermissionState,
+        screen: PermissionState,
+        plan: Result<Vec<SystemSource>>,
+        fail: Vec<(SystemSource, &'static str)>,
+    ) -> (MacosBackend, Arc<FakeSources>) {
+        let s = Arc::new(FakeSources {
+            fail,
+            ..FakeSources::default()
+        });
         (
-            MacosBackend::with(Arc::new(FakePerms { mic, screen }), s.clone()),
+            MacosBackend::with(Arc::new(FakePerms { mic, screen }), s.clone(), plan),
             s,
         )
+    }
+
+    fn v(major: u32, minor: u32) -> Option<OsVersion> {
+        Some(OsVersion { major, minor })
     }
 
     fn code(r: Result<Box<dyn Capture>>) -> &'static str {
@@ -629,5 +812,200 @@ mod tests {
         let (a, c) = (f32s(&[1.0, 1.0, 1.0]), f32s(&[1.0]));
         assert_eq!(decode_mono(&[(1, &a), (1, &c)], PcmFormat::F32).len(), 1);
         assert!(decode_mono(&[], PcmFormat::F32).is_empty());
+    }
+
+    #[test]
+    fn plan_prefers_the_tap_from_14_2() {
+        use SystemSource::*;
+        assert_eq!(
+            system_plan(SystemBackend::Auto, v(26, 0)).unwrap(),
+            vec![Tap, ScreenCaptureKit]
+        );
+        assert_eq!(
+            system_plan(SystemBackend::Auto, v(14, 2)).unwrap(),
+            vec![Tap, ScreenCaptureKit]
+        );
+        assert_eq!(
+            system_plan(SystemBackend::Auto, v(14, 1)).unwrap(),
+            vec![ScreenCaptureKit]
+        );
+        assert_eq!(
+            system_plan(SystemBackend::Auto, v(13, 6)).unwrap(),
+            vec![ScreenCaptureKit]
+        );
+        assert_eq!(
+            system_plan(SystemBackend::Auto, None).unwrap(),
+            vec![Tap, ScreenCaptureKit],
+            "unknown version: the tap's own failure decides"
+        );
+        assert_eq!(
+            system_plan(SystemBackend::Tap, v(15, 1)).unwrap(),
+            vec![Tap]
+        );
+        assert_eq!(
+            system_plan(SystemBackend::ScreenCaptureKit, v(26, 0)).unwrap(),
+            vec![ScreenCaptureKit]
+        );
+        let e = system_plan(SystemBackend::Tap, v(13, 6)).unwrap_err();
+        assert_eq!(e.code, "unsupported_platform");
+        assert!(e.message.contains("13.6"), "{e}");
+    }
+
+    #[test]
+    fn tap_records_without_screen_recording_preflight() {
+        use PermissionState::*;
+        // A Screen Recording denial is irrelevant to the tap: it is never read on that path.
+        let plan = system_plan(SystemBackend::Auto, v(26, 0));
+        let (b, s) = planned(Granted, Denied, plan, vec![]);
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "ok"
+        );
+        assert_eq!(*s.tried.lock().unwrap(), vec![SystemSource::Tap]);
+    }
+
+    #[test]
+    fn failed_tap_falls_back_to_screencapturekit_with_the_same_sink() {
+        use PermissionState::*;
+        let plan = system_plan(SystemBackend::Auto, v(15, 0));
+        let (b, s) = planned(
+            Granted,
+            Granted,
+            plan,
+            vec![(SystemSource::Tap, "capture_failed")],
+        );
+        let got = Arc::new(Mutex::new(vec![]));
+        let sink = Arc::clone(&got);
+        let r = b.open(
+            DeviceKind::Loopback,
+            SYSTEM_DEVICE,
+            Box::new(move |x| sink.lock().unwrap().extend_from_slice(x)),
+        );
+        assert_eq!(code(r), "ok");
+        assert_eq!(
+            *s.tried.lock().unwrap(),
+            vec![SystemSource::Tap, SystemSource::ScreenCaptureKit]
+        );
+        assert_eq!(*got.lock().unwrap(), vec![0.25]);
+    }
+
+    #[test]
+    fn tap_denial_is_final_and_never_asks_for_screen_recording() {
+        use PermissionState::*;
+        let plan = system_plan(SystemBackend::Auto, v(26, 0));
+        let (b, s) = planned(
+            Granted,
+            Granted,
+            plan,
+            vec![(SystemSource::Tap, "permission_denied")],
+        );
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "permission_denied"
+        );
+        assert_eq!(*s.tried.lock().unwrap(), vec![SystemSource::Tap]);
+    }
+
+    #[test]
+    fn forced_tap_does_not_fall_back_and_both_failures_are_reported() {
+        use PermissionState::*;
+        let (b, s) = planned(
+            Granted,
+            Granted,
+            Ok(vec![SystemSource::Tap]),
+            vec![(SystemSource::Tap, "capture_failed")],
+        );
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "capture_failed"
+        );
+        assert_eq!(*s.tried.lock().unwrap(), vec![SystemSource::Tap]);
+
+        let plan = system_plan(SystemBackend::Auto, v(26, 0));
+        let fail = vec![
+            (SystemSource::Tap, "capture_failed"),
+            (SystemSource::ScreenCaptureKit, "capture_failed"),
+        ];
+        let (b, _) = planned(Granted, Granted, plan, fail);
+        let e = b
+            .open(DeviceKind::Loopback, "", Box::new(|_| {}))
+            .err()
+            .unwrap();
+        assert!(e.message.contains("Core Audio tap: Tap failed"), "{e}");
+        assert!(
+            e.message
+                .contains("ScreenCaptureKit: ScreenCaptureKit failed"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn fallback_to_screencapturekit_is_still_gated_on_screen_recording() {
+        use PermissionState::*;
+        let plan = system_plan(SystemBackend::Auto, v(26, 0));
+        let (b, s) = planned(
+            Granted,
+            Denied,
+            plan,
+            vec![(SystemSource::Tap, "capture_failed")],
+        );
+        let e = b
+            .open(DeviceKind::Loopback, "", Box::new(|_| {}))
+            .err()
+            .unwrap();
+        assert_eq!(e.code, "permission_denied");
+        assert!(e.message.contains("Screen & System Audio Recording"), "{e}");
+        assert_eq!(*s.tried.lock().unwrap(), vec![SystemSource::Tap]);
+    }
+
+    #[test]
+    fn unsupported_plan_fails_at_open_and_lists_unavailable() {
+        use PermissionState::*;
+        let plan = system_plan(SystemBackend::Tap, v(13, 0));
+        let (b, s) = planned(Granted, Granted, plan, vec![]);
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, "", Box::new(|_| {}))),
+            "unsupported_platform"
+        );
+        assert!(s.tried.lock().unwrap().is_empty());
+        assert_eq!(
+            b.list_devices().unwrap()[0].name,
+            "System audio (unavailable)"
+        );
+        assert_eq!(code(b.open(DeviceKind::Mic, "", Box::new(|_| {}))), "ok");
+    }
+
+    #[test]
+    fn system_device_names_its_source_and_keeps_the_old_id() {
+        use PermissionState::*;
+        let plan = system_plan(SystemBackend::Auto, v(26, 0));
+        let (b, _) = planned(Granted, Granted, plan, vec![]);
+        assert_eq!(
+            b.list_devices().unwrap()[0].name,
+            "System audio (Core Audio tap, else ScreenCaptureKit)"
+        );
+        assert_eq!(
+            code(b.open(DeviceKind::Loopback, LEGACY_SYSTEM_DEVICE, Box::new(|_| {}))),
+            "ok"
+        );
+        let (b, _) = backend(Granted, Granted);
+        assert_eq!(
+            b.list_devices().unwrap()[0].name,
+            "System audio (ScreenCaptureKit)"
+        );
+    }
+
+    #[test]
+    fn system_out_resamples_to_the_output_rate() {
+        let got = Arc::new(Mutex::new(0usize));
+        let n = Arc::clone(&got);
+        let mut out = SystemOut::new(Box::new(move |x| *n.lock().unwrap() += x.len()));
+        out.push(SAMPLE_RATE, &[0.1; 480]);
+        assert_eq!(*got.lock().unwrap(), 480);
+        out.push(0, &[0.1; 480]);
+        assert_eq!(*got.lock().unwrap(), 480, "a zero rate is dropped");
+        out.push(SAMPLE_RATE / 2, &[0.1; 4800]);
+        let total = *got.lock().unwrap();
+        assert!((480 + 9000..=480 + 9800).contains(&total), "{total}");
     }
 }

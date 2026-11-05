@@ -28,7 +28,7 @@
       "properties": {
         "backend": {
           "default": "auto",
-          "description": "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).",
+          "description": "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit, whose system-audio source is audio.system_backend).",
           "enum": [
             "auto",
             "pulse",
@@ -240,6 +240,18 @@
             }
           },
           "type": "object"
+        },
+        "system_backend": {
+          "default": "auto",
+          "description": "macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.",
+          "enum": [
+            "auto",
+            "tap",
+            "screencapturekit"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         },
         "transcribe": {
           "default": "auto",

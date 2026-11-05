@@ -7,7 +7,7 @@ menubar = false
 single_instance = true
 
 [audio]
-# Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).
+# Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit, whose system-audio source is audio.system_backend).
 backend = "auto"
 # How long devices-list (and the device check of a reload) waits for the audio backend to list its devices before failing with devices_timeout; the GUI shows devices unavailable.
 devices_timeout = "3s"
@@ -37,6 +37,8 @@ layout = "split"
 open_timeout = "15s"
 # Pause of the recorder writer and of capture readiness polling.
 poll_interval = "25ms"
+# macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.
+system_backend = "auto"
 # Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.
 transcribe = "auto"
 

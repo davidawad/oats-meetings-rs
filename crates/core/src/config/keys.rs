@@ -148,6 +148,7 @@ pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
 pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];
 pub const AUDIO_LAYOUTS: &[&str] = &["split", "mix"];
+pub const AUDIO_SYSTEM_BACKENDS: &[&str] = &["auto", "tap", "screencapturekit"];
 pub const AUDIO_TRANSCRIBE: &[&str] = &["auto", "on", "off"];
 pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
 pub const ICS_WEBCAL_SCHEMES: &[&str] = &["https", "http"];
@@ -590,7 +591,7 @@ pub const KEYS: &[Key] = &[
         path: "audio.backend",
         kind: Kind::Enum(AUDIO_BACKENDS),
         default: Def::S("auto"),
-        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit).",
+        doc: "Capture backend: auto picks per OS (Linux: pulse, else pipewire; Windows: cpal/WASAPI; macOS: screencapturekit, whose system-audio source is audio.system_backend).",
         ui: true,
         reload: Reload::Live,
     },
@@ -631,6 +632,14 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Bool,
         default: Def::B(true),
         doc: "Record system audio (what the machine plays).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "audio.system_backend",
+        kind: Kind::Enum(AUDIO_SYSTEM_BACKENDS),
+        default: Def::S("auto"),
+        doc: "macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.",
         ui: true,
         reload: Reload::Live,
     },

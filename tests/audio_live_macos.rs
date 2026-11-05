@@ -1,5 +1,7 @@
 //! Live macOS audio proof through the real binary (dot-4uzgol.6). It captures system audio and the
-//! microphone, so it triggers the Screen Recording and Microphone TCC prompts: it is skipped
+//! microphone, so it triggers the System Audio Recording (Core Audio tap, the default on macOS
+//! 14.2+; `OATS_AUDIO_SYSTEM_BACKEND=tap|screencapturekit|auto` picks `audio.system_backend`, or
+//! Screen Recording for ScreenCaptureKit) and Microphone TCC prompts: it is skipped
 //! (passes) unless `OATS_AUDIO_LIVE=1`, and runs only at David's review (dot-4uzgol.14), never from
 //! an agent session.
 //!
@@ -22,7 +24,7 @@ const RMS_MIN: f64 = 0.02;
 fn live() -> bool {
     let on = std::env::var("OATS_AUDIO_LIVE").ok().as_deref() == Some("1");
     if !on {
-        eprintln!("audio_live_macos: skipped (set OATS_AUDIO_LIVE=1; prompts for Microphone and Screen Recording)");
+        eprintln!("audio_live_macos: skipped (set OATS_AUDIO_LIVE=1; prompts for Microphone and System Audio / Screen Recording)");
     }
     on
 }
@@ -44,9 +46,12 @@ impl Engine {
 
     fn start() -> Engine {
         let dir = tempfile::tempdir().unwrap();
+        let system = std::env::var("OATS_AUDIO_SYSTEM_BACKEND").unwrap_or_else(|_| "auto".into());
         std::fs::write(
             dir.path().join("config.toml"),
-            "[audio]\nbackend = \"screencapturekit\"\ntranscribe = \"off\"\n",
+            format!(
+                "[audio]\nbackend = \"screencapturekit\"\nsystem_backend = \"{system}\"\ntranscribe = \"off\"\n"
+            ),
         )
         .unwrap();
         let child = Self::cmd(dir.path())
