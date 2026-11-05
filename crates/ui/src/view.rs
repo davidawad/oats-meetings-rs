@@ -623,32 +623,43 @@ impl MainWindow {
     fn status_bar(&self) -> impl IntoElement {
         let t = self.theme;
         let st = &self.state;
-        let mut left = div().flex().items_center().gap(px(6.));
+        // Every segment ellipsizes (dot-4uzgol.81): at 1100px the devices ran past the edge.
+        let mut left = div()
+            .flex()
+            .items_center()
+            .min_w_0()
+            .gap(px(6.))
+            .debug_selector(|| "status-left".into());
         if !st.status.is_empty() {
             let colour = if st.status.starts_with("Saved") {
                 t.ok
             } else {
                 t.dim
             };
-            left = left.text_color(rgb(colour)).child(st.status.clone());
+            left = left
+                .text_color(rgb(colour))
+                .child(kit::ellipsis(st.status.clone()));
         } else if st.tab == Tab::Live {
             left = match (&st.rec, &st.live_session) {
                 (r, _) if r.session().is_some() => left
-                    .child(div().text_color(rgb(t.ok)).child("●"))
-                    .child(format!("Saving to {}", r.session().unwrap_or_default())),
-                (Rec::Idle, Some(s)) => {
-                    left.child(format!("Last recording: {s} (saved; see Sessions)"))
-                }
-                _ => left.child(match &st.devices_note {
+                    .child(div().flex_none().text_color(rgb(t.ok)).child("●"))
+                    .child(kit::ellipsis(format!(
+                        "Saving to {}",
+                        r.session().unwrap_or_default()
+                    ))),
+                (Rec::Idle, Some(s)) => left.child(kit::ellipsis(format!(
+                    "Last recording: {s} (saved; see Sessions)"
+                ))),
+                _ => left.child(kit::ellipsis(match &st.devices_note {
                     Some(note) => note.clone(),
-                    None => format!("{} audio devices", st.devices),
-                }),
+                    None => kit::count(st.devices as u64, "audio device"),
+                })),
             };
         } else if st.tab == Tab::Sessions {
-            left = left.child(format!(
-                "{} sessions · click one to read it",
-                st.sessions.len()
-            ));
+            left = left.child(kit::ellipsis(format!(
+                "{} · click one to read it",
+                kit::count(st.sessions.len() as u64, "session")
+            )));
         }
         let mut bar = div()
             .id("status")
@@ -665,16 +676,26 @@ impl MainWindow {
             .text_color(rgb(t.dim))
             .overflow_hidden()
             .whitespace_nowrap()
+            .debug_selector(|| "status-bar".into())
             .child(left);
         if st.tab == Tab::Live {
             if let Some((name, runtime)) = &st.model {
-                bar = bar.child(kit::mono(if runtime.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{name} · {runtime}")
-                }));
+                bar = bar.child(
+                    kit::ellipsis(if runtime.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name} · {runtime}")
+                    })
+                    .font_family(MONO)
+                    .debug_selector(|| "status-model".into()),
+                );
             }
-            bar = bar.child(kit::mono(self.devices_label()).ml_auto());
+            bar = bar.child(
+                kit::ellipsis(self.devices_label())
+                    .font_family(MONO)
+                    .ml_auto()
+                    .debug_selector(|| "status-devices".into()),
+            );
         }
         bar
     }
@@ -965,6 +986,57 @@ mod tests {
         });
         cx.run_until_parked();
         view.update(cx, |v, cx| assert_eq!(v.dump(cx)["theme"], "dark"));
+    }
+
+    /// dot-4uzgol.81, at the carbon window size and the minimum window width (host.rs): the Default chip ends before
+    /// the Size column (the long model name ellipsizes) and every footer segment stays inside
+    /// the footer.
+    #[test]
+    fn model_names_and_footer_segments_stay_inside_their_columns() {
+        let (engine, _d) = testutil::engine(&[(
+            "audio.mic.device",
+            json!("MacBook Pro Microphone (Built-in, Aggregate Device)"),
+        )]);
+        let selected = views::models::load(&engine)
+            .rows
+            .into_iter()
+            .find(|r| r.selected)
+            .expect("a default model");
+        let size_sel: &'static str = Box::leak(format!("model-size-{}", selected.id).into());
+        let name_sel: &'static str = Box::leak(format!("model-name-{}", selected.id).into());
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        for width in [1100., 860.] {
+            cx.simulate_resize(gpui::size(px(width), px(752.)));
+            view.update(cx, |v, cx| {
+                v.state.tab = Tab::Models;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let name = cx.debug_bounds(name_sel).expect("name");
+            let chip = cx.debug_bounds("model-default-chip").expect("chip");
+            let size = cx.debug_bounds(size_sel).expect("size");
+            assert!(name.right() <= chip.left(), "{width}: {name:?} {chip:?}");
+            assert!(chip.right() <= size.left(), "{width}: {chip:?} {size:?}");
+            view.update(cx, |v, cx| {
+                v.state.tab = Tab::Live;
+                v.state.status.clear();
+                v.state.model = Some((selected.name.clone(), "sherpa-onnx".into()));
+                cx.notify();
+            });
+            cx.run_until_parked();
+            // Inside the bar's 28px right padding, as the left edge is.
+            let bar = cx.debug_bounds("status-bar").expect("bar");
+            for seg in ["status-left", "status-model", "status-devices"] {
+                if let Some(b) = cx.debug_bounds(seg) {
+                    assert!(
+                        b.right() <= bar.right() - px(28.),
+                        "{width} {seg}: {b:?} {bar:?}"
+                    );
+                }
+            }
+            assert!(cx.debug_bounds("status-devices").is_some());
+        }
     }
 
     #[test]

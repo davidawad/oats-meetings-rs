@@ -383,18 +383,21 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let mut table = kit::panel().child(header);
     for r in &l.rows {
         let id = r.id.clone();
+        // A long name ellipsizes before the Default chip, so the chip never covers Size.
         let mut name = div()
             .flex()
             .items_center()
+            .min_w_0()
             .gap(px(6.))
             .font_weight(if r.selected {
                 FontWeight::SEMIBOLD
             } else {
                 FontWeight::MEDIUM
             })
-            .child(r.name.clone());
+            .child(kit::ellipsis(r.name.clone()).debug_selector(|| format!("model-name-{}", r.id)));
         if r.selected {
-            name = name.child(kit::tag("Default", true));
+            name = name
+                .child(kit::tag("Default", true).debug_selector(|| "model-default-chip".into()));
         }
         let mut row = kit::row(format!("model-{}", r.id), r.selected)
             .h(px(64.))
@@ -417,7 +420,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                             .child(format!("{} · {} · {}", r.languages, r.runtime, r.status)),
                     ),
             )
-            .child(num(r.size.clone(), 84.))
+            .child(num(r.size.clone(), 84.).debug_selector(|| format!("model-size-{}", r.id)))
             .child(num(r.wer.clone(), 70.))
             .child(num(r.speed.clone(), 80.))
             .child(action(r, cx));

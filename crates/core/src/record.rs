@@ -53,13 +53,21 @@ pub struct DeviceWait {
 /// answers (a CoreAudio AudioUnit probe) must not hang the GUI main thread or `ctl devices-list`.
 #[derive(Default)]
 struct DevCache {
-    /// The last finished enumeration: when, for which `audio.backend`, and what it returned.
-    done: Option<(Instant, BackendChoice, Result<Value>)>,
+    /// The last finished enumeration: when, for which backend, and what it returned.
+    done: Option<(Instant, Which, Result<Value>)>,
     /// The enumeration in flight: since when, for which backend. At most one runs at a time, so a
     /// wedged backend holds one thread, not one per call.
-    running: Option<(Instant, BackendChoice)>,
+    running: Option<(Instant, Which)>,
     /// Bumped by `set_factory`: a worker of an older factory neither fills nor holds the cache.
     generation: u64,
+}
+
+/// What a listing depends on: `audio.backend`, and `audio.system_backend` (the macOS listing names
+/// the system-audio source it plans, so a listing of the old plan is stale; dot-4uzgol.81).
+type Which = (BackendChoice, SystemBackend);
+
+fn which(st: &AudioSettings) -> Which {
+    (st.backend, st.system_backend)
 }
 
 impl DevCache {
@@ -67,7 +75,7 @@ impl DevCache {
     fn fresh(&self, st: &AudioSettings, ttl: Duration, since: Instant) -> Option<Result<Value>> {
         self.done
             .as_ref()
-            .filter(|(at, b, _)| *b == st.backend && (at.elapsed() < ttl || *at >= since))
+            .filter(|(at, b, _)| *b == which(st) && (at.elapsed() < ttl || *at >= since))
             .map(|(_, _, v)| v.clone())
     }
 
@@ -288,7 +296,7 @@ impl Recorder {
         if c.running.is_some() {
             return;
         }
-        c.running = Some((Instant::now(), st.backend));
+        c.running = Some((Instant::now(), which(st)));
         let generation = c.generation;
         let (factory, cache, want) = (
             Arc::clone(&self.factory),
@@ -303,7 +311,7 @@ impl Recorder {
                 let mut c = m.lock().expect("devices");
                 if c.generation == generation {
                     c.running = None;
-                    c.done = Some((Instant::now(), want.backend, out));
+                    c.done = Some((Instant::now(), which(&want), out));
                     cv.notify_all();
                 }
             });
@@ -311,7 +319,7 @@ impl Recorder {
             c.running = None;
             c.done = Some((
                 Instant::now(),
-                st.backend,
+                which(st),
                 Err(ConfigError::new("io_error", format!("spawn devices: {e}"))),
             ));
         }
@@ -347,7 +355,7 @@ impl Recorder {
             return v.map(Some);
         }
         self.kick(&mut c, st);
-        let stale = c.done.as_ref().filter(|(_, b, _)| *b == st.backend);
+        let stale = c.done.as_ref().filter(|(_, b, _)| *b == which(st));
         match stale {
             Some((_, _, Ok(v))) => Ok(Some(v.clone())),
             _ if c.timed_out(wait) => Err(devices_timeout(wait)),

@@ -373,6 +373,24 @@ pub fn mono(text: impl Into<SharedString>) -> Div {
     div().font_family(MONO).child(text.into())
 }
 
+/// `n` and the noun, plural unless `n` is 1: `1 line`, `2 lines`, `0 lines`.
+pub fn count(n: impl Into<u64>, noun: &str) -> String {
+    match n.into() {
+        1 => format!("1 {noun}"),
+        n => format!("{n} {noun}s"),
+    }
+}
+
+/// One line of text that ends in an ellipsis instead of running past its flex row (dot-4uzgol.81).
+pub fn ellipsis(text: impl Into<SharedString>) -> Div {
+    div()
+        .min_w_0()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .child(text.into())
+}
+
 /// A radio dot: a 4px accent ring when on, a faint outline when off.
 pub fn radio(on: bool) -> Div {
     let t = theme::current();
@@ -523,5 +541,12 @@ mod tests {
         }
         assert!(Assets.load("icons/nope.svg").unwrap().is_none());
         assert_eq!(Assets.list("icons/").unwrap().len(), Icon::ALL.len());
+    }
+
+    #[test]
+    fn counts_are_singular_only_for_one() {
+        assert_eq!(count(1u64, "line"), "1 line");
+        assert_eq!(count(0u64, "line"), "0 lines");
+        assert_eq!(count(2u64, "line"), "2 lines");
     }
 }

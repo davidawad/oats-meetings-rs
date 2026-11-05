@@ -167,6 +167,44 @@ fn devices_list_is_cached_for_the_ttl() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
+/// audio.system_backend applies live (dot-4uzgol.81): the next devices-list asks a backend built
+/// with the new plan instead of serving the old plan's listing for audio.devices_ttl, and the next
+/// record-start opens with it.
+#[test]
+fn a_system_backend_change_reaches_devices_list_and_record_start_without_a_restart() {
+    use oats_audio::SystemBackend;
+    use std::sync::Mutex;
+    let r = rig();
+    let seen = Arc::new(Mutex::new(Vec::<SystemBackend>::new()));
+    let s = Arc::clone(&seen);
+    r.engine.set_audio_factory(Box::new(move |st| {
+        s.lock().unwrap().push(st.system_backend);
+        Ok(Box::new(FakeBackend::default()))
+    }));
+    r.engine.dispatch(&Action::DevicesList {}).unwrap();
+    assert_eq!(*seen.lock().unwrap(), [SystemBackend::Auto]);
+    r.engine
+        .set("audio.system_backend", &json!("screencapturekit"), "test")
+        .unwrap();
+    r.engine.dispatch(&Action::DevicesList {}).unwrap();
+    let asked = seen.lock().unwrap().clone();
+    assert_eq!(
+        asked.last(),
+        Some(&SystemBackend::ScreenCaptureKit),
+        "{asked:?}"
+    );
+    wait_until("the cached listing of the new plan", || {
+        matches!(r.engine.devices_cached(), Ok(Some(_)))
+    });
+    seen.lock().unwrap().clear();
+    start(&r, "plan");
+    stop(&r);
+    assert_eq!(
+        seen.lock().unwrap().first(),
+        Some(&SystemBackend::ScreenCaptureKit)
+    );
+}
+
 #[test]
 fn devices_list_reports_a_loopback_source() {
     let r = rig();

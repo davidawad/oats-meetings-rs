@@ -191,8 +191,11 @@ pub fn transcribed(
     st.sessions_ui.transcribing = None;
     st.status = match res {
         Ok(v) => format!(
-            "Transcribed {id} ({} lines)",
-            v["summary"]["utterance_count"].as_u64().unwrap_or(0)
+            "Transcribed {id} ({})",
+            kit::count(
+                v["summary"]["utterance_count"].as_u64().unwrap_or(0),
+                "line"
+            )
         ),
         Err(e) => e.to_string(),
     };
@@ -438,7 +441,7 @@ fn list(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             .hits
             .get(&s.id)
             .cloned()
-            .unwrap_or_else(|| format!("{} lines · {}", s.utterances, s.id));
+            .unwrap_or_else(|| format!("{} · {}", kit::count(s.utterances, "line"), s.id));
         let row = kit::row(format!("session-{}", s.id), sel)
             .h(px(60.))
             .child(
