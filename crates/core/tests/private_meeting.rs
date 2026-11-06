@@ -506,3 +506,79 @@ fn openoats_compat_round_trip() {
     kv.push(("listed", listed.to_string()));
     row("compat", &kv);
 }
+
+/// The final pass re-run with this build over the oats-rs take's audio.wav (default config, the
+/// configured local model), against the OpenOats take: WER per side, echo left on the `you`
+/// channel, and the per-stage mic counts (dot-4uzgol.93). The recorded transcripts are what an
+/// older build wrote; this is what the current one writes. Skips, saying why, when this test
+/// binary has no runtime for the model (add `--features oats-core/parakeet` or `whisper`).
+#[test]
+#[ignore = "private fixture, carbon only"]
+fn final_pass_rerun_against_the_openoats_take() {
+    use oats_core::stt::{final_utts, make_asr, Settings};
+    let Some(fx) = fixture() else { return };
+    let dir = session(&fx, "oats-rs");
+    let cfg = config();
+    let sessions = oats_core::sessions::default_sessions_dir(&|k| std::env::var(k).ok());
+    let s = Settings::from_config(&cfg, &sessions).expect("default stt settings");
+    let asr = match make_asr(&s, false, &oats_core::secrets::MemStore::default()) {
+        Ok(a) => a,
+        Err(e) => {
+            row(
+                "rerun",
+                &[("asr", "unavailable".into()), ("code", e.code.into())],
+            );
+            return;
+        }
+    };
+    let chans = wav::read(&dir.join("audio.wav")).expect("audio.wav does not decode");
+    let (ours, stages) = final_utts(&*asr, &s, &chans).expect("final pass failed");
+    let base = transcript(&session(&fx, "openoats"));
+    let text = |us: &[Utt], you: bool| {
+        us.iter()
+            .filter(|u| (u.speaker == "you") == you)
+            .map(|u| u.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let them: Vec<Utt> = ours
+        .iter()
+        .filter(|u| u.speaker != "you")
+        .cloned()
+        .collect();
+    let echo = s.tuning.echo.expect("audio.echo_cancel is on by default");
+    let leaked = ours
+        .iter()
+        .filter(|u| u.speaker == "you" && is_echo(u, &them, &echo))
+        .count();
+    let st = stages.to_json();
+    let mut kv = vec![
+        ("model", s.model.clone()),
+        (
+            "you_utts",
+            ours.iter()
+                .filter(|u| u.speaker == "you")
+                .count()
+                .to_string(),
+        ),
+        (
+            "wer_you",
+            f3(wer(&joined(&base, is_you), &text(&ours, true))),
+        ),
+        (
+            "wer_remote",
+            f3(wer(&joined(&base, |u| !is_you(u)), &text(&ours, false))),
+        ),
+        ("final_echo", leaked.to_string()),
+    ];
+    for k in [
+        "vad_regions",
+        "vad_seconds",
+        "recognised",
+        "echo_dropped",
+        "kept",
+    ] {
+        kv.push((k, st[k].to_string()));
+    }
+    row("rerun", &kv);
+}

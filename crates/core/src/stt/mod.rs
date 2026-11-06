@@ -160,20 +160,101 @@ fn similarity(a: &str, b: &str) -> f32 {
     (longest - row[b.len()]) as f32 / longest as f32
 }
 
-/// Enough of `you`'s words are, or nearly are (`similarity`), in the `them` utterances within
-/// the window around it.
+/// The words of `u`, each at its estimated time: spread over the utterance by letters, as if
+/// spoken at an even rate (the recognisers give times per utterance, not per word).
+fn timed_words(u: &Utt) -> Vec<(String, f64)> {
+    let w = words(&u.text);
+    let letters = w.iter().map(|x| x.chars().count()).sum::<usize>().max(1) as f64;
+    let mut before = 0.0;
+    w.into_iter()
+        .map(|x| {
+            let n = x.chars().count() as f64;
+            let at = u.start + (u.end - u.start) * (before + n / 2.0) / letters;
+            before += n;
+            (x, at)
+        })
+        .collect()
+}
+
+/// Enough of `you`'s words are, or nearly are (`similarity`), said by the `them` utterances at
+/// the same moment: each word is matched to a distinct remote word estimated within the window of
+/// it. Echo repeats remote words where they were said; a whole-utterance bag of words would also
+/// match double talk that shares common words ("I think we", "the review") with a long remote
+/// sentence anywhere near it (dot-4uzgol.93).
 pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
-    let near: std::collections::HashSet<String> = them
+    let w = timed_words(you);
+    let mut near: Vec<(String, f64, bool)> = them
         .iter()
         .filter(|t| t.start <= you.end + d.window && t.end >= you.start - d.window)
-        .flat_map(|t| words(&t.text))
+        .flat_map(timed_words)
+        .map(|(x, at)| (x, at, false))
         .collect();
-    let w = words(&you.text);
-    let hits = w
-        .iter()
-        .filter(|x| near.contains(*x) || near.iter().any(|t| similarity(x, t) >= d.similarity))
-        .count();
+    let mut hits = 0;
+    for (x, at) in &w {
+        let best = near
+            .iter_mut()
+            .filter(|(t, t_at, used)| {
+                !used
+                    && (t_at - at).abs() <= d.window
+                    && (t == x || similarity(x, t) >= d.similarity)
+            })
+            .min_by(|a, b| (a.1 - at).abs().total_cmp(&(b.1 - at).abs()));
+        if let Some(m) = best {
+            m.2 = true;
+            hits += 1;
+        }
+    }
     !w.is_empty() && hits as f32 >= d.overlap * w.len() as f32
+}
+
+/// What became of the mic ("you") channel in one pass (dot-4uzgol.93), to find the stage that
+/// loses near-end speech. The echo canceller (`aec`, `audio.echo_cancel`) runs while recording,
+/// so the recorded mic and every count here are after it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MicStages {
+    pub aec: bool,
+    /// Speech stretches on the mic the level gate (`stt.speech_peak`) passes, and their seconds;
+    /// `None` in the live pass, which sees the mic window by window.
+    pub vad: Option<(usize, f64)>,
+    /// "you" utterances the recogniser returned.
+    pub recognised: usize,
+    /// Of those, dropped as echo of remote speech.
+    pub echo_dropped: usize,
+    pub kept: usize,
+}
+
+impl MicStages {
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({
+            "aec": self.aec, "recognised": self.recognised,
+            "echo_dropped": self.echo_dropped, "kept": self.kept,
+        });
+        if let Some((regions, secs)) = self.vad {
+            v["vad_regions"] = json!(regions);
+            v["vad_seconds"] = json!((secs * 100.0).round() / 100.0);
+        }
+        v
+    }
+}
+
+/// The level gate over all of `x`: runs of non-silent 10 ms frames, joined across gaps the
+/// `stt.pad` on both sides would bridge; (count, seconds of non-silent frames).
+fn gate_stats(x: &[f32], t: &Tuning) -> (usize, f64) {
+    let frame = SAMPLE_RATE as usize / 100;
+    let bridge = (2 * t.pad_samples).div_ceil(frame);
+    let (mut regions, mut loud, mut gap) = (0, 0, None::<usize>);
+    for c in x.chunks(frame) {
+        if peak(c) >= t.speech_peak {
+            if gap.is_none_or(|g| g > bridge) {
+                regions += 1;
+            }
+            loud += 1;
+            gap = Some(0);
+        } else if let Some(g) = gap.as_mut() {
+            *g += 1;
+        }
+    }
+    (regions, loud as f64 / 100.0)
 }
 
 /// Drop every `you` utterance that is echo of remote speech (no-op when `d` is `None`).
@@ -668,6 +749,7 @@ pub struct Live {
     heard: Vec<Utt>,
     /// Splits the remote channel by voice (`with_diarization`).
     diarizer: Option<diarize::Diarizer>,
+    stages: MicStages,
 }
 
 /// `pcm` cut into pieces of at most `max` samples, each cut at the quietest 10 ms frame in the
@@ -752,6 +834,10 @@ impl Live {
             held: Vec::new(),
             heard: Vec::new(),
             diarizer: None,
+            stages: MicStages {
+                aec: tuning.echo.is_some(),
+                ..MicStages::default()
+            },
         }
     }
 
@@ -794,9 +880,20 @@ impl Live {
         samples as f64 / f64::from(SAMPLE_RATE)
     }
 
+    /// What became of the mic channel so far (`echo_dropped` and `kept` count released ones).
+    pub fn mic_stages(&self) -> MicStages {
+        self.stages
+    }
+
     /// Route fresh utterances of channel `ch`, then release the held ones that are decided.
     fn settle(&mut self, ch: usize, fresh: Vec<Utt>, all: bool) -> Vec<Utt> {
+        if ch == 0 {
+            self.stages.recognised += fresh.len();
+        }
         let Some(d) = self.tuning.echo else {
+            if ch == 0 {
+                self.stages.kept += fresh.len();
+            }
             return fresh;
         };
         let mut out = Vec::new();
@@ -815,7 +912,14 @@ impl Live {
                 all || them_silent || u.end + d.window <= them_at || you_at - u.end > max_lag
             });
         self.held = wait;
-        out.extend(ready.into_iter().filter(|u| !is_echo(u, &self.heard, &d)));
+        let n = ready.len();
+        let kept: Vec<Utt> = ready
+            .into_iter()
+            .filter(|u| !is_echo(u, &self.heard, &d))
+            .collect();
+        self.stages.kept += kept.len();
+        self.stages.echo_dropped += n - kept.len();
+        out.extend(kept);
         // Later "you" utterances start at or after `you_at`.
         let horizon = self.held.iter().map(|u| u.start).fold(you_at, f64::min) - d.window;
         self.heard.retain(|t| t.end >= horizon);
@@ -878,16 +982,45 @@ fn final_channel(
 }
 
 /// The final pass over both channels: each transcribed whole, the remote one split by voice
-/// (when diarization is on), echo of remote speech dropped from "you", in time order.
-fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<Vec<Utt>> {
+/// (when diarization is on), echo of remote speech dropped from "you", in time order; and what
+/// became of the mic channel on the way.
+pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<Utt>, MicStages)> {
     let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
+    let recognised = all.len();
     let mut them = final_channel(asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?;
     if let Some(d) = s.diarize {
         diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
     }
     all.extend(them);
-    Ok(by_time(drop_echoes(all, &s.speaker_you, s.tuning.echo)))
+    let all = drop_echoes(all, &s.speaker_you, s.tuning.echo);
+    let kept = all.iter().filter(|u| u.speaker == s.speaker_you).count();
+    let stages = MicStages {
+        aec: s.tuning.echo.is_some(),
+        vad: Some(gate_stats(&chans.you, &s.tuning)),
+        recognised,
+        echo_dropped: recognised - kept,
+        kept,
+    };
+    Ok((by_time(all), stages))
 }
+
+/// `x_oats.micStages` in session.json: the live and final passes' `MicStages`.
+fn record_stages(
+    store: &Store,
+    id: &str,
+    live: Option<MicStages>,
+    fin: Option<MicStages>,
+) -> Result<Value> {
+    let v = json!({
+        "live": live.map(|m| m.to_json()),
+        "final": fin.map(|m| m.to_json()),
+    });
+    store.set_ext_meta(id, MIC_STAGES, v.clone())?;
+    Ok(v)
+}
+
+/// The session.json key (under `x_oats`) of the per-stage mic counts.
+pub const MIC_STAGES: &str = "micStages";
 
 fn by_time(mut v: Vec<Utt>) -> Vec<Utt> {
     // Stable: utterances that start together keep their input order (you before them).
@@ -936,7 +1069,7 @@ pub fn run(
         &s.engine_label(),
     )?;
     store.set_meta(id, "language", json!(s.language))?;
-    let (live_n, final_n) = match passes(store, bus, &asr, s, chans, id, started) {
+    let (live_n, final_n, stages) = match passes(store, bus, &asr, s, chans, id, started) {
         Ok(n) => n,
         Err(e) => {
             // A failed run leaves no half-written session behind.
@@ -950,7 +1083,7 @@ pub fn run(
     }
     Ok(json!({
         "session": id, "backend": asr.name(), "duration_secs": duration,
-        "live_utterances": live_n, "final_utterances": final_n, "summary": summary,
+        "live_utterances": live_n, "final_utterances": final_n, "mic_stages": stages, "summary": summary,
     }))
 }
 
@@ -978,7 +1111,7 @@ pub fn into_session(
             .and_then(|()| store.write_transcript(id, "final", &[]))
     };
     clear()?;
-    let (live_n, final_n) = match passes(store, bus, &asr, s, chans, id, started) {
+    let (live_n, final_n, stages) = match passes(store, bus, &asr, s, chans, id, started) {
         Ok(n) => n,
         Err(e) => {
             let _ = clear();
@@ -992,12 +1125,12 @@ pub fn into_session(
     }
     Ok(json!({
         "session": id, "backend": asr.name(), "duration_secs": chans.seconds(),
-        "live_utterances": live_n, "final_utterances": final_n, "summary": summary,
+        "live_utterances": live_n, "final_utterances": final_n, "mic_stages": stages, "summary": summary,
     }))
 }
 
 /// The live pass (if enabled) then the final pass (if enabled) into session `id`; returns the
-/// number of (live, final) utterances written.
+/// number of (live, final) utterances written and the mic stage counts (`record_stages`).
 fn passes(
     store: &Store,
     bus: Option<&Bus>,
@@ -1006,7 +1139,7 @@ fn passes(
     chans: &Channels,
     id: &str,
     started: DateTime<Utc>,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, usize, Value)> {
     let emit = |kind: &str, u: &Utt| {
         if let Some(b) = bus {
             b.publish(
@@ -1016,6 +1149,7 @@ fn passes(
         }
     };
     let (mut live_n, mut final_n) = (0usize, 0usize);
+    let (mut live_stages, mut final_stages) = (None, None);
     if s.live_enabled {
         let mut live = Live::for_settings(Arc::clone(asr), s);
         let step = s.tuning.feed_samples;
@@ -1039,15 +1173,18 @@ fn passes(
             pos += step;
         }
         write(live.flush()?)?;
+        live_stages = Some(live.mic_stages());
     }
     if s.final_enabled {
-        let all = final_utts(&**asr, s, chans)?;
+        let (all, stages) = final_utts(&**asr, s, chans)?;
+        final_stages = Some(stages);
         let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
         store.write_transcript(id, "final", &lines)?;
         all.iter().for_each(|u| emit("final", u));
         final_n = lines.len();
     }
-    Ok((live_n, final_n))
+    let stages = record_stages(store, id, live_stages, final_stages)?;
+    Ok((live_n, final_n, stages))
 }
 
 // ---- engine glue ---------------------------------------------------------------------------
@@ -1794,6 +1931,211 @@ mod tests {
             ("audio.echo_delay", json!("500ms")),
         ]);
         assert_eq!(wide.echo.unwrap().window, 2.5);
+    }
+
+    fn said(speaker: &str, text: &str, start: f64, end: f64) -> Utt {
+        Utt {
+            speaker: speaker.into(),
+            text: text.into(),
+            start,
+            end,
+        }
+    }
+
+    /// dot-4uzgol.93: the near-end side of a real meeting (David's mic) mostly vanished from the
+    /// final transcript. Final-pass utterances are whole sentences, so a "you" sentence overlaps
+    /// long remote sentences, and a bag of every remote word near it matched 60% of its words
+    /// on common words alone. Synthetic double talk: near-end speech over far-end speech with
+    /// different words, sharing only what conversation shares.
+    #[test]
+    fn double_talk_over_long_remote_sentences_keeps_every_near_end_utterance() {
+        let echo = tuning_with(&[]).echo;
+        let them = [
+            said("remote_1", "So I think the main thing we need to figure out is whether the release can go out on Friday or if we have to push it to next week because of the review.", 100.0, 109.0),
+            said("remote_1", "And I can take the review if that helps, I just need the notes by tomorrow so I can do it in the morning.", 109.5, 116.0),
+            said("remote_2", "Is that something you can do, or do we need to ask the others to help us get it done?", 116.5, 121.0),
+        ];
+        let you = [
+            said("you", "Yeah I think we can do that if the review is done by Thursday, I can push it out myself.", 104.0, 110.0),
+            said("you", "Okay so I will send you the notes tonight and you can do the review in the morning.", 112.0, 117.5),
+            said("you", "I can do it, we do not need to ask the others.", 119.0, 122.0),
+            said("you", "Right.", 108.0, 108.4),
+        ];
+        let mut all: Vec<Utt> = them.to_vec();
+        all.extend(you.iter().cloned());
+        let kept = drop_echoes(all.clone(), "you", echo);
+        assert_eq!(kept, all, "every near-end utterance survives");
+        // The bag-of-words rule this replaced: 13 of the first sentence's 20 words are in the
+        // remote speech around it, above stt.echo_overlap.
+        let d = echo.unwrap();
+        let near: std::collections::HashSet<String> =
+            them.iter().flat_map(|t| words(&t.text)).collect();
+        let w = words(&you[0].text);
+        let bag = w.iter().filter(|x| near.contains(*x)).count();
+        assert!(
+            bag as f32 >= d.overlap * w.len() as f32,
+            "{bag}/{}",
+            w.len()
+        );
+
+        // Echo of the same remote speech still goes: the mic hearing the second half of the long
+        // sentence (misheard in places), and the whole of the short one.
+        let leak = [
+            said("you", "if we have to push it to next weak because of the reviews", 105.6, 109.1),
+            said("you", "is that something you can do or do we need to ask the others to help us get it done", 116.55, 121.05),
+        ];
+        let mut all: Vec<Utt> = them.to_vec();
+        all.extend(leak.iter().cloned());
+        assert_eq!(drop_echoes(all, "you", echo), them.to_vec());
+    }
+
+    /// Says the near-end script for quiet audio (the mic), the far-end one for loud (the
+    /// speakers), at times from the start of the audio it is sent.
+    struct Scripted {
+        near: Vec<(f64, f64, &'static str)>,
+        far: Vec<(f64, f64, &'static str)>,
+    }
+
+    impl Asr for Scripted {
+        fn name(&self) -> &'static str {
+            "scripted"
+        }
+        fn transcribe(&self, pcm: &[f32], _l: &str) -> Result<Vec<Segment>> {
+            let script = if peak(pcm) > 0.4 {
+                &self.far
+            } else {
+                &self.near
+            };
+            Ok(script
+                .iter()
+                .map(|&(start, end, text)| Segment {
+                    start,
+                    end,
+                    text: text.into(),
+                })
+                .collect())
+        }
+    }
+
+    #[test]
+    fn the_final_pass_records_mic_stage_counts_and_keeps_double_talk() {
+        let silence = |secs: f64| vec![0.0f32; (secs * f64::from(SAMPLE_RATE)) as usize];
+        // Mic: 4 s quiet, 10 s of the user talking, 6 s quiet. Speakers: 20 s of remote speech.
+        let mut you = silence(4.0);
+        you.extend(tone(10.0));
+        you.extend(silence(6.0));
+        let them: Vec<f32> = tone(20.0).iter().map(|v| v * 2.0).collect();
+        let chans = Channels { you, them };
+        let far = vec![
+            (0.0, 9.0, "So I think the main thing we need to figure out is whether the release can go out on Friday or if we have to push it to next week because of the review."),
+            (9.5, 16.0, "And I can take the review if that helps, I just need the notes by tomorrow so I can do it in the morning."),
+        ];
+        // The mic audio sent starts at 3.75 s (the 250 ms stt.pad before the speech).
+        let cases = [
+            // Double talk: both near-end sentences kept.
+            (vec![
+                (0.25, 6.25, "Yeah I think we can do that if the review is done by Thursday, I can push it out myself."),
+                (6.25, 10.25, "Okay so I will send you the notes tonight."),
+            ], 0),
+            // The second one is the speakers on the mic: dropped as echo.
+            (vec![
+                (0.25, 6.25, "Yeah I think we can do that if the review is done by Thursday, I can push it out myself."),
+                (6.0, 10.25, "and I can take the review if that helps I just need the notes"),
+            ], 1),
+        ];
+        for (near, dropped) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::new(dir.path());
+            let asr = Arc::new(Scripted {
+                near,
+                far: far.clone(),
+            });
+            let r = run(
+                &store,
+                None,
+                asr,
+                &settings(false, true),
+                &chans,
+                "s",
+                Utc::now(),
+            )
+            .unwrap();
+            let t = store.transcript("s").unwrap();
+            let n_you = t["utterances"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|u| u["speaker"] == "you")
+                .count();
+            assert_eq!(n_you, 2 - dropped);
+            let fin = &r["mic_stages"]["final"];
+            assert_eq!(fin["aec"], true);
+            assert_eq!(fin["vad_regions"], 1);
+            assert_eq!(fin["vad_seconds"], 10.0);
+            assert_eq!(fin["recognised"], 2);
+            assert_eq!(fin["echo_dropped"], dropped);
+            assert_eq!(fin["kept"], 2 - dropped);
+            assert_eq!(r["mic_stages"]["live"], Value::Null);
+            let meta: Value = serde_json::from_str(
+                &std::fs::read_to_string(dir.path().join("s/session.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(meta["x_oats"][MIC_STAGES], r["mic_stages"]);
+        }
+    }
+
+    #[test]
+    fn live_counts_recognised_dropped_and_kept_mic_utterances() {
+        let mut live = Live::new(
+            Arc::new(Parrot),
+            "en",
+            2.0,
+            tuning_with(&[]),
+            "you",
+            "remote_1",
+        );
+        // Both channels say the same at the same time, fed as they would arrive.
+        let (x, step) = (tone(4.0), SAMPLE_RATE as usize / 2);
+        for i in (0..x.len()).step_by(step) {
+            live.push(1, &x[i..i + step]).unwrap();
+            live.push(0, &x[i..i + step]).unwrap();
+        }
+        live.flush().unwrap();
+        let st = live.mic_stages();
+        assert!(st.recognised > 0 && st.aec && st.vad.is_none());
+        assert_eq!((st.echo_dropped, st.kept), (st.recognised, 0));
+        let mut live = Live::new(
+            Arc::new(Parrot),
+            "en",
+            2.0,
+            tuning_with(&[("audio.echo_cancel", json!(false))]),
+            "you",
+            "remote_1",
+        );
+        live.push(0, &tone(4.0)).unwrap();
+        live.flush().unwrap();
+        let st = live.mic_stages();
+        assert_eq!(
+            (st.aec, st.echo_dropped, st.kept),
+            (false, 0, st.recognised)
+        );
+        assert!(st.recognised > 0);
+    }
+
+    #[test]
+    fn the_gate_counts_speech_stretches_bridging_short_pauses() {
+        let t = tuning_with(&[]); // stt.pad 250 ms: pauses up to 500 ms are one stretch
+        let gap = |secs: f64| vec![0.0f32; (secs * f64::from(SAMPLE_RATE)) as usize];
+        let mut x = gap(1.0);
+        x.extend(tone(1.0));
+        x.extend(gap(0.4));
+        x.extend(tone(1.0));
+        x.extend(gap(2.0));
+        x.extend(tone(0.5));
+        let (regions, secs) = gate_stats(&x, &t);
+        assert_eq!(regions, 2);
+        assert!((secs - 2.5).abs() < 0.03, "{secs}");
+        assert_eq!(gate_stats(&gap(3.0), &t), (0, 0.0));
     }
 
     fn live_run(tuning: Tuning, them: &[f32]) -> Vec<Utt> {

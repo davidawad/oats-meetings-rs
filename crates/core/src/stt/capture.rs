@@ -14,7 +14,9 @@ use oats_audio::resample::Decimate3;
 use oats_audio::Source;
 use serde_json::{json, Value};
 
-use super::{by_time, final_utts, utterance_json, wav, Asr, Live, Settings, Utt};
+use super::{
+    by_time, final_utts, record_stages, utterance_json, wav, Asr, Live, MicStages, Settings, Utt,
+};
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
 use crate::sessions::Store;
@@ -35,6 +37,7 @@ enum Msg {
 struct LiveOutcome {
     utterances: usize,
     error: Option<ConfigError>,
+    stages: Option<MicStages>,
 }
 
 pub struct Transcriber {
@@ -65,6 +68,7 @@ fn live_worker(
     let mut out = LiveOutcome {
         utterances: 0,
         error: None,
+        stages: None,
     };
     let write = |out: &mut LiveOutcome, us: Vec<Utt>| {
         for u in by_time(us) {
@@ -94,6 +98,7 @@ fn live_worker(
             Err(e) => out.error = Some(e),
         }
     }
+    out.stages = Some(live.mic_stages());
     out
 }
 
@@ -148,20 +153,32 @@ impl Transcriber {
             w.join().unwrap_or(LiveOutcome {
                 utterances: 0,
                 error: Some(ConfigError::new("internal", "live worker panicked")),
+                stages: None,
             })
         });
         let s = &self.plan.settings;
-        let (final_state, final_n) = if !s.final_enabled {
-            (json!("off"), 0)
+        let (final_state, final_n, final_stages) = if !s.final_enabled {
+            (json!("off"), 0, None)
         } else if !split {
             // One mixed channel cannot be attributed to a speaker.
-            (json!("skipped: audio.layout is mix"), 0)
+            (json!("skipped: audio.layout is mix"), 0, None)
         } else {
             match self.final_pass(wav_path) {
-                Ok(n) => (json!("ok"), n),
-                Err(e) => (json!({"error": {"code": e.code, "message": e.message}}), 0),
+                Ok((n, st)) => (json!("ok"), n, Some(st)),
+                Err(e) => (
+                    json!({"error": {"code": e.code, "message": e.message}}),
+                    0,
+                    None,
+                ),
             }
         };
+        let stages = record_stages(
+            &self.store,
+            &self.id,
+            live.as_ref().and_then(|l| l.stages),
+            final_stages,
+        )
+        .unwrap_or(Value::Null);
         let _ = self.store.finish(
             &self.id,
             &ended.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -179,13 +196,14 @@ impl Transcriber {
             "live_utterances": live.map_or(0, |l| l.utterances),
             "final": final_state,
             "final_utterances": final_n,
+            "mic_stages": stages,
         })
     }
 
-    fn final_pass(&self, wav_path: &Path) -> Result<usize> {
+    fn final_pass(&self, wav_path: &Path) -> Result<(usize, MicStages)> {
         let s = &self.plan.settings;
         let chans = wav::read(wav_path)?;
-        let all = final_utts(&*self.plan.asr, s, &chans)?;
+        let (all, stages) = final_utts(&*self.plan.asr, s, &chans)?;
         let lines: Vec<Value> = all
             .iter()
             .map(|u| utterance_json(u, self.started))
@@ -193,6 +211,6 @@ impl Transcriber {
         self.store.write_transcript(&self.id, "final", &lines)?;
         all.iter()
             .for_each(|u| emit(&self.plan.bus, &self.id, "final", u));
-        Ok(lines.len())
+        Ok((lines.len(), stages))
     }
 }

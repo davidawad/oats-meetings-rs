@@ -839,6 +839,13 @@ impl Store {
         Ok(summary(&l))
     }
 
+    /// Set one of our keys (under `x_oats`) in `session.json`.
+    pub fn set_ext_meta(&self, id: &str, key: &str, value: Value) -> Result<()> {
+        let mut l = self.find(id)?;
+        set_ext(&mut l.meta, key, value);
+        write_meta(&l.dir, &l.meta)
+    }
+
     /// Set one OpenOats `session.json` key (e.g. `language`).
     pub fn set_meta(&self, id: &str, key: &str, value: Value) -> Result<()> {
         let mut l = self.find(id)?;

@@ -1145,7 +1145,7 @@
         },
         "echo_overlap": {
           "default": 60,
-          "description": "Percent of a local-speaker utterance's words that must appear in near-simultaneous remote speech for it to be dropped as echo (stt.echo_window).",
+          "description": "Percent of a local-speaker utterance's words that remote speech must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo.",
           "maximum": 100,
           "minimum": 1,
           "type": "integer",
@@ -1163,7 +1163,7 @@
         },
         "echo_window": {
           "default": "1s",
-          "description": "With audio.echo_cancel, a local-speaker utterance within this time (plus audio.echo_delay) of remote speech that says the same, or nearly the same (stt.echo_similarity), words is dropped as speaker echo.",
+          "description": "With audio.echo_cancel, a local-speaker utterance whose words remote speech says, or nearly says (stt.echo_similarity), within this time (plus audio.echo_delay) of each word is dropped as speaker echo; double talk with other words at other moments is kept.",
           "format": "duration",
           "pattern": "^[0-9]+(ms|s|m|h|d)$",
           "type": "string",
