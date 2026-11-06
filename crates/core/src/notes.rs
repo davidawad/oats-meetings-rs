@@ -116,14 +116,22 @@ pub fn api_key(cfg: &Config, secrets: &dyn SecretStore) -> Result<Option<String>
     }
 }
 
-fn render_transcript(store: &Store, session: &str) -> Result<String> {
-    let meta = store.get(session)?;
-    let names = &meta["metadata"]["speakerNames"];
+fn render_transcript(
+    store: &Store,
+    session: &str,
+    speakers: &crate::config::typed::Speakers,
+) -> Result<String> {
     let t = store.transcript(session)?;
+    let records = t["utterances"].as_array().map_or(&[][..], Vec::as_slice);
+    let labels = crate::speakers::Labels::new(
+        speakers,
+        t["speaker_names"].as_object(),
+        crate::speakers::ids(records),
+    );
     let mut lines = vec![];
-    for u in t["utterances"].as_array().into_iter().flatten() {
+    for u in records {
         let speaker = u["speaker"].as_str().unwrap_or("?");
-        let who = names[speaker].as_str().unwrap_or(speaker);
+        let who = labels.label(speaker);
         let text = u["refinedText"]
             .as_str()
             .or_else(|| u["text"].as_str())
@@ -177,7 +185,7 @@ pub fn missing_headings(template_prompt: &str, output: &str) -> Vec<String> {
 
 pub fn generate(ctx: &Ctx, session: &str, template: &str, dry_run: bool) -> Result<Value> {
     let tpl = templates::find(ctx.templates_dir, template)?;
-    let transcript = render_transcript(ctx.store, session)?;
+    let transcript = render_transcript(ctx.store, session, &ctx.cfg.speakers)?;
     let url = chat_url(ctx.cfg)?;
     let backend = ctx.cfg.llm.backend;
     let body = request_body(ctx.cfg, &tpl.system_prompt, &transcript);

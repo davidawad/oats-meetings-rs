@@ -700,6 +700,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     } else {
         transcript.child(MainWindow::lines(
             &w.state.transcript,
+            &w.transcript_labels(),
             "Empty transcript.",
             w.speaker_width(),
         ))

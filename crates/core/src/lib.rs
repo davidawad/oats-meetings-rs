@@ -14,6 +14,7 @@ pub mod openoats;
 pub mod record;
 pub mod secrets;
 pub mod sessions;
+pub mod speakers;
 pub mod stt;
 pub mod templates;
 

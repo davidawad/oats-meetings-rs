@@ -112,28 +112,24 @@ fn two_voice_channel() -> (Vec<f32>, Vec<Turn>) {
     (pcm, turns)
 }
 
-fn settings(live: bool) -> Settings {
+fn settings(live: bool, mic_diarize: bool) -> Settings {
     let mut c = defaults_flat();
     c.insert("stt.live.enabled".into(), json!(live));
     c.insert("stt.final.enabled".into(), json!(!live));
+    c.insert("speakers.mic.diarize".into(), json!(mic_diarize));
     let cfg: Config = serde_json::from_value(nest(&c)).unwrap();
     Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).unwrap()
 }
 
 fn transcribe(chans: &Channels, live: bool) -> Vec<Value> {
+    transcribe_with(chans, settings(live, false), live)
+}
+
+fn transcribe_with(chans: &Channels, s: Settings, live: bool) -> Vec<Value> {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::new(dir.path());
     let now: DateTime<Utc> = "2026-11-05T12:00:00Z".parse().unwrap();
-    stt::run(
-        &store,
-        None,
-        Arc::new(Stretches),
-        &settings(live),
-        chans,
-        "s",
-        now,
-    )
-    .unwrap();
+    stt::run(&store, None, Arc::new(Stretches), &s, chans, "s", now).unwrap();
     let t = store.transcript("s").unwrap();
     assert_eq!(t["source"], if live { "live" } else { "final" });
     t["utterances"].as_array().unwrap().clone()
@@ -215,7 +211,35 @@ fn the_microphone_stays_you_whatever_the_voice() {
 }
 
 #[test]
-fn diarization_off_labels_all_remote_speech_speaker_them() {
+fn speakers_mic_diarize_splits_a_shared_mic_into_room_1_and_room_2() {
+    // dot-4uzgol.86: two people in one room on one mic, nobody on the system channel.
+    let (you, turns) = two_voice_channel();
+    let chans = Channels { you, them: vec![] };
+    for live in [false, true] {
+        let us = transcribe_with(&chans, settings(live, true), live);
+        let want: std::collections::BTreeSet<String> =
+            ["room_1", "room_2"].map(String::from).into();
+        assert_eq!(speakers(&us), want, "live={live}");
+        let right = us
+            .iter()
+            .filter(|u| {
+                let v = truth(&turns, u).expect("utterance inside a turn");
+                u["speaker"] == ["room_1", "room_2"][v]
+            })
+            .count();
+        assert!(
+            right * 10 >= us.len() * 9,
+            "live={live}: only {right}/{} attributed correctly",
+            us.len()
+        );
+    }
+    // Off (the default), the mic is `you` whoever speaks.
+    let us = transcribe(&chans, false);
+    assert_eq!(speakers(&us), ["you".to_string()].into());
+}
+
+#[test]
+fn diarization_off_labels_all_remote_speech_remote_1() {
     let (them, _) = two_voice_channel();
     let mut c = defaults_flat();
     c.insert("stt.live.enabled".into(), json!(false));

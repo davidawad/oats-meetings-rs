@@ -210,7 +210,8 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
     // Transcript: speaker names applied, cleaned text preferred, stale live line absent.
     let user = req.body["messages"][1]["content"].as_str().unwrap();
     assert!(user.contains("Dana: The renewal is OK."), "{user}");
-    assert!(user.contains("you: great"), "{user}");
+    // Unnamed ids take the [speakers] labels (dot-4uzgol.86).
+    assert!(user.contains("You: great"), "{user}");
     assert!(!user.contains("stale live line"), "{user}");
     // Notes landed in the session, in the OpenOats-compatible metadata.
     let dir = rig.dir.join("sessions").join(SESSION);

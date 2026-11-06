@@ -31,6 +31,14 @@ fn ny() -> chrono_tz::Tz {
     "America/New_York".parse().unwrap()
 }
 
+/// The `[speakers]` table as the defaults set it.
+fn spk() -> oats_core::config::typed::Speakers {
+    let flat = oats_core::config::resolve::defaults_flat();
+    let cfg: oats_core::config::typed::Config =
+        serde_json::from_value(oats_core::config::resolve::nest(&flat)).unwrap();
+    cfg.speakers
+}
+
 fn json_of(p: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
 }
@@ -156,7 +164,9 @@ fn markdown_export_matches_openoats_byte_for_byte() {
     let s = Store::new(d.path().join("sessions"));
     s.import(&golden().join("sessions"), false).unwrap();
     let out = d.path().join("export");
-    let v = s.export_markdown(ID, &out, "Test Recorder", ny()).unwrap();
+    let v = s
+        .export_markdown(ID, &out, "Test Recorder", ny(), &spk())
+        .unwrap();
     let path = PathBuf::from(v["path"].as_str().unwrap());
     assert_eq!(
         path.file_name().unwrap(),
@@ -169,7 +179,9 @@ fn markdown_export_matches_openoats_byte_for_byte() {
 
     // Re-export replaces the file that names this session, as OpenOats re-mirrors.
     s.rename(ID, "Other title").unwrap();
-    let again = s.export_markdown(ID, &out, "Test Recorder", ny()).unwrap();
+    let again = s
+        .export_markdown(ID, &out, "Test Recorder", ny(), &spk())
+        .unwrap();
     assert_eq!(again["path"], v["path"]);
     assert!(std::fs::read_to_string(&path)
         .unwrap()
@@ -187,7 +199,9 @@ fn markdown_export_matches_openoats_byte_for_byte() {
     m["id"] = json!("session_other");
     std::fs::write(other.join("session.json"), m.to_string()).unwrap();
     s.import(&other, false).unwrap();
-    let w = s.export_markdown("session_other", &out, "", ny()).unwrap();
+    let w = s
+        .export_markdown("session_other", &out, "", ny(), &spk())
+        .unwrap();
     assert!(w["path"]
         .as_str()
         .unwrap()
@@ -226,7 +240,13 @@ fn export_maps_diarized_speakers_to_them_unless_named() {
     s.name_speaker("diar", "remote_2", "Dana").unwrap();
     s.finish("diar", "2026-11-02T19:31:10Z").unwrap();
     let v = s
-        .export_markdown("diar", &d.path().join("out"), "", chrono_tz::Tz::UTC)
+        .export_markdown(
+            "diar",
+            &d.path().join("out"),
+            "",
+            chrono_tz::Tz::UTC,
+            &spk(),
+        )
         .unwrap();
     let md = std::fs::read_to_string(v["path"].as_str().unwrap()).unwrap();
     assert!(v["path"]
@@ -251,7 +271,13 @@ fn export_maps_diarized_speakers_to_them_unless_named() {
         .unwrap();
     assert_eq!(
         empty
-            .export_markdown("blank", &d.path().join("out"), "", chrono_tz::Tz::UTC)
+            .export_markdown(
+                "blank",
+                &d.path().join("out"),
+                "",
+                chrono_tz::Tz::UTC,
+                &spk()
+            )
             .unwrap_err()
             .code,
         "empty_transcript"
@@ -530,7 +556,7 @@ fn private_openoats_sessions_round_trip_when_present() {
         m.remove("x_oats");
         assert_eq!(Value::Object(m), json_of(&src.join("session.json")), "{id}");
         if s.get(id).unwrap()["utterance_count"].as_u64().unwrap_or(0) > 0 {
-            s.export_markdown(id, &d.path().join("md"), "", ny())
+            s.export_markdown(id, &d.path().join("md"), "", ny(), &spk())
                 .unwrap();
         }
         s.export_openoats(id, &d.path().join("oo"), false).unwrap();

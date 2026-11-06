@@ -139,18 +139,16 @@ impl Theme {
         }
     }
 
-    /// A transcript speaker's colour: `you` fixed, `remote_N` cycling the three remote hues from
-    /// `remote_1`; anything else takes the dim text colour.
+    /// A transcript speaker's colour: the mic side (`you`, `room_N`) fixed, `remote_N` cycling the
+    /// three remote hues from `remote_1`, OpenOats' `them` the first; anything else takes the dim
+    /// text colour.
     pub fn speaker(&self, speaker: &str) -> u32 {
-        if speaker == "you" {
-            return self.you;
-        }
-        match speaker
-            .strip_prefix("remote_")
-            .and_then(|n| n.parse::<usize>().ok())
-        {
-            Some(n) if n > 0 => self.remote[(n - 1) % self.remote.len()],
-            _ => self.dim,
+        use oats_core::speakers::{parse, Id};
+        match parse(speaker) {
+            Id::You | Id::Room(_) => self.you,
+            Id::Them => self.remote[0],
+            Id::Remote(n) => self.remote[(n as usize - 1) % self.remote.len()],
+            Id::Other => self.dim,
         }
     }
 }
@@ -182,6 +180,7 @@ mod tests {
         assert_eq!(t.speaker("remote_4"), t.remote[0], "remote_4+ cycles");
         assert_eq!(t.speaker("remote_0"), t.dim);
         assert_eq!(t.speaker("mic"), t.dim);
+        assert_eq!(t.speaker("room_2"), t.you);
     }
 
     #[test]

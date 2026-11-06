@@ -52,6 +52,7 @@ pub struct Config {
     pub privacy: Privacy,
     pub secrets: Secrets,
     pub sessions: Sessions,
+    pub speakers: Speakers,
     pub stt: Stt,
     pub templates: Templates,
     pub ui: Ui,
@@ -292,6 +293,38 @@ pub struct Sessions {
     pub search_snippet_chars: u32,
 }
 
+/// `[speakers]`: how the stable transcript ids (`you`, `remote_N`, `room_N`) are shown
+/// (`crate::speakers`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Speakers {
+    pub export: SpeakersExport,
+    pub mic: SpeakersMic,
+    pub system: SpeakersSystem,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeakersMic {
+    pub diarize: bool,
+    pub label: String,
+    pub template: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeakersSystem {
+    pub label_single: String,
+    pub template: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpeakersExport {
+    Openoats,
+    Labels,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SttBackend {
@@ -432,8 +465,6 @@ pub struct Stt {
     pub feed: Dur,
     pub final_piece: Dur,
     pub pad: Dur,
-    pub speaker_them: String,
-    pub speaker_you: String,
     pub speech_peak: u32,
 }
 

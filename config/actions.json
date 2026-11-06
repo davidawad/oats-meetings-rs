@@ -629,7 +629,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Name a speaker of a session by its transcript label (you, remote_1, remote_2 ...); notes use the name. An empty name clears it.",
+      "doc": "Name a speaker of a session by its transcript id (you, remote_1, remote_2, room_1 ...); the name wins over the [speakers] label in the app, notes and exports. An empty name clears it.",
       "effect": "write",
       "name": "session-speaker-name",
       "params": [

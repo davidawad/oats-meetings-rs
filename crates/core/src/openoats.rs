@@ -8,9 +8,10 @@
 //!   engine/language/app/x_openoats_session` frontmatter and `[hh:mm:ss] **Speaker:** text` lines;
 //! - template snapshots and `templates.json` ids (`MeetingTemplate`, `TemplateSnapshot`).
 //!
-//! Speakers: OpenOats stores `you`, `them`, `remote_N`. On export an unnamed `remote_N` (our
-//! diarized system-audio speakers) is "Them", as a two-sided OpenOats meeting shows it; a name in
-//! `speakerNames` wins. Fields only oats-rs knows live under `x_oats` (session.json, utterances)
+//! Speakers: OpenOats stores `you`, `them`, `remote_N`. With `speakers.export = "openoats"` an
+//! unnamed `remote_N` (our diarized system-audio speakers) is "Them" on export, as a two-sided
+//! OpenOats meeting shows it, and our `room_N` is "You"; with `labels` they are the app's labels
+//! (`crate::speakers`). A name in `speakerNames` wins either way. Fields only oats-rs knows live under `x_oats` (session.json, utterances)
 //! or as `x_oats_*` frontmatter keys, which OpenOats ignores.
 
 use std::path::{Path, PathBuf};
@@ -20,7 +21,9 @@ use chrono_tz::Tz;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::config::typed::Speakers;
 use crate::config::{ConfigError, Result};
+use crate::speakers::Labels;
 
 /// The markdown export schema id OpenOats writes and reads back (`x_openoats_session`).
 pub const MARKDOWN_SCHEMA: &str = "openoats/v1";
@@ -261,17 +264,6 @@ pub fn notes_meta_ok(v: &Value) -> bool {
 
 // ---- markdown export -------------------------------------------------------------------------
 
-/// `Speaker.displayName(speakerNames:)`, except an unnamed `remote_N` is "Them" (see the module doc).
-pub fn speaker_label(speaker: &str, names: Option<&Map<String, Value>>) -> String {
-    if let Some(n) = names.and_then(|m| m.get(speaker)).and_then(Value::as_str) {
-        return n.to_string();
-    }
-    match speaker {
-        "you" => "You".to_string(),
-        _ => "Them".to_string(),
-    }
-}
-
 /// `MarkdownMeetingWriter.yamlQuote`.
 pub fn yaml_quote(v: &str) -> String {
     let e = v
@@ -365,6 +357,8 @@ pub struct Export<'a> {
     pub recorder: &'a str,
     /// The zone `date:` and the file name use (OpenOats: the system zone).
     pub tz: Tz,
+    /// `[speakers]`: how speaker ids are named (`speakers.export`).
+    pub speakers: &'a Speakers,
 }
 
 fn rounded_minutes(secs: f64) -> i64 {
@@ -430,9 +424,14 @@ impl Export<'_> {
                 rounded_minutes((b - a).num_milliseconds() as f64 / 1000.0)
             }
         };
+        let labels = Labels::new(
+            self.speakers,
+            self.names(),
+            lines.iter().map(|l| l.speaker.as_str()),
+        );
         let mut participants: Vec<String> = vec![];
         for l in &lines {
-            let p = speaker_label(&l.speaker, self.names());
+            let p = labels.export(&l.speaker);
             if !participants.contains(&p) {
                 participants.push(p);
             }
@@ -489,7 +488,7 @@ impl Export<'_> {
             tl.push(format!(
                 "[{}] **{}:** {}",
                 hms(off),
-                speaker_label(&l.speaker, self.names()),
+                labels.export(&l.speaker),
                 l.text
             ));
             tl.push(String::new());
@@ -618,13 +617,19 @@ mod tests {
 
     #[test]
     fn speakers() {
+        let flat = crate::config::resolve::defaults_flat();
+        let cfg: crate::config::typed::Config =
+            serde_json::from_value(crate::config::resolve::nest(&flat)).unwrap();
         let names = json!({"remote_2": "Dana", "you": "Me"});
-        let n = names.as_object();
-        assert_eq!(speaker_label("you", None), "You");
-        assert_eq!(speaker_label("them", None), "Them");
-        assert_eq!(speaker_label("remote_1", n), "Them");
-        assert_eq!(speaker_label("remote_2", n), "Dana");
-        assert_eq!(speaker_label("you", n), "Me");
+        let ids = ["you", "them", "remote_1", "remote_2", "room_1"];
+        let plain = Labels::new(&cfg.speakers, None, ids);
+        assert_eq!(plain.export("you"), "You");
+        assert_eq!(plain.export("them"), "Them");
+        assert_eq!(plain.export("room_1"), "You");
+        let l = Labels::new(&cfg.speakers, names.as_object(), ids);
+        assert_eq!(l.export("remote_1"), "Them");
+        assert_eq!(l.export("remote_2"), "Dana");
+        assert_eq!(l.export("you"), "Me");
     }
 
     #[test]

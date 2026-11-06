@@ -63,12 +63,20 @@ pub fn defaults_flat() -> Flat {
         .collect()
 }
 
+/// The `unknown_key` error for `path` (`what` is how to name it), saying what replaced a retired key.
+pub fn unknown_key(what: &str, path: &str) -> ConfigError {
+    let why = match keys::retired_key(path) {
+        Some(now) => format!("; it was retired, {now}"),
+        None => String::new(),
+    };
+    ConfigError::new("unknown_key", format!("unknown key {what}{why}"))
+}
+
 /// Closed vocabulary + type fidelity for one layer.
 pub fn validate_layer(flat: &Flat, layer: &str) -> Result<()> {
     for (path, v) in flat {
-        let key = keys::find(path).ok_or_else(|| {
-            ConfigError::new("unknown_key", format!("unknown key '{path}' in {layer}"))
-        })?;
+        let key =
+            keys::find(path).ok_or_else(|| unknown_key(&format!("'{path}' in {layer}"), path))?;
         match (key.kind, v) {
             (Kind::Bool, Value::Bool(_)) | (Kind::Str, Value::String(_)) => {}
             (Kind::Enum(vals), Value::String(s)) => {
@@ -247,6 +255,7 @@ impl Resolved {
                 ),
             ));
         }
+        crate::speakers::check(&cfg.speakers)?;
         if let Some((k, a, b)) =
             super::shortcut::clash(cfg.ui.keys.iter().map(|(c, v)| (c.as_str(), v.as_str())))
         {
@@ -545,8 +554,9 @@ mod tests {
     fn every_non_choice_key_takes_a_string() {
         for k in KEYS.iter().filter(|k| k.kind == Kind::Str) {
             let (table, leaf) = k.path.rsplit_once('.').unwrap();
-            let r = with_user(&format!("[{table}]\n{leaf} = \"x-value\"\n")).unwrap();
-            assert_eq!(r.flat[k.path], Value::String("x-value".into()));
+            // `{n}`: the speakers.*.template keys need it.
+            let r = with_user(&format!("[{table}]\n{leaf} = \"x-value {{n}}\"\n")).unwrap();
+            assert_eq!(r.flat[k.path], Value::String("x-value {n}".into()));
         }
     }
 

@@ -820,7 +820,7 @@ impl Engine {
 
     fn coerce(key: &str, value: &Value) -> Result<Value> {
         let k = keys::find(key)
-            .ok_or_else(|| ConfigError::new("unknown_key", format!("unknown key '{key}'")))?;
+            .ok_or_else(|| crate::config::resolve::unknown_key(&format!("'{key}'"), key))?;
         Ok(match (k.kind, value) {
             (Kind::Bool, Value::String(s)) => match s.as_str() {
                 "true" => Value::Bool(true),
@@ -888,7 +888,7 @@ impl Engine {
             .flat
             .get(key)
             .cloned()
-            .ok_or_else(|| ConfigError::new("unknown_key", format!("unknown key '{key}'")))
+            .ok_or_else(|| crate::config::resolve::unknown_key(&format!("'{key}'"), key))
     }
 
     fn session_saved(&self, id: &Value) {
@@ -1055,7 +1055,14 @@ impl Engine {
                 self.recorder.annotate(&mut v, session);
                 Ok(v)
             }
-            Action::TranscriptGet { session } => self.store().transcript(session),
+            Action::TranscriptGet { session } => {
+                let mut t = self.store().transcript(session)?;
+                t["speakers"] = json!(crate::speakers::labels_of(
+                    &self.snapshot().config.speakers,
+                    &t
+                ));
+                Ok(t)
+            }
             Action::SessionTranscribe { session, overwrite } => {
                 self.session_transcribe(session, overwrite.unwrap_or(false), true)
             }
@@ -1241,6 +1248,7 @@ impl Engine {
                     &dir,
                     &cfg.sessions.export_recorder,
                     crate::openoats::zone_named(&cfg.ui.tz),
+                    &cfg.speakers,
                 )
             }
             Action::SessionExportOpenoats {

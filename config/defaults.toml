@@ -241,6 +241,24 @@ root = ""
 # Characters of context kept either side of a transcript-search match in its snippet (the Sessions search shows it under the row).
 search_snippet_chars = 40
 
+[speakers]
+# Speaker names in the markdown export (session-export). openoats: as OpenOats writes them, the microphone side You and everything else Them. labels: the labels the app shows (speakers.*). Either way a name given to a speaker of the session (session-speaker-name) wins.
+export = "openoats"
+
+[speakers.mic]
+# Split the microphone channel by voice too, for several people sharing a room and a mic: its utterances get the ids room_1, room_2 ... (shown with speakers.mic.template) rather than you. Uses the stt.diarization.* tunables; stt.diarization.algorithm = off turns it off as well.
+diarize = false
+# How the microphone side (transcript id you) is shown in the app and in exports that use labels; also room_1 when speakers.mic.diarize finds one voice. A name given to a speaker of one session (session-speaker-name) wins.
+label = "You"
+# How a room speaker (id room_N, speakers.mic.diarize) is shown when the session has more than one: {n} is N. Must contain {n}.
+template = "Room {n}"
+
+[speakers.system]
+# How the system-audio side is shown when a session has one remote voice (id remote_1 only, or diarization off).
+label_single = "Them"
+# How a remote speaker (id remote_N) is shown when the session has more than one: {n} is N. Must contain {n}.
+template = "Speaker {n}"
+
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
@@ -258,10 +276,6 @@ final_piece = "10m"
 language = "en"
 # Silence kept around the speech that is sent to the recogniser.
 pad = "250ms"
-# Speaker id written for the system-audio (them) channel.
-speaker_them = "remote_1"
-# Speaker id written for the microphone (you) channel.
-speaker_you = "you"
 # Per-mille of full scale: a 10 ms frame whose peak is below this is silence (10 = 0.01).
 speech_peak = 10
 
@@ -280,9 +294,9 @@ timeout = "1m"
 url = "https://api.openai.com/v1"
 
 [stt.diarization]
-# How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is stt.speaker_them. auto: sherpa-onnx, the one measured on real meetings (crates/core/tests/diarize_ami.rs); neural is opt-in until it is. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.
+# How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is remote_1. auto: sherpa-onnx, the one measured on real meetings (crates/core/tests/diarize_ami.rs); neural is opt-in until it is. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.
 algorithm = "auto"
-# Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them, whatever stt.diarization.algorithm says.
+# Split the system-audio (them) channel by voice: its utterances get the ids remote_1, remote_2 ... one per distinct remote speaker (shown with speakers.system.template). The microphone channel is you unless speakers.mic.diarize. Off makes all remote speech remote_1 (shown as speakers.system.label_single), whatever stt.diarization.algorithm says.
 enabled = true
 # Most remote speakers the diarizer tells apart; past this an utterance joins the most similar speaker heard.
 max_speakers = 8

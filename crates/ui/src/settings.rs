@@ -94,6 +94,7 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
 pub const SECTIONS: &[(&str, &[&str])] = &[
     ("Recording", &["audio.", "ui.monitor"]),
     ("Transcription", &["stt."]),
+    ("Speakers", &["speakers."]),
     ("Privacy", &["network.", "privacy.", "secrets."]),
     (
         "Appearance",
@@ -130,6 +131,12 @@ const LABELS: &[(&str, &str)] = &[
         "Hide the window from screen capture",
     ),
     ("ui.monitor", "Input monitor"),
+    ("speakers.mic.label", "Your label"),
+    ("speakers.mic.diarize", "Split the microphone by voice"),
+    ("speakers.mic.template", "Room speaker label"),
+    ("speakers.system.label_single", "Remote label (one voice)"),
+    ("speakers.system.template", "Remote speaker label"),
+    ("speakers.export", "Speaker names in exports"),
     ("app.hook_timeout", "Hook timeout"),
     ("ui.theme", "Theme"),
     ("ui.show_elapsed", "Show elapsed time"),

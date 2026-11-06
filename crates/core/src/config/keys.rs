@@ -151,6 +151,8 @@ pub fn retired_stt_model(id: &str) -> Option<String> {
 /// onnxruntime execution providers for sherpa-onnx models: auto is coreml on macOS, cpu elsewhere.
 pub const STT_PROVIDERS: &[&str] = &["auto", "cpu", "coreml"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
+/// How the markdown export names speakers (`speakers.export`, dot-4uzgol.86).
+pub const SPEAKERS_EXPORTS: &[&str] = &["openoats", "labels"];
 /// How the system-audio channel is split by voice (dot-4uzgol.83): auto is sherpa-onnx; neural and
 /// sherpa-onnx fall back to spectral when their model is missing.
 pub const STT_DIARIZATION_ALGORITHMS: &[&str] =
@@ -1550,7 +1552,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.diarization.enabled",
         kind: Kind::Bool,
         default: Def::B(true),
-        doc: "Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them, whatever stt.diarization.algorithm says.",
+        doc: "Split the system-audio (them) channel by voice: its utterances get the ids remote_1, remote_2 ... one per distinct remote speaker (shown with speakers.system.template). The microphone channel is you unless speakers.mic.diarize. Off makes all remote speech remote_1 (shown as speakers.system.label_single), whatever stt.diarization.algorithm says.",
         ui: true,
         reload: Reload::Live,
     },
@@ -1558,7 +1560,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.diarization.algorithm",
         kind: Kind::Enum(STT_DIARIZATION_ALGORITHMS),
         default: Def::S("auto"),
-        doc: "How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is stt.speaker_them. auto: sherpa-onnx, the one measured on real meetings (crates/core/tests/diarize_ami.rs); neural is opt-in until it is. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.",
+        doc: "How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is remote_1. auto: sherpa-onnx, the one measured on real meetings (crates/core/tests/diarize_ami.rs); neural is opt-in until it is. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.",
         ui: true,
         reload: Reload::Live,
     },
@@ -1649,19 +1651,51 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
-        path: "stt.speaker_them",
+        path: "speakers.mic.label",
         kind: Kind::Str,
-        default: Def::S("remote_1"),
-        doc: "Speaker id written for the system-audio (them) channel.",
-        ui: false,
+        default: Def::S("You"),
+        doc: "How the microphone side (transcript id you) is shown in the app and in exports that use labels; also room_1 when speakers.mic.diarize finds one voice. A name given to a speaker of one session (session-speaker-name) wins.",
+        ui: true,
         reload: Reload::Live,
     },
     Key {
-        path: "stt.speaker_you",
+        path: "speakers.mic.diarize",
+        kind: Kind::Bool,
+        default: Def::B(false),
+        doc: "Split the microphone channel by voice too, for several people sharing a room and a mic: its utterances get the ids room_1, room_2 ... (shown with speakers.mic.template) rather than you. Uses the stt.diarization.* tunables; stt.diarization.algorithm = off turns it off as well.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "speakers.mic.template",
         kind: Kind::Str,
-        default: Def::S("you"),
-        doc: "Speaker id written for the microphone (you) channel.",
-        ui: false,
+        default: Def::S("Room {n}"),
+        doc: "How a room speaker (id room_N, speakers.mic.diarize) is shown when the session has more than one: {n} is N. Must contain {n}.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "speakers.system.label_single",
+        kind: Kind::Str,
+        default: Def::S("Them"),
+        doc: "How the system-audio side is shown when a session has one remote voice (id remote_1 only, or diarization off).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "speakers.system.template",
+        kind: Kind::Str,
+        default: Def::S("Speaker {n}"),
+        doc: "How a remote speaker (id remote_N) is shown when the session has more than one: {n} is N. Must contain {n}.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "speakers.export",
+        kind: Kind::Enum(SPEAKERS_EXPORTS),
+        default: Def::S("openoats"),
+        doc: "Speaker names in the markdown export (session-export). openoats: as OpenOats writes them, the microphone side You and everything else Them. labels: the labels the app shows (speakers.*). Either way a name given to a speaker of the session (session-speaker-name) wins.",
+        ui: true,
         reload: Reload::Live,
     },
     Key {
@@ -1673,6 +1707,23 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
 ];
+
+/// Keys that are gone, each with what replaced it, so a config still setting one is told.
+pub const RETIRED_KEYS: &[(&str, &str)] = &[
+    (
+        "stt.speaker_you",
+        "transcripts store the id you; set the label with speakers.mic.label",
+    ),
+    (
+        "stt.speaker_them",
+        "transcripts store the ids remote_1, remote_2 ...; set the labels with speakers.system.label_single and speakers.system.template",
+    ),
+];
+
+/// What replaced a retired key.
+pub fn retired_key(path: &str) -> Option<&'static str> {
+    RETIRED_KEYS.iter().find(|r| r.0 == path).map(|r| r.1)
+}
 
 pub fn find(path: &str) -> Option<&'static Key> {
     KEYS.iter().find(|k| k.path == path)

@@ -1,7 +1,7 @@
 //! Speaker diarization of the system-audio channel (dot-4uzgol.77, algorithms dot-4uzgol.83).
-//! Everything the speakers play is the other side of the call, so only that channel is split: its
-//! utterances are labelled `remote_1..remote_N` (from `stt.speaker_them`) by voice, the
-//! microphone stays `you`.
+//! Everything the speakers play is the other side of the call: its utterances get the ids
+//! `remote_1..remote_N` by voice. The microphone stays `you`, unless `speakers.mic.diarize` splits
+//! it too, into `room_1..room_N` (dot-4uzgol.86); `crate::speakers` labels the ids.
 //!
 //! Each utterance gets a voice print, a unit vector, from the algorithm
 //! `stt.diarization.algorithm` picks:
@@ -107,8 +107,20 @@ fn pct(v: u32) -> f32 {
 impl Diarization {
     /// The settings `cfg` asks for, models under `models_dir`; `None` when diarization is off.
     pub fn from_config(cfg: &Config, models_dir: &std::path::Path) -> Result<Option<Diarization>> {
+        Self::when(cfg, models_dir, cfg.stt.diarization.enabled)
+    }
+
+    /// The same for the microphone channel (`speakers.mic.diarize`).
+    pub fn mic_from_config(
+        cfg: &Config,
+        models_dir: &std::path::Path,
+    ) -> Result<Option<Diarization>> {
+        Self::when(cfg, models_dir, cfg.speakers.mic.diarize)
+    }
+
+    fn when(cfg: &Config, models_dir: &std::path::Path, on: bool) -> Result<Option<Diarization>> {
         let d = &cfg.stt.diarization;
-        if !d.enabled || d.algorithm == SttDiarizationAlgorithm::Off {
+        if !on || d.algorithm == SttDiarizationAlgorithm::Off {
             return Ok(None);
         }
         let speaker = |id: &str, key: &str| {
@@ -361,8 +373,8 @@ impl Embedder {
     }
 }
 
-/// The label of remote speaker `i` (0-based) given `stt.speaker_them`: `remote_1` numbers on
-/// (`remote_2`, ...); a name without a trailing number gets one (`caller`, `caller_2`).
+/// The id of speaker `i` (0-based) given the first one's: `remote_1` numbers on (`remote_2`,
+/// ...); an id without a trailing number gets one (`caller`, `caller_2`).
 pub fn label(them: &str, i: usize) -> String {
     if i == 0 {
         return them.to_string();
@@ -754,7 +766,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn labels_number_on_from_speaker_them() {
+    fn labels_number_on_from_the_first_id() {
         assert_eq!(label("remote_1", 0), "remote_1");
         assert_eq!(label("remote_1", 1), "remote_2");
         assert_eq!(label("remote_1", 9), "remote_10");

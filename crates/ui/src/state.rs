@@ -1,10 +1,13 @@
 //! View state, free of GPUI: what the main window shows, refreshed from the engine through the
 //! same actions `ctl` uses. Tested without a window.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
+use oats_core::config::typed::Speakers;
 use oats_core::control::engine::Engine;
-use serde_json::{json, Value};
+use oats_core::speakers;
+use serde_json::{json, Map, Value};
 
 use crate::model;
 use crate::settings::{self, Group};
@@ -313,9 +316,13 @@ pub struct State {
     pub sessions: Vec<SessionRow>,
     pub selected: Option<String>,
     pub transcript: Vec<Line>,
+    /// The selected session's `speakerNames` (per-session names over the `[speakers]` labels).
+    pub transcript_names: Map<String, Value>,
     /// The Live view: live segments of the current recording, replaced by the saved transcript at
     /// stop, cleared at the next start.
     pub live: Vec<Line>,
+    /// The Live session's `speakerNames`.
+    pub live_names: Map<String, Value>,
     /// The session the Live view shows (the active or the last stopped recording).
     pub live_session: Option<String>,
     pub rec: Rec,
@@ -343,6 +350,21 @@ fn s(v: &Value, k: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
+}
+
+/// `{id: label}` for the speakers of `lines` (`oats_core::speakers`): the `[speakers]` table and
+/// the session's `names`; transcripts keep the ids, so a config edit relabels them all.
+pub fn speaker_labels(
+    cfg: &Speakers,
+    lines: &[Line],
+    names: &Map<String, Value>,
+) -> BTreeMap<String, String> {
+    let ids = || lines.iter().map(|l| l.speaker.as_str());
+    speakers::Labels::new(cfg, Some(names), ids()).map(ids())
+}
+
+fn names_of(v: &Value) -> Map<String, Value> {
+    v["speaker_names"].as_object().cloned().unwrap_or_default()
 }
 
 pub fn line_of(u: &Value) -> Line {
@@ -443,6 +465,7 @@ impl State {
         self.selected = Some(id.to_string());
         match model::dispatch(engine, "transcript-get", json!({"session": id})) {
             Ok(v) => {
+                self.transcript_names = names_of(&v);
                 self.transcript = v["utterances"]
                     .as_array()
                     .into_iter()
@@ -452,6 +475,7 @@ impl State {
             }
             Err(e) => {
                 self.transcript.clear();
+                self.transcript_names.clear();
                 self.status = e.to_string();
             }
         }
@@ -473,7 +497,8 @@ impl State {
             Some((session, paused, dur)) => {
                 if self.rec.session() != Some(session.as_str()) {
                     self.live_session = Some(session.clone());
-                    self.live = self.saved_lines(engine, &session).unwrap_or_default();
+                    (self.live, self.live_names) =
+                        self.saved_lines(engine, &session).unwrap_or_default();
                     self.trim_live(engine);
                     self.rec = if paused {
                         Rec::Paused {
@@ -523,16 +548,20 @@ impl State {
         true
     }
 
-    fn saved_lines(&self, engine: &Engine, session: &str) -> Option<Vec<Line>> {
+    /// A session's saved lines and `speakerNames`.
+    fn saved_lines(
+        &self,
+        engine: &Engine,
+        session: &str,
+    ) -> Option<(Vec<Line>, Map<String, Value>)> {
         let v = model::dispatch(engine, "transcript-get", json!({"session": session})).ok()?;
-        Some(
-            v["utterances"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(line_of)
-                .collect(),
-        )
+        let lines = v["utterances"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(line_of)
+            .collect();
+        Some((lines, names_of(&v)))
     }
 
     fn trim_live(&mut self, engine: &Engine) {
@@ -554,6 +583,7 @@ impl State {
         match v["event"].as_str() {
             Some("recording-started") => {
                 self.live.clear();
+                self.live_names.clear();
                 self.live_session = Some(session.clone());
                 self.status.clear();
                 self.rec = Rec::Recording {
@@ -579,11 +609,27 @@ impl State {
             Some("recording-stopped") => {
                 self.rec = Rec::Idle;
                 // The saved transcript (final, else live) replaces the live fragments in one step.
-                if let Some(lines) = self.saved_lines(engine, &session) {
+                if let Some((lines, names)) = self.saved_lines(engine, &session) {
                     self.live = lines;
+                    self.live_names = names;
                 }
                 self.live_session = Some(session.clone());
                 self.status = format!("Saved session {session}");
+            }
+            Some("session-saved") if d["change"] == "speaker-name" => {
+                // A speaker named in this session: re-read its names (the lines keep their ids).
+                let id = d["id"].as_str().unwrap_or_default();
+                let names = || {
+                    model::dispatch(engine, "session-get", json!({"session": id}))
+                        .map(|v| names_of(&v))
+                        .unwrap_or_default()
+                };
+                if self.live_session.as_deref() == Some(id) {
+                    self.live_names = names();
+                }
+                if self.selected.as_deref() == Some(id) {
+                    self.transcript_names = names();
+                }
             }
             Some("hook-finished") => {
                 // The Hooks panel re-reads its runs; a failure raises the banner.
@@ -742,6 +788,33 @@ mod tests {
             }
         );
         assert!(!st.settings.is_empty());
+    }
+
+    #[test]
+    fn lines_keep_their_ids_and_show_the_configured_labels_and_session_names() {
+        let (engine, dir) = testutil::engine(&[("speakers.mic.label", json!("David"))]);
+        seed(dir.path());
+        let mut st = State::default();
+        st.select(&engine, "s1");
+        let labels = |st: &State| {
+            let cfg = engine.snapshot();
+            speaker_labels(&cfg.config.speakers, &st.transcript, &st.transcript_names)
+        };
+        assert_eq!(labels(&st)["you"], "David");
+        assert_eq!(labels(&st)["them"], "Them");
+        model::dispatch(
+            &engine,
+            "session-speaker-name",
+            json!({"session": "s1", "speaker": "them", "name": "Dana"}),
+        )
+        .unwrap();
+        st.on_event(
+            &engine,
+            &json!({"event": "session-saved", "data": {"id": "s1", "change": "speaker-name"}})
+                .to_string(),
+        );
+        assert_eq!(labels(&st)["them"], "Dana");
+        assert_eq!(st.transcript[1].speaker, "them");
     }
 
     #[test]

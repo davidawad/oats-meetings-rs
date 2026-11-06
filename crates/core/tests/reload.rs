@@ -107,6 +107,8 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         Kind::Str if k.path.starts_with("audio.") && k.path.ends_with(".device") => {
             vec![json!(""), json!("")]
         }
+        // speakers.*.template must hold {n}.
+        Kind::Str if k.path.ends_with(".template") => vec![json!("x {n}"), json!("{n} y")],
         Kind::Str => vec![json!("sample-x"), json!("sample-y")],
         // No default uses alt, so these clash with no other command; empty disables it.
         Kind::Keys => vec![json!("mod-alt-1, alt-shift-f12"), json!("")],

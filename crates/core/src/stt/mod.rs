@@ -13,10 +13,11 @@
 //! A recording is two channels: the microphone is "you", system audio is "them". `Live`
 //! transcribes fixed windows as audio arrives (cut at the quietest point near the window end);
 //! the final pass transcribes each whole channel again. Both write OpenOats-layout JSONL into the
-//! session store (`transcript.live.jsonl`, `transcript.final.jsonl`), speakers `stt.speaker_you`
-//! / `stt.speaker_them`. With `stt.diarization.enabled` the system-audio channel is split by
-//! voice (`diarize`, the algorithm `stt.diarization.algorithm` picks): `remote_1`, `remote_2`, ...
-//! one label per remote speaker; the mic stays "you".
+//! session store (`transcript.live.jsonl`, `transcript.final.jsonl`), speaker ids `you` and
+//! `remote_1`. With `stt.diarization.enabled` the system-audio channel is split by voice
+//! (`diarize`, the algorithm `stt.diarization.algorithm` picks): `remote_1`, `remote_2`, ... one
+//! id per remote speaker; the mic stays "you", or with `speakers.mic.diarize` is split into
+//! `room_1`, `room_2` ... The ids are stable; `crate::speakers` labels them for display.
 //!
 //! Stable error codes: `backend_unavailable`, `model_not_found`, `model_load_failed`,
 //! `asr_failed`, `network_denied`, `invalid_combination`, `secret_*` (see secrets), `stt_timeout`,
@@ -310,7 +311,9 @@ pub struct Settings {
     pub backend: SttBackend,
     pub adapter: SttAdapter,
     pub language: String,
+    /// The mic channel's id (`speakers::YOU`).
     pub speaker_you: String,
+    /// The system-audio channel's id before diarization (`speakers::REMOTE_1`).
     pub speaker_them: String,
     pub live_enabled: bool,
     pub chunk_secs: f64,
@@ -347,6 +350,8 @@ pub struct Settings {
     pub tuning: Tuning,
     /// `stt.diarization.*`; `None` when it is off.
     pub diarize: Option<diarize::Diarization>,
+    /// The same for the mic channel (`speakers.mic.diarize`); `None` when it is off.
+    pub mic_diarize: Option<diarize::Diarization>,
 }
 
 fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
@@ -359,13 +364,6 @@ impl Settings {
         let c = &cfg.stt;
         if c.language.trim().is_empty() {
             return Err(invalid("language", "must not be empty"));
-        }
-        let (you, them) = (c.speaker_you.trim(), c.speaker_them.trim());
-        if you.is_empty() || them.is_empty() || you == them {
-            return Err(invalid(
-                "speaker_you",
-                "speaker_you and speaker_them must be non-empty and different",
-            ));
         }
         let requested = c.local.model.trim();
         let entry = catalog::get(requested)
@@ -388,12 +386,13 @@ impl Settings {
             PathBuf::from(c.local.model_path.trim())
         };
         let diarize = diarize::Diarization::from_config(cfg, &models_dir)?;
+        let mic_diarize = diarize::Diarization::mic_from_config(cfg, &models_dir)?;
         Ok(Settings {
             backend: c.backend,
             adapter: c.cloud.adapter,
             language: c.language.trim().to_string(),
-            speaker_you: you.to_string(),
-            speaker_them: them.to_string(),
+            speaker_you: crate::speakers::YOU.to_string(),
+            speaker_them: crate::speakers::REMOTE_1.to_string(),
             live_enabled: c.live.enabled,
             chunk_secs: c.live.chunk.0 as f64 / 1000.0,
             final_enabled: c.final_.enabled,
@@ -422,6 +421,7 @@ impl Settings {
             max_response: c.cloud.max_response,
             tuning: Tuning::from_config(cfg),
             diarize,
+            mic_diarize,
         })
     }
 
@@ -508,7 +508,8 @@ fn local_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
 /// when it is missing (dot-4uzgol.83), in the background; until it lands the diarizer falls back
 /// down its chain. True when a download is under way.
 pub fn fetch_speaker_model(s: &Settings, bus: Option<Arc<Bus>>) -> bool {
-    let Some(m) = s.diarize.as_ref().and_then(|d| d.wanted_model()) else {
+    let wanted = s.diarize.as_ref().or(s.mic_diarize.as_ref());
+    let Some(m) = wanted.and_then(|d| d.wanted_model()) else {
         return false;
     };
     if !s.auto_download || m.entry.present(&m.path) {
@@ -803,6 +804,8 @@ pub struct Live {
     heard: Vec<Utt>,
     /// Splits the remote channel by voice (`with_diarization`).
     diarizer: Option<diarize::Diarizer>,
+    /// Splits the mic channel by voice (`with_mic_diarization`).
+    mic_diarizer: Option<diarize::Diarizer>,
     stages: MicStages,
 }
 
@@ -888,6 +891,7 @@ impl Live {
             held: Vec::new(),
             heard: Vec::new(),
             diarizer: None,
+            mic_diarizer: None,
             stages: MicStages {
                 aec: tuning.echo.is_some(),
                 ..MicStages::default()
@@ -898,6 +902,12 @@ impl Live {
     /// Label remote utterances by voice (`remote_1`, `remote_2`, ...) rather than all `them`.
     pub fn with_diarization(mut self, d: Option<diarize::Diarization>) -> Live {
         self.diarizer = d.map(diarize::Diarizer::new);
+        self
+    }
+
+    /// Label mic utterances by voice (`room_1`, `room_2`, ...) rather than all `you`.
+    pub fn with_mic_diarization(mut self, d: Option<diarize::Diarization>) -> Live {
+        self.mic_diarizer = d.map(diarize::Diarizer::new);
         self
     }
 
@@ -912,6 +922,7 @@ impl Live {
             &s.speaker_them,
         )
         .with_diarization(s.diarize.clone())
+        .with_mic_diarization(s.mic_diarize.clone())
     }
 
     /// Transcribe `chunk` of channel `ch`, which starts at `offset` seconds.
@@ -924,8 +935,10 @@ impl Live {
             &self.language,
             &self.tuning,
         )?;
-        if let (1, Some(d)) = (ch, self.diarizer.as_mut()) {
-            d.label_live(&mut us, chunk, offset, &self.names[1]);
+        match (ch, self.diarizer.as_mut(), self.mic_diarizer.as_mut()) {
+            (1, Some(d), _) => d.label_live(&mut us, chunk, offset, &self.names[1]),
+            (0, _, Some(d)) => d.label_live(&mut us, chunk, offset, crate::speakers::ROOM_1),
+            _ => {}
         }
         Ok(us)
     }
@@ -1046,8 +1059,16 @@ pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<
         diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
     }
     all.extend(them);
-    let all = drop_echoes(all, &s.speaker_you, s.tuning.echo);
+    let mut all = drop_echoes(all, &s.speaker_you, s.tuning.echo);
     let kept = all.iter().filter(|u| u.speaker == s.speaker_you).count();
+    if let Some(d) = &s.mic_diarize {
+        // After the echo is gone, so remote voices the mic picked up make no room speaker.
+        let (mut mic, them): (Vec<Utt>, Vec<Utt>) =
+            all.into_iter().partition(|u| u.speaker == s.speaker_you);
+        diarize::label_final(d, &mut mic, &chans.you, crate::speakers::ROOM_1);
+        all = mic;
+        all.extend(them);
+    }
     let stages = MicStages {
         aec: s.tuning.echo.is_some(),
         vad: Some(gate_stats(&chans.you, &s.tuning)),
@@ -1679,11 +1700,7 @@ mod tests {
             let cfg: Config = serde_json::from_value(crate::config::resolve::nest(&c)).unwrap();
             Settings::from_config(&cfg, Path::new("/tmp/x/sessions")).map(|_| ())
         };
-        for (k, v) in [
-            ("stt.local.model", "../evil"),
-            ("stt.language", " "),
-            ("stt.speaker_you", "remote_1"),
-        ] {
+        for (k, v) in [("stt.local.model", "../evil"), ("stt.language", " ")] {
             assert_eq!(
                 check(k, json!(v)).unwrap_err().code,
                 "invalid_value",

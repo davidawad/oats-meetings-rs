@@ -135,6 +135,18 @@
     "root": "",
     "search_snippet_chars": 40
   },
+  "speakers": {
+    "export": "openoats",
+    "mic": {
+      "diarize": false,
+      "label": "You",
+      "template": "Room {n}"
+    },
+    "system": {
+      "label_single": "Them",
+      "template": "Speaker {n}"
+    }
+  },
   "stt": {
     "backend": "local",
     "cloud": {
@@ -190,8 +202,6 @@
       "threads": 4
     },
     "pad": "250ms",
-    "speaker_them": "remote_1",
-    "speaker_you": "you",
     "speech_peak": 10
   },
   "templates": {

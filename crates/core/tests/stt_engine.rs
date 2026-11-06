@@ -419,14 +419,14 @@ fn mono_input_takes_the_speaker_flag() {
 }
 
 #[test]
-fn speaker_names_are_config_keys() {
+fn speaker_ids_are_stable_and_labels_are_config_keys() {
     let mock = Mock::ok();
     let rig = Rig::cloud(&mock, "SPK", "");
     rig.engine
-        .set("stt.speaker_you", &json!("me"), "test")
+        .set("speakers.mic.label", &json!("me"), "test")
         .unwrap();
     rig.engine
-        .set("stt.speaker_them", &json!("caller"), "test")
+        .set("speakers.system.label_single", &json!("caller"), "test")
         .unwrap();
     rig.engine
         .set("stt.live.enabled", &json!(false), "test")
@@ -445,7 +445,8 @@ fn speaker_names_are_config_keys() {
         .iter()
         .map(|u| u["speaker"].as_str().unwrap())
         .collect();
-    assert_eq!(speakers, ["me", "caller"]);
+    assert_eq!(speakers, ["you", "remote_1"]);
+    assert_eq!(t["speakers"], json!({"you": "me", "remote_1": "caller"}));
 }
 
 #[test]
@@ -582,12 +583,13 @@ fn status_never_leaks_the_key() {
 #[test]
 fn the_subsystem_vetoes_bad_stt_values_and_keeps_the_running_config() {
     let rig = Rig::with_config("");
-    for (key, bad) in [("stt.language", ""), ("stt.speaker_you", "remote_1")] {
-        let e = rig.engine.set(key, &json!(bad), "test").unwrap_err();
-        assert!(e.message.starts_with("stt:"), "{key}={bad}: {e}");
-        assert_eq!(e.code, "invalid_value", "{key}={bad}");
-        rig.engine.dispatch(&Action::ConfigCheck {}).unwrap();
-    }
+    let e = rig
+        .engine
+        .set("stt.language", &json!(""), "test")
+        .unwrap_err();
+    assert!(e.message.starts_with("stt:"), "{e}");
+    assert_eq!(e.code, "invalid_value");
+    rig.engine.dispatch(&Action::ConfigCheck {}).unwrap();
     // stt.local.model is an enum: anything outside the pinned set is refused by the key table.
     for bad in ["../escape", "large-v3", "base.EN", ""] {
         let e = rig

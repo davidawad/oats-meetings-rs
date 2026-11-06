@@ -1,6 +1,6 @@
 //! Transcribing a recording as it happens (dot-4uzgol.7). `record start` taps the captured audio:
 //! each source is decimated 48 -> 16 kHz and queued to a worker thread that owns a `Live`
-//! (mic = channel 0 = `stt.speaker_you`, system = channel 1 = `stt.speaker_them`) and appends each
+//! (mic = channel 0 = `you`, system = channel 1 = `remote_1`; see `crate::speakers`) and appends each
 //! utterance to `transcript.live.jsonl`. `record stop` flushes the worker, then runs the final pass
 //! over the saved WAV into `transcript.final.jsonl`. The tap never blocks the capture thread.
 

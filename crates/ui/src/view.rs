@@ -4,6 +4,7 @@
 //! control dispatches an action id through `model::dispatch`.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -495,8 +496,14 @@ impl MainWindow {
     }
 
     /// Transcript lines: a mono timestamp, the speaker tag in its colour, the text. A line by the
-    /// same speaker as the one before hides its timestamp and tag (the columns stay).
-    pub(crate) fn lines(lines: &[Line], empty: &str, speaker_w: f32) -> impl IntoElement {
+    /// same speaker as the one before hides its timestamp and tag (the columns stay). The tag is
+    /// the speaker id's label (`labels`, `state::speaker_labels`).
+    pub(crate) fn lines(
+        lines: &[Line],
+        labels: &BTreeMap<String, String>,
+        empty: &str,
+        speaker_w: f32,
+    ) -> impl IntoElement {
         let t = theme::current();
         let body = div().flex().flex_col().gap(px(2.)).w_full().max_w(px(860.));
         if lines.is_empty() {
@@ -547,7 +554,12 @@ impl MainWindow {
                                 .rounded(px(2.))
                                 .bg(rgb(c)),
                         )
-                        .child(div().min_w_0().overflow_hidden().child(l.speaker.clone())),
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(labels.get(&l.speaker).unwrap_or(&l.speaker).clone()),
+                        ),
                 )
                 // flex_1 + min_w_0 lets long text wrap inside the row instead of running off the window.
                 .child(
@@ -634,6 +646,26 @@ impl MainWindow {
         out.join(" · ")
     }
 
+    /// The Live lines' speaker labels.
+    pub(crate) fn live_labels(&self) -> BTreeMap<String, String> {
+        let cfg = self.engine.snapshot();
+        crate::state::speaker_labels(
+            &cfg.config.speakers,
+            &self.state.live,
+            &self.state.live_names,
+        )
+    }
+
+    /// The selected session's speaker labels.
+    pub(crate) fn transcript_labels(&self) -> BTreeMap<String, String> {
+        let cfg = self.engine.snapshot();
+        crate::state::speaker_labels(
+            &cfg.config.speakers,
+            &self.state.transcript,
+            &self.state.transcript_names,
+        )
+    }
+
     fn inputs(&self) -> usize {
         let cfg = self.engine.snapshot();
         let a = &cfg.config.audio;
@@ -662,12 +694,20 @@ impl MainWindow {
                 Rec::Idle => {
                     let map = self.keymap();
                     let k = |c: &str| crate::shortcuts::shown(map.keys(c));
+                    let cfg = self.engine.snapshot();
+                    let sp = &cfg.config.speakers;
+                    let n = |i| oats_core::speakers::fill(&sp.system.template, i);
                     (
                         "Ready when you are",
                         format!(
                             "Start recording and the transcript appears here as people speak. Your \
-                             voice shows as you, everyone else as remote_1, remote_2. (Also {} or \
-                             {}, or `ctl record-start`; {} lists every shortcut.)",
+                             voice shows as {}, the other side as {} ({}, {} ... when several \
+                             speak). (Also {} or {}, or `ctl record-start`; {} lists every \
+                             shortcut.)",
+                            sp.mic.label,
+                            sp.system.label_single,
+                            n(1),
+                            n(2),
                             k("record-toggle"),
                             k("record-start"),
                             k("help")
@@ -689,7 +729,7 @@ impl MainWindow {
                 .track_scroll(&self.live_scroll)
                 .pt(px(18.))
                 .px(px(16.))
-                .child(Self::lines(&self.state.live, "", w))
+                .child(Self::lines(&self.state.live, &self.live_labels(), "", w))
                 .into_any_element()
         };
         div()

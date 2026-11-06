@@ -197,7 +197,7 @@ fn dispatch(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> Result<(Va
             let v = r
                 .flat
                 .get(key.as_str())
-                .ok_or_else(|| ConfigError::new("unknown_key", format!("unknown key '{key}'")))?;
+                .ok_or_else(|| crate::config::resolve::unknown_key(&format!("'{key}'"), key))?;
             Ok((json!({"key": key, "value": v}), format!("{}\n", scalar(v))))
         }
         "reload" => {

@@ -5,6 +5,7 @@
 //! agent can switch views, press their buttons and check the result with `ctl` alone, without
 //! foreground input or accessibility nodes (GPUI content exposes none).
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -634,11 +635,13 @@ impl MainWindow {
             Some(p) => p.busy_label().to_string(),
             None => badge_text(&st.rec, Instant::now(), cfg.config.ui.show_elapsed),
         };
-        let lines = |ls: &[crate::state::Line]| -> Vec<Value> {
+        // `speaker` is the transcript's id, `label` what the window shows for it.
+        let lines = |ls: &[crate::state::Line], labels: &BTreeMap<String, String>| -> Vec<Value> {
             ls.iter()
-                .map(|l| json!({"speaker": l.speaker, "text": l.text}))
+                .map(|l| json!({"speaker": l.speaker, "label": labels.get(&l.speaker), "text": l.text}))
                 .collect()
         };
+        let (live_labels, transcript_labels) = (self.live_labels(), self.transcript_labels());
         let edit = st
             .edit
             .as_ref()
@@ -648,7 +651,8 @@ impl MainWindow {
                 "session": st.rec.session().map(str::to_string).or_else(|| st.live_session.clone()),
                 "devices": st.devices,
                 "devices_note": st.devices_note,
-                "lines": lines(&st.live),
+                "lines": lines(&st.live, &live_labels),
+                "speakers": live_labels,
             }),
             Tab::Sessions => json!({
                 "query": sessions::query(st),
@@ -662,7 +666,8 @@ impl MainWindow {
                     "selected": st.selected.as_deref() == Some(r.id.as_str()),
                 })).collect::<Vec<_>>(),
                 "selected": st.selected,
-                "transcript": lines(&st.transcript),
+                "transcript": lines(&st.transcript, &transcript_labels),
+                "speakers": transcript_labels,
                 "confirm_delete": st.sessions_ui.confirm,
                 "delete_label": sessions::delete_label(self.engine.snapshot().config.sessions.delete_mode),
                 "transcribing": st.sessions_ui.transcribing,

@@ -380,7 +380,8 @@ impl Store {
     pub fn transcript(&self, id: &str) -> Result<Value> {
         let l = self.find(id)?;
         let (source, utterances) = transcript(&l.dir);
-        Ok(json!({"id": id, "source": source, "utterances": utterances}))
+        let names = l.meta.get("speakerNames").cloned().unwrap_or(json!({}));
+        Ok(json!({"id": id, "source": source, "utterances": utterances, "speaker_names": names}))
     }
 
     /// Utterances whose text holds every whitespace-separated word of `query` (case-insensitive),
@@ -863,6 +864,7 @@ impl Store {
         dir: &Path,
         recorder: &str,
         tz: chrono_tz::Tz,
+        speakers: &crate::config::typed::Speakers,
     ) -> Result<Value> {
         let l = self.find(id)?;
         let (source, utterances) = transcript(&l.dir);
@@ -875,6 +877,7 @@ impl Store {
             notes: notes.as_deref(),
             recorder,
             tz,
+            speakers,
         }
         .write(dir)?;
         Ok(json!({"session": sid, "path": path, "source": source, "utterances": utterances.len()}))
