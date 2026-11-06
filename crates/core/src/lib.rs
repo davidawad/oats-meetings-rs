@@ -11,6 +11,7 @@ pub mod kb;
 pub mod log;
 pub mod notes;
 pub mod openoats;
+pub mod perms;
 pub mod record;
 pub mod secrets;
 pub mod sessions;

@@ -42,6 +42,10 @@ echo_tail = "200ms"
 echo_warmup = "3s"
 # Echo-canceller adaptation step in per-mille during audio.echo_warmup (never below audio.echo_step).
 echo_warmup_step = 1000
+# perms-ensure may load a null sink (oats_meetings_null) when the audio server has no output to monitor, so a headless machine still has a system-audio source; off leaves the audio graph alone.
+ensure_null_sink = true
+# How long perms-ensure waits for a user audio server it started (systemctl --user, pulseaudio --start) to answer before reporting it unavailable.
+ensure_wait = "5s"
 # WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.
 layout = "split"
 # How long a capture backend waits for audio to start flowing before giving up.

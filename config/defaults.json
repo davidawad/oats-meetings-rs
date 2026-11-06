@@ -20,6 +20,8 @@
     "echo_tail": "200ms",
     "echo_warmup": "3s",
     "echo_warmup_step": 1000,
+    "ensure_null_sink": true,
+    "ensure_wait": "5s",
     "layout": "split",
     "mic": {
       "device": "",

@@ -1,5 +1,6 @@
 //! ICS calendar subscriptions (dot-4uzgol.17): N configurable feeds, a disk cache, scheduled and
-//! manual refresh, and recurrence-expanded events over a time window.
+//! manual refresh, and recurrence-expanded events over a time window. A feed may also be a CalDAV
+//! collection (`caldav://`, dot-4uzgol.96; see `fetch`), fetched and cached the same way.
 //!
 //! Every choice is a config key (`ics.*`, see `config::keys`); the feed list itself is the JSON
 //! string `ics.feeds`, edited by `ics-add` / `ics-remove` (or `config-set`). Fetching http(s) and
@@ -450,6 +451,7 @@ fn feed_state(c: &Ctx, f: &Feed, now: i64) -> Value {
     let scheme = match fetch::classify(&f.url, c.settings.webcal_https) {
         Ok(Source::File(_)) => "file",
         Ok(Source::Http(_)) => "http",
+        Ok(Source::CalDav(_)) => "caldav",
         Err(_) => "invalid",
     };
     let mut v = public(f);
@@ -512,7 +514,7 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
     }
     let src = fetch::classify(&f.url, c.settings.webcal_https)?;
     match &src {
-        Source::Http(_) if !c.network_allow => {
+        Source::Http(_) | Source::CalDav(_) if !c.network_allow => {
             return Err(ConfigError::new(
                 "network_denied",
                 format!("fetching '{}' needs network.allow = true", f.name),

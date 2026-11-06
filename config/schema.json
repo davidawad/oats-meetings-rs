@@ -208,6 +208,27 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "ensure_null_sink": {
+          "default": true,
+          "description": "perms-ensure may load a null sink (oats_meetings_null) when the audio server has no output to monitor, so a headless machine still has a system-audio source; off leaves the audio graph alone.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "ensure_wait": {
+          "default": "5s",
+          "description": "How long perms-ensure waits for a user audio server it started (systemctl --user, pulseaudio --start) to answer before reporting it unavailable.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "layout": {
           "default": "split",
           "description": "WAV layout: split is two channels (left system audio, right mic); mix is one summed channel.",

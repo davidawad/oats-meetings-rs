@@ -234,7 +234,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.",
+      "doc": "Subscribe to an ICS feed (http, https, webcal or file URL) or a CalDAV calendar collection (caldav://host/path over https, caldav+http:// for plain http); header is an optional 'Name: value' request header.",
       "effect": "write",
       "name": "ics-add",
       "params": [
@@ -478,6 +478,20 @@
           "type": "Option<String>"
         }
       ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Each permission the app needs (microphone, system audio, calendar, screen-cast portal) with its state, how it was obtained and, when not granted, the fix; all_granted is true when nothing is missing. Never prompts.",
+      "effect": "read",
+      "name": "perms-status",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Acquire every permission that can be had without a human, then report perms-status: start the user audio server, load a null sink when there is no output to monitor (audio.ensure_null_sink), grant the Flatpak device permission through flatpak-spawn --host. Never opens a dialog; what needs a person is listed with the exact command.",
+      "effect": "control",
+      "name": "perms-ensure",
+      "params": [],
       "status": "implemented"
     },
     {

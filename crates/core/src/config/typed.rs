@@ -124,6 +124,8 @@ pub struct Audio {
     pub echo_tail: Dur,
     pub echo_warmup: Dur,
     pub echo_warmup_step: u32,
+    pub ensure_null_sink: bool,
+    pub ensure_wait: Dur,
     pub layout: AudioLayout,
     pub mic: AudioEndpoint,
     pub open_timeout: Dur,

@@ -83,6 +83,24 @@ impl Http {
                                     }
                                 }
                             }
+                            // Read a request body too (a CalDAV REPORT), so the socket is
+                            // never closed with unread data (a reset the client would see).
+                            let head_end =
+                                buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+                            let want = String::from_utf8_lossy(&buf[..head_end])
+                                .lines()
+                                .find_map(|l| {
+                                    let (k, v) = l.split_once(':')?;
+                                    k.eq_ignore_ascii_case("content-length")
+                                        .then(|| v.trim().parse::<usize>().ok())?
+                                })
+                                .unwrap_or(0);
+                            while buf.len() < head_end + want {
+                                match c.read(&mut tmp) {
+                                    Ok(0) | Err(_) => break,
+                                    Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                }
+                            }
                             let req = String::from_utf8_lossy(&buf).to_string();
                             let path = req.split_whitespace().nth(1).unwrap_or("/").to_string();
                             seen.lock().unwrap().push(req.clone());
@@ -577,6 +595,72 @@ fn http_fetch_sends_the_header_and_parses_the_body() {
     assert!(req.contains("get /cal.ics"), "{req}");
     assert!(req.contains("authorization: bearer s3cret"), "{req}");
     assert!(req.contains("accept: text/calendar"), "{req}");
+    assert_eq!(
+        r.events("2026-03-01", "2026-05-01")["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        7
+    );
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\r', "&#13;")
+}
+
+/// A CalDAV collection (dot-4uzgol.96): one REPORT calendar-query, the multistatus reply's
+/// calendar-data merged into one cached calendar, behind the same header secret and network gate.
+#[test]
+fn caldav_feed_reports_merges_and_serves_events() {
+    let body = fixture("weekly-ny.ics");
+    let multistatus = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:" xmlns:cal="urn:ietf:params:xml:ns:caldav">
+<d:response><d:href>/dav/cal/weekly.ics</d:href><d:propstat><d:prop><d:getetag>"9"</d:getetag>
+<cal:calendar-data>{}</cal:calendar-data></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+</d:multistatus>"#,
+        xml_escape(&body)
+    );
+    let h = Http::start(Arc::new(move |_, req| {
+        if req.starts_with("report ") {
+            Resp {
+                status: 207,
+                headers: vec![("Content-Type".into(), "application/xml".into())],
+                body: multistatus.as_bytes().to_vec(),
+                delay: Duration::ZERO,
+            }
+        } else {
+            Resp::status(405)
+        }
+    }));
+    let url = h.url("/dav/cal/").replacen("http://", "caldav+http://", 1);
+    let off = Rig::new();
+    off.add("dav", &url).unwrap();
+    assert_eq!(code(off.refresh(Some("dav"))), "network_denied");
+    assert_eq!(h.hits(), 0);
+
+    let r = Rig::net();
+    std::env::set_var("OATS_SECRET_CALDAV_DAVAUTH", "Basic dXNlcjpwdw==");
+    r.add_full(
+        "dav",
+        &url,
+        None,
+        None,
+        Some("Authorization: secret:caldav/davauth"),
+    )
+    .unwrap();
+    assert_eq!(r.list()["feeds"][0]["scheme"], "caldav");
+    let res = r.refresh(Some("dav")).unwrap();
+    assert_eq!(res["feeds"][0]["events"], 2, "{res}");
+    let req = h.seen.lock().unwrap()[0].clone();
+    let lower = req.to_ascii_lowercase();
+    assert!(lower.starts_with("report /dav/cal/ "), "{req}");
+    assert!(lower.contains("depth: 1"), "{req}");
+    assert!(lower.contains("authorization: basic dxnlcjpwdw=="), "{req}");
+    assert!(req.contains("calendar-query"), "{req}");
     assert_eq!(
         r.events("2026-03-01", "2026-05-01")["events"]
             .as_array()

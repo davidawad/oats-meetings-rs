@@ -370,6 +370,16 @@ impl Engine {
         self.recorder.devices_cached(&self.audio_settings()?, wait)
     }
 
+    /// The capture devices as `devices-list` answers them (bounded by `audio.devices_timeout`);
+    /// `fresh` asks the backend again instead of reusing a listing younger than `audio.devices_ttl`.
+    pub fn devices(&self, fresh: bool) -> Result<Value> {
+        let mut wait = record::device_wait_of(&self.snapshot().config);
+        if fresh {
+            wait.ttl = Duration::ZERO;
+        }
+        self.recorder.devices(&self.audio_settings()?, wait)
+    }
+
     /// Transcription plan for a new recording per `audio.transcribe`: the plan (if any) and, when
     /// there is none, why not.
     fn transcribe_plan(&self, cfg: &Config) -> Result<(Option<crate::stt::capture::Plan>, Value)> {
@@ -1260,6 +1270,8 @@ impl Engine {
             | Action::SttModelList {}
             | Action::SttModelDelete { .. }
             | Action::SttStatus {} => crate::stt::dispatch(self, a),
+            Action::PermsStatus {} => Ok(crate::perms::status(self)),
+            Action::PermsEnsure {} => Ok(crate::perms::ensure(self)),
             Action::SecretSet { .. } | Action::SecretDelete { .. } | Action::SecretHas { .. } => {
                 crate::secrets::dispatch(self, a)
             }

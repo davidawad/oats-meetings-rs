@@ -350,7 +350,7 @@ impl CaptureBackend for MacosBackend {
 }
 
 #[cfg(target_os = "macos")]
-pub use native::native;
+pub use native::{native, SystemPermissions};
 
 #[cfg(target_os = "macos")]
 mod native {

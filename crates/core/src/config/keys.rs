@@ -293,6 +293,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "audio.ensure_wait",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: MIN },
+        default: Def::D(5 * SEC),
+        doc: "How long perms-ensure waits for a user audio server it started (systemctl --user, pulseaudio --start) to answer before reporting it unavailable.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "audio.poll_interval",
         kind: Kind::Duration { min_ms: 5 * MS, max_ms: SEC },
         default: Def::D(25 * MS),
@@ -938,6 +946,14 @@ pub const KEYS: &[Key] = &[
         default: Def::S("auto"),
         doc: "macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.",
         ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "audio.ensure_null_sink",
+        kind: Kind::Bool,
+        default: Def::B(true),
+        doc: "perms-ensure may load a null sink (oats_meetings_null) when the audio server has no output to monitor, so a headless machine still has a system-audio source; off leaves the audio graph alone.",
+        ui: false,
         reload: Reload::Live,
     },
     Key {
