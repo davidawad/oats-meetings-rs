@@ -123,6 +123,8 @@ pub struct Engine {
     pub bus: Arc<Bus>,
     shutdown: AtomicBool,
     window_visible: AtomicBool,
+    /// The app launched (`launched`, `enable_monitor`): only then does `ui.monitor` open devices.
+    monitoring: AtomicBool,
     recorder: Arc<Recorder>,
     me: Weak<Engine>,
     // One session-transcribe at a time (ctl, the GUI and the model-arrived pass).
@@ -310,6 +312,7 @@ impl Engine {
             bus: Arc::new(Bus::default()),
             shutdown: AtomicBool::new(false),
             window_visible: AtomicBool::new(false),
+            monitoring: AtomicBool::new(false),
             recorder: Arc::new(Recorder::default()),
             me: me.clone(),
             transcribe_lock: Mutex::new(()),
@@ -447,6 +450,7 @@ impl Engine {
     /// find it missing, and transcribe the sessions an earlier run left pending.
     pub fn launched(&self) {
         use crate::config::typed::{AudioTranscribe, SttBackend};
+        self.enable_monitor();
         let cfg = self.snapshot().config.clone();
         if let Ok(s) = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir()) {
             if s.entry.runtime.compiled()
@@ -698,6 +702,7 @@ impl Engine {
         for s in &subs {
             s.apply(&old.config, &new.config);
         }
+        self.sync_monitor();
         let changed: Vec<String> = new
             .resolved
             .flat
@@ -838,8 +843,38 @@ impl Engine {
             .publish("session-saved", json!({"id": id, "change": "record"}));
     }
 
+    /// Open or close the input monitor (dot-4uzgol.92) for `ui.monitor` and the window: the
+    /// worker opens it off this thread, and a recording in progress keeps it closed.
+    pub fn sync_monitor(&self) {
+        use crate::config::typed::Monitor;
+        let cfg = &self.snapshot().config;
+        let on = self.monitoring.load(Ordering::SeqCst)
+            && match cfg.ui.monitor {
+                Monitor::Off => false,
+                Monitor::Always => true,
+                Monitor::WindowVisible => self.window_visible.load(Ordering::SeqCst),
+            };
+        let want = on.then(|| record::settings_of(cfg));
+        self.recorder
+            .monitor(want, cfg.ui.monitor_retry.as_duration());
+    }
+
+    /// Let `ui.monitor` open the devices from now on (app launch; `Engine::new` alone never
+    /// monitors, so tests and embedders do not hold a mic).
+    pub fn enable_monitor(&self) {
+        self.monitoring.store(true, Ordering::SeqCst);
+        self.sync_monitor();
+    }
+
+    /// The input monitor: open or not, `(mic, system)` levels and callback blocks, the last open
+    /// error; None while its worker holds it (never blocks).
+    pub fn monitor_state(&self) -> Option<record::MonitorState> {
+        self.recorder.monitor_state()
+    }
+
     fn set_window(&self, visible: bool) -> Value {
         let was = self.window_visible.swap(visible, Ordering::SeqCst);
+        self.sync_monitor();
         // A show of a visible window still publishes: it asks the GUI to raise the window.
         if was != visible || visible {
             self.bus

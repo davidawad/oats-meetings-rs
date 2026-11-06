@@ -325,6 +325,10 @@ drive_wait = "10s"
 live_follow = true
 # Most lines the Live view keeps for one recording; older lines drop first.
 live_max_lines = 2000
+# Input monitor: live mic and system-audio meters while not recording; the samples feed the meters and are dropped, never recorded or transcribed. window_visible monitors while the window is shown, always while the app runs, off never. Monitoring keeps the mic open, so the macOS orange mic indicator stays on while it runs; system audio uses the existing screen and system audio recording permission.
+monitor = "window_visible"
+# How long the input monitor waits before it tries a device that failed to open again (a config change retries at once).
+monitor_retry = "30s"
 # How long after ctl quit the app waits for the GUI to exit before it exits the process itself.
 quit_timeout = "5s"
 # Show the record strip (state, clock, level meters, Start, Pause / Resume and Stop) on the Live tab.

@@ -89,7 +89,7 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
 /// The settings sections in order, each with the key path prefixes it holds; a key goes to the
 /// first section with a matching prefix (so `ui.theme` is Appearance, other `ui.*` Window).
 pub const SECTIONS: &[(&str, &[&str])] = &[
-    ("Recording", &["audio."]),
+    ("Recording", &["audio.", "ui.monitor"]),
     ("Transcription", &["stt."]),
     ("Privacy", &["network.", "privacy.", "secrets."]),
     (
@@ -125,6 +125,7 @@ const LABELS: &[(&str, &str)] = &[
         "privacy.hide_from_capture",
         "Hide the window from screen capture",
     ),
+    ("ui.monitor", "Input monitor"),
     ("ui.theme", "Theme"),
     ("ui.show_elapsed", "Show elapsed time"),
     ("ui.tz", "Time zone"),

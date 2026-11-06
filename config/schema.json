@@ -1653,6 +1653,32 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "monitor": {
+          "default": "window_visible",
+          "description": "Input monitor: live mic and system-audio meters while not recording; the samples feed the meters and are dropped, never recorded or transcribed. window_visible monitors while the window is shown, always while the app runs, off never. Monitoring keeps the mic open, so the macOS orange mic indicator stays on while it runs; system audio uses the existing screen and system audio recording permission.",
+          "enum": [
+            "window_visible",
+            "always",
+            "off"
+          ],
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "monitor_retry": {
+          "default": "30s",
+          "description": "How long the input monitor waits before it tries a device that failed to open again (a config change retries at once).",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "quit_timeout": {
           "default": "5s",
           "description": "How long after ctl quit the app waits for the GUI to exit before it exits the process itself.",

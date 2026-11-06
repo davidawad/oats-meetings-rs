@@ -96,11 +96,51 @@ fn devices_timeout(wait: DeviceWait) -> ConfigError {
     )
 }
 
+/// The input monitor (dot-4uzgol.92, `ui.monitor`): meters while not recording. A worker thread
+/// opens and closes it, so a slow device open never holds the GUI thread or the caller.
+#[derive(Default)]
+struct MonState {
+    /// The settings to monitor with; None is off.
+    want: Option<AudioSettings>,
+    /// How long a failed open waits before the worker tries the same settings again.
+    retry: Duration,
+    /// A recording start or one in progress holds the devices: the monitor stays closed.
+    suspended: bool,
+    /// The open monitor and the settings it was opened with.
+    open: Option<(AudioSettings, oats_audio::monitor::Monitor)>,
+    /// An open in flight on the worker (the lock is not held over it).
+    opening: bool,
+    /// The last failed open: its settings, when, and why.
+    failed: Option<(AudioSettings, Instant, String)>,
+    worker: bool,
+    quit: bool,
+    /// Bumped by `set_factory`: a monitor opened from the old backend is not kept.
+    epoch: u64,
+}
+
+impl MonState {
+    fn target(&self) -> Option<&AudioSettings> {
+        self.want.as_ref().filter(|_| !self.suspended && !self.quit)
+    }
+}
+
+type MonShared = Arc<(Mutex<MonState>, Condvar)>;
+
+/// What `Recorder::monitor_state` reports.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MonitorState {
+    pub open: bool,
+    pub levels: (f32, f32),
+    pub blocks: (u64, u64),
+    pub error: Option<String>,
+}
+
 pub struct Recorder {
     active: Mutex<Option<Active>>,
     factory: Arc<Mutex<Factory>>,
     asr: Mutex<Option<AsrFactory>>,
     devices: Arc<(Mutex<DevCache>, Condvar)>,
+    monitor: MonShared,
 }
 
 impl Default for Recorder {
@@ -110,7 +150,69 @@ impl Default for Recorder {
             factory: Arc::new(Mutex::new(Box::new(oats_audio::select))),
             asr: Mutex::new(None),
             devices: Arc::default(),
+            monitor: Arc::default(),
         }
+    }
+}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        let (m, cv) = &*self.monitor;
+        let mut g = m.lock().expect("monitor");
+        g.quit = true;
+        g.open = None;
+        cv.notify_all();
+    }
+}
+
+/// The monitor worker: make `open` match `target()` until the recorder goes.
+fn monitor_worker(shared: MonShared, factory: Arc<Mutex<Factory>>) {
+    let (m, cv) = &*shared;
+    let mut g = m.lock().expect("monitor");
+    loop {
+        if g.quit {
+            g.open = None;
+            g.worker = false;
+            cv.notify_all();
+            return;
+        }
+        let target = g.target().cloned();
+        if g.open.as_ref().map(|(st, _)| st) != target.as_ref() {
+            // Released before anything else: hiding the window or a record start frees the mic.
+            g.open = None;
+            cv.notify_all();
+        }
+        let wait = match (&target, &g.open, &g.failed) {
+            (Some(_), Some(_), _) | (None, _, _) => None,
+            (Some(t), None, Some((st, at, _))) if st == t && at.elapsed() < g.retry => {
+                Some(g.retry - at.elapsed())
+            }
+            (Some(t), None, _) => {
+                let (t, epoch) = (t.clone(), g.epoch);
+                g.opening = true;
+                drop(g);
+                let opened = (factory.lock().expect("factory"))(&t)
+                    .and_then(|be| oats_audio::monitor::start(be.as_ref(), &t));
+                g = m.lock().expect("monitor");
+                g.opening = false;
+                match opened {
+                    // Still wanted: keep it; else it is dropped (released) here and the loop
+                    // looks again.
+                    Ok(mon) if g.target() == Some(&t) && g.epoch == epoch => {
+                        g.failed = None;
+                        g.open = Some((t, mon));
+                    }
+                    Err(e) if g.epoch == epoch => g.failed = Some((t, Instant::now(), e.message)),
+                    _ => {}
+                }
+                cv.notify_all();
+                continue;
+            }
+        };
+        g = match wait {
+            Some(d) => cv.wait_timeout(g, d).expect("monitor").0,
+            None => cv.wait(g).expect("monitor"),
+        };
     }
 }
 
@@ -250,6 +352,15 @@ fn merge_audio_meta(dir: &Path, duration_ms: u64, channels: u16) -> Result<()> {
 impl Recorder {
     pub fn set_factory(&self, f: Factory) {
         *self.factory.lock().expect("factory") = f;
+        // An open monitor, or a failed open, was the old backend's: the worker reopens.
+        {
+            let (m, cv) = &*self.monitor;
+            let mut g = m.lock().expect("monitor");
+            g.open = None;
+            g.failed = None;
+            g.epoch += 1;
+            cv.notify_all();
+        }
         // A listing from the old backend is not this backend's.
         let mut c = self.devices.0.lock().expect("devices");
         c.generation += 1;
@@ -412,6 +523,62 @@ impl Recorder {
         )
     }
 
+    /// Monitor with `want` (None: off); `retry` is how long a failed open waits. Returns at once:
+    /// the worker opens and closes the devices.
+    pub fn monitor(&self, want: Option<AudioSettings>, retry: Duration) {
+        let (m, cv) = &*self.monitor;
+        let mut g = m.lock().expect("monitor");
+        if g.want == want && g.retry == retry {
+            return;
+        }
+        g.retry = retry;
+        if let (Some(st), false) = (&want, g.worker) {
+            let (shared, factory) = (Arc::clone(&self.monitor), Arc::clone(&self.factory));
+            let spawned = std::thread::Builder::new()
+                .name("oats-monitor".into())
+                .spawn(move || monitor_worker(shared, factory));
+            match spawned {
+                Ok(_) => g.worker = true,
+                Err(e) => {
+                    g.failed = Some((st.clone(), Instant::now(), format!("spawn monitor: {e}")))
+                }
+            }
+        }
+        g.want = want;
+        cv.notify_all();
+    }
+
+    /// Close the monitor and wait until its devices are released (true), or open it again once
+    /// wanted (false).
+    fn suspend_monitor(&self, on: bool) {
+        let (m, cv) = &*self.monitor;
+        let mut g = m.lock().expect("monitor");
+        g.suspended = on;
+        // The worker drops the open monitor on this wake-up.
+        cv.notify_all();
+        while on && g.worker && (g.open.is_some() || g.opening) {
+            g = cv.wait(g).expect("monitor");
+        }
+    }
+
+    /// The input monitor as `ui-state` and the meters see it: whether it is open, its
+    /// `(mic, system)` levels and callback blocks, and the last open error. None while the worker
+    /// holds the lock (never blocks).
+    pub fn monitor_state(&self) -> Option<MonitorState> {
+        let g = self.monitor.0.try_lock().ok()?;
+        let open = g.open.as_ref().map(|(_, m)| m);
+        Some(MonitorState {
+            open: open.is_some(),
+            levels: open.map_or((0., 0.), |m| m.levels()),
+            blocks: open.map_or((0, 0), |m| m.blocks()),
+            error: g
+                .failed
+                .as_ref()
+                .filter(|(st, _, _)| g.target() == Some(st))
+                .map(|(_, _, e)| e.clone()),
+        })
+    }
+
     /// The `(mic, system)` RMS levels of the recording in progress; None when idle or while a
     /// start or stop holds the recorder (never blocks).
     pub fn levels(&self) -> Option<(f32, f32)> {
@@ -443,6 +610,28 @@ impl Recorder {
                 format!("invalid session id {id:?} (letters, digits, '_', '-', '.' only)"),
             ));
         }
+        // The recording opens the devices itself: the monitor lets go of them first, and has
+        // them again if the start fails.
+        self.suspend_monitor(true);
+        let out = self.start_locked(&mut slot, st, store, id, started, title, plan, no_trans);
+        if out.is_err() {
+            self.suspend_monitor(false);
+        }
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_locked(
+        &self,
+        slot: &mut Option<Active>,
+        st: &AudioSettings,
+        store: &Store,
+        id: String,
+        started: i64,
+        title: Option<&str>,
+        plan: Option<Plan>,
+        no_trans: Value,
+    ) -> Result<Value> {
         let be = self.backend(st)?;
         let plan = plan.filter(|p| p.settings.live_enabled || p.settings.final_enabled);
         let label = plan
@@ -524,7 +713,9 @@ impl Recorder {
             no_trans,
             ..
         } = a;
-        let summary = rec.stop().map_err(audio_err)?;
+        let summary = rec.stop().map_err(audio_err);
+        self.suspend_monitor(false);
+        let summary = summary?;
         let transcription = match trans {
             Some(t) => t.finish(&summary.path, layout == Layout::Split, ended),
             None => {

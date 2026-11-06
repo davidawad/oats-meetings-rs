@@ -162,6 +162,7 @@ pub const DELETE_MODES: &[&str] = &["trash", "remove"];
 pub const SECRETS_BACKENDS: &[&str] = &["env", "keyring", "env-then-keyring"];
 pub const HIDE_METHODS: &[&str] = &["none", "sharing_type", "display_affinity"];
 pub const UI_THEMES: &[&str] = &["system", "dark", "light"];
+pub const UI_MONITOR: &[&str] = &["window_visible", "always", "off"];
 
 /// Product choices are keys; defaults get chosen at the end (David, dot-4uzgol ruling).
 pub const KEYS: &[Key] = &[
@@ -427,6 +428,22 @@ pub const KEYS: &[Key] = &[
         default: Def::I(96),
         doc: "Width in pixels of the speaker column in transcript views.",
         ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ui.monitor",
+        kind: Kind::Enum(UI_MONITOR),
+        default: Def::S("window_visible"),
+        doc: "Input monitor: live mic and system-audio meters while not recording; the samples feed the meters and are dropped, never recorded or transcribed. window_visible monitors while the window is shown, always while the app runs, off never. Monitoring keeps the mic open, so the macOS orange mic indicator stays on while it runs; system audio uses the existing screen and system audio recording permission.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ui.monitor_retry",
+        kind: Kind::Duration { min_ms: SEC, max_ms: HOUR },
+        default: Def::D(30 * SEC),
+        doc: "How long the input monitor waits before it tries a device that failed to open again (a config change retries at once).",
+        ui: false,
         reload: Reload::Live,
     },
     Key {

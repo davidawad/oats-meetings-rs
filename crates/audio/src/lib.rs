@@ -15,6 +15,7 @@ pub mod cpal_backend;
 pub mod error;
 pub mod fake;
 pub mod macos;
+pub mod monitor;
 pub mod pipewire;
 pub mod proc;
 pub mod pulse;

@@ -211,6 +211,8 @@
     },
     "live_follow": true,
     "live_max_lines": 2000,
+    "monitor": "window_visible",
+    "monitor_retry": "30s",
     "quit_timeout": "5s",
     "record_controls": true,
     "show_elapsed": true,

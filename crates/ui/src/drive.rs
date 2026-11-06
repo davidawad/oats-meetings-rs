@@ -703,6 +703,13 @@ impl MainWindow {
                 "shown": cfg.config.ui.record_controls,
                 "chrome": crate::view::chrome(&st.rec),
             },
+            "meters": {
+                "source": self.meter_source,
+                "mic": self.levels.0,
+                "system": self.levels.1,
+                "monitor": cfg.config.ui.monitor,
+                "error": self.monitor_error,
+            },
             "edit": edit,
             "keys": {
                 "map": self.keymap().json(),

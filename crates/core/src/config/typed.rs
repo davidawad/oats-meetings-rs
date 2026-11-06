@@ -208,6 +208,8 @@ pub struct Ui {
     pub drive_wait: Dur,
     pub live_follow: bool,
     pub live_max_lines: u32,
+    pub monitor: Monitor,
+    pub monitor_retry: Dur,
     pub quit_timeout: Dur,
     pub record_controls: bool,
     pub show_elapsed: bool,
@@ -218,6 +220,15 @@ pub struct Ui {
     pub tz: String,
     /// `ui.keys.<command>`: the command's shortcuts (`config::shortcut`), empty for none.
     pub keys: std::collections::BTreeMap<String, String>,
+}
+
+/// `ui.monitor`: when the input monitor holds the devices open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Monitor {
+    WindowVisible,
+    Always,
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -52,8 +52,13 @@ pub struct MainWindow {
     live_scroll: ScrollHandle,
     /// Where the view state goes when the window closes, for the next window to resume.
     keep: Option<Rc<RefCell<Option<State>>>>,
-    /// The `(mic, system)` RMS levels of the recording, read each tick for the meters.
+    /// The `(mic, system)` RMS levels for the meters, read each tick: the recording's, else the
+    /// input monitor's (`ui.monitor`, dot-4uzgol.92).
     pub(crate) levels: (f32, f32),
+    /// Where `levels` come from: "recording", "monitor", or "none" (meters at rest).
+    pub(crate) meter_source: &'static str,
+    /// Why the input monitor could not open its devices, if it tried.
+    pub(crate) monitor_error: Option<String>,
     /// The settings row whose dropdown menu is open.
     pub(crate) menu: Option<&'static str>,
     /// The palette of the last frame (`ui.theme`, else the OS appearance).
@@ -98,6 +103,8 @@ impl MainWindow {
             live_scroll: ScrollHandle::new(),
             keep: None,
             levels: (0., 0.),
+            meter_source: "none",
+            monitor_error: None,
             menu: None,
             theme: Theme::DARK,
             appearance: None,
@@ -128,16 +135,36 @@ impl MainWindow {
         if self.state.pending.is_none() {
             self.state.sync_rec(&self.engine);
         }
-        self.levels = match self.state.rec {
-            Rec::Recording { .. } => self.engine.recording_levels().unwrap_or(self.levels),
-            _ => (0., 0.),
+        let was = (self.levels, self.meter_source);
+        (self.levels, self.meter_source) = match self.state.rec {
+            Rec::Recording { .. } => (
+                self.engine.recording_levels().unwrap_or(self.levels),
+                "recording",
+            ),
+            Rec::Paused { .. } => ((0., 0.), "recording"),
+            // A worker holding the monitor this tick: keep the last reading.
+            Rec::Idle => match self.engine.monitor_state() {
+                Some(m) => {
+                    self.monitor_error = m.error;
+                    if m.open {
+                        (m.levels, "monitor")
+                    } else {
+                        ((0., 0.), "none")
+                    }
+                }
+                None => was,
+            },
         };
         // Until a listing arrives: the worker fills the engine's cache after the first refresh.
         let listing = self.state.devices_note.is_some();
         if listing {
             self.state.sync_devices(&self.engine);
         }
-        if listing || self.state.rec != before || matches!(self.state.rec, Rec::Recording { .. }) {
+        if listing
+            || self.state.rec != before
+            || matches!(self.state.rec, Rec::Recording { .. })
+            || (self.levels, self.meter_source) != was
+        {
             cx.notify();
         }
     }
@@ -232,6 +259,8 @@ impl MainWindow {
             (None, Rec::Paused { .. }) => "Paused",
         };
         let idle = matches!(self.state.rec, Rec::Idle);
+        // Idle, the meters show the input monitor (nothing recorded); recording, the recorded
+        // streams.
         let clock = fmt_clock(self.state.rec.elapsed_ms(Instant::now()));
         let (mic, sys) = (meter_fill(self.levels.0), meter_fill(self.levels.1));
         let meter = |label: &'static str, level: f32| {
@@ -242,7 +271,7 @@ impl MainWindow {
                 .text_size(px(11.))
                 .text_color(rgb(t.dim))
                 .child(div().w(px(66.)).flex_none().child(label))
-                .child(kit::meter(if idle { 0. } else { level }))
+                .child(kit::meter(level))
         };
         let controls = if idle && self.state.pending.is_none() {
             let fresh = self.state.can_new_session();
@@ -740,7 +769,37 @@ impl MainWindow {
                     .debug_selector(|| "status-devices".into()),
             );
         }
+        if self.meter_source != "none" {
+            bar = bar.child(
+                self.status_meters()
+                    .when(st.tab != Tab::Live, |d| d.ml_auto()),
+            );
+        }
         bar
+    }
+
+    /// The compact meters at the end of the status line, on every tab: mic and system audio
+    /// while monitoring or recording.
+    fn status_meters(&self) -> gpui::Div {
+        let t = self.theme;
+        let meter = |label: &'static str, level: f32| {
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(5.))
+                .child(label)
+                .child(div().flex().w(px(36.)).child(kit::meter(meter_fill(level))))
+        };
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(10.))
+            .text_color(rgb(t.faint))
+            .debug_selector(|| "status-meters".into())
+            .child(meter("You", self.levels.0))
+            .child(meter("Remote", self.levels.1))
     }
 
     /// The blueprint grid behind the content: 1px lines every 24px in the grid colour.
@@ -895,7 +954,7 @@ pub(crate) fn chrome(rec: &Rec) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil;
+    use crate::{model, testutil};
     use gpui::TestAppContext;
 
     fn render_each_tab(pairs: &[(&str, serde_json::Value)]) {
@@ -1097,6 +1156,43 @@ mod tests {
             }
             assert!(cx.debug_bounds("status-devices").is_some());
         }
+    }
+
+    /// dot-4uzgol.92: idle, the Live meters and the status-line pair show the input monitor while
+    /// the window is shown; hidden (window_visible) they rest and the devices are released.
+    #[test]
+    fn idle_meters_follow_the_input_monitor_and_rest_when_hidden() {
+        let (engine, _dir) = testutil::engine(&[]);
+        engine.enable_monitor();
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        let settle = |cx: &mut gpui::VisualTestContext, want: &'static str| {
+            let deadline = Instant::now() + std::time::Duration::from_secs(30);
+            loop {
+                view.update(cx, |v, cx| v.tick(cx));
+                cx.run_until_parked();
+                let (src, lv) = view.read_with(cx, |v, _| (v.meter_source, v.levels));
+                if src == want && (want == "none" || (lv.0 > 0.3 && lv.1 > 0.3)) {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "meters {src} {lv:?}, want {want}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        settle(cx, "monitor");
+        assert!(cx.debug_bounds("status-meters").is_some());
+        let dump = view.update(cx, |v, cx| v.dump(cx));
+        assert_eq!(dump["meters"]["source"], "monitor");
+        assert_eq!(dump["meters"]["monitor"], "window_visible");
+        assert_eq!(dump["recording"]["state"], "idle");
+        model::dispatch(&engine, "window-hide", json!({})).unwrap();
+        settle(cx, "none");
+        assert!(cx.debug_bounds("status-meters").is_none());
+        assert!(!engine.monitor_state().unwrap().open);
     }
 
     #[test]
