@@ -233,6 +233,7 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("subscribe", "protocol event stream"),
     ("config-get", "the settings view reads config-resolved"),
     ("session-import", "one-shot migration verb (ctl)"),
+    ("config-convert", "one-shot migration verb (ctl)"),
     ("ics-add", "feed management is ctl / config"),
     ("ics-remove", "feed management is ctl / config"),
     (

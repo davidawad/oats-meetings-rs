@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
+use super::format::{self, Format};
 use super::keys::{self, Kind, KEYS};
 use super::typed::{Config, SttAdapter, SttBackend};
 use super::{ConfigError, Result};
@@ -220,8 +221,8 @@ pub struct Inputs<'a> {
     pub os: &'a str,
     pub arch: &'a str,
     pub machine: &'a str,
-    /// Contents of the user TOML file, if any.
-    pub user_toml: Option<&'a str>,
+    /// Contents of the user file, if any, and its format.
+    pub user: Option<(&'a str, Format)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -288,11 +289,8 @@ pub fn resolve(inp: &Inputs) -> Result<Resolved> {
     if let Some(p) = inp.pack {
         apply(pack_flat(p)?, format!("pack:{p}"), &mut flat);
     }
-    if let Some(text) = inp.user_toml {
-        let tv: toml::Value = toml::from_str(text)
-            .map_err(|e| ConfigError::new("parse_error", format!("user config: {e}")))?;
-        let jv = serde_json::to_value(tv)
-            .map_err(|e| ConfigError::new("parse_error", format!("user config: {e}")))?;
+    if let Some((text, fmt)) = inp.user {
+        let jv = format::parse(text, fmt)?;
         let mut f = Flat::new();
         flatten(&jv, "", &mut f);
         validate_layer(&f, "user config")?;
@@ -317,13 +315,13 @@ mod tests {
             os: "linux",
             arch: "x86_64",
             machine: "default",
-            user_toml: None,
+            user: None,
         }
     }
 
     fn with_user(toml: &str) -> Result<Resolved> {
         resolve(&Inputs {
-            user_toml: Some(toml),
+            user: Some((toml, Format::Toml)),
             ..base()
         })
     }
@@ -631,7 +629,7 @@ mod tests {
         }
         let r = resolve(&Inputs {
             os: "macos",
-            user_toml: Some("[privacy]\nhide_method = \"none\"\n"),
+            user: Some(("[privacy]\nhide_method = \"none\"\n", Format::Toml)),
             ..base()
         })
         .unwrap();

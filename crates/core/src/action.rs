@@ -48,6 +48,7 @@ actions! {
     ConfigGet, "config-get", "Resolved value of one key.", "implemented", "read", { key: String };
     ConfigSet, "config-set", "Persist a key in the user config file.", "implemented", "write", { key: String, value: Value };
     ConfigReload, "config-reload", "Re-read the user config file.", "implemented", "write", {};
+    ConfigConvert, "config-convert", "Rewrite the user config file in another format (to: toml, json or yaml) beside it, the same keys, and remove the old file; comments are not carried over.", "implemented", "write", { to: String };
     ConfigCheck, "config-check", "Validate the resolved config.", "implemented", "read", {};
     ConfigResolved, "config-resolved", "Resolved config with provenance.", "implemented", "read", {};
     WindowShow, "window-show", "Show the main window.", "implemented", "control", {};

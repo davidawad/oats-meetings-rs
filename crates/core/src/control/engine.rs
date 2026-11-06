@@ -17,6 +17,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::{json, Value};
 
 use crate::action::{self, Action};
+use crate::config::format::{self, Format};
 use crate::config::keys::{self, Kind};
 use crate::config::resolve::{self, Inputs, Resolved};
 use crate::config::typed::Config;
@@ -116,6 +117,8 @@ struct State {
 
 pub struct Engine {
     opts: EngineOpts,
+    /// The user file: `opts.user_config` until `config-convert` moves it to another format.
+    user_path: RwLock<PathBuf>,
     state: RwLock<State>,
     subsystems: RwLock<Vec<Arc<dyn Subsystem>>>,
     // Serializes read-modify-write of the user file (config-set vs reload vs watcher).
@@ -152,6 +155,19 @@ fn read_user(path: &std::path::Path) -> Result<Option<String>> {
     }
 }
 
+/// Write the user file atomically (a temp file beside it, then rename).
+fn write_user(path: &Path, text: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", dir.display())))?;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let tmp = path.with_extension(format!("{ext}.tmp{}", std::process::id()));
+    std::fs::write(&tmp, text)
+        .and_then(|_| std::fs::rename(&tmp, path))
+        .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", path.display())))
+}
+
 fn hash_of(text: &Option<String>) -> Option<u64> {
     text.as_ref().map(|t| {
         let mut h = DefaultHasher::new();
@@ -178,89 +194,6 @@ impl Subsystem for SessionsSubsystem {
         }
         Ok(())
     }
-}
-
-/// Set `key` (dotted) in a TOML document, keeping every comment and the layout around it.
-fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Result<()> {
-    use toml_edit::{Item, Table, TableLike};
-    if let Value::Array(items) = value {
-        return set_tables_in_doc(doc, key, items);
-    }
-    let new_val: toml_edit::Value = match value {
-        Value::Bool(b) => (*b).into(),
-        Value::String(s) => s.as_str().into(),
-        Value::Number(n) if n.is_i64() => n.as_i64().unwrap_or_default().into(),
-        other => {
-            return Err(ConfigError::new(
-                "type_mismatch",
-                format!("cannot store {other} in TOML"),
-            ))
-        }
-    };
-    let parts: Vec<&str> = key.split('.').collect();
-    let (leaf, parents) = parts.split_last().expect("non-empty key");
-    let mut cur: &mut dyn TableLike = doc.as_table_mut();
-    for part in parents {
-        if !cur.contains_key(part) {
-            let mut t = Table::new();
-            t.set_implicit(true);
-            cur.insert(part, Item::Table(t));
-        }
-        cur = cur
-            .get_mut(part)
-            .and_then(Item::as_table_like_mut)
-            .ok_or_else(|| {
-                ConfigError::new(
-                    "type_mismatch",
-                    format!("'{part}' in user config is not a table"),
-                )
-            })?;
-    }
-    match cur.get_mut(leaf) {
-        Some(Item::Value(old)) => {
-            let mut nv = new_val;
-            *nv.decor_mut() = old.decor().clone();
-            *old = nv;
-        }
-        _ => {
-            cur.insert(leaf, Item::Value(new_val));
-        }
-    }
-    Ok(())
-}
-
-/// Set `key` to an array of tables (`[[hooks]]`), or remove it when `items` is empty.
-fn set_tables_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, items: &[Value]) -> Result<()> {
-    use toml_edit::{ArrayOfTables, Item};
-    let bad = |e: String| ConfigError::new("type_mismatch", format!("'{key}': {e}"));
-    if key.contains('.') {
-        return Err(bad("only a top-level key holds an array of tables".into()));
-    }
-    if items.is_empty() {
-        doc.remove(key);
-        return Ok(());
-    }
-    let mut aot = ArrayOfTables::new();
-    for it in items {
-        if !it.is_object() {
-            return Err(bad(format!("{it} is not a table")));
-        }
-        let tv: toml::Value = serde_json::from_value(it.clone()).map_err(|e| bad(e.to_string()))?;
-        let text = toml::to_string(&tv).map_err(|e| bad(e.to_string()))?;
-        let one: toml_edit::DocumentMut = text.parse().map_err(|e| bad(format!("{e}")))?;
-        let mut t = one.as_table().clone();
-        // Known fields in their documented order (name, event, command, ...), the rest after.
-        let rank = |k: &str| {
-            crate::hooks::FIELDS
-                .iter()
-                .position(|f| *f == k)
-                .unwrap_or(crate::hooks::FIELDS.len())
-        };
-        t.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
-        aot.push(t);
-    }
-    doc.insert(key, Item::ArrayOfTables(aot));
-    Ok(())
 }
 
 impl Engine {
@@ -335,10 +268,11 @@ impl Engine {
 
     pub fn new(opts: EngineOpts) -> Result<Arc<Engine>> {
         let text = read_user(&opts.user_config)?;
-        let resolved = Self::resolve_with(&opts, text.as_deref())?;
+        let resolved = Self::resolve_with(&opts, text.as_deref(), &opts.user_config)?;
         let config = resolved.typed()?;
         let stamp = stamp_of(&opts.user_config);
         let engine = Arc::new_cyclic(|me| Engine {
+            user_path: RwLock::new(opts.user_config.clone()),
             opts,
             state: RwLock::new(State {
                 snap: Arc::new(Snapshot { resolved, config }),
@@ -383,7 +317,7 @@ impl Engine {
     }
 
     pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Result<Arc<Engine>> {
-        let (path, _) = cli::default_user_config_path(None, env).ok_or_else(|| {
+        let (path, _) = cli::default_user_config_path(None, env)?.ok_or_else(|| {
             ConfigError::new("io_error", "no user config path (set OATS_CONFIG or HOME)")
         })?;
         let (os, arch, machine) = cli::host(env);
@@ -398,14 +332,20 @@ impl Engine {
         })
     }
 
-    fn resolve_with(opts: &EngineOpts, user: Option<&str>) -> Result<Resolved> {
+    /// Resolve with `user` as the text of the user file at `path` (its extension is its format).
+    fn resolve_with(opts: &EngineOpts, user: Option<&str>, path: &Path) -> Result<Resolved> {
         resolve::resolve(&Inputs {
             pack: opts.pack.as_deref(),
             os: &opts.os,
             arch: &opts.arch,
             machine: &opts.machine,
-            user_toml: user,
+            user: user.map(|t| (t, Format::of(path))),
         })
+    }
+
+    /// The user config file (`config.toml`, `.json` or `.yaml`).
+    pub fn user_config(&self) -> PathBuf {
+        self.user_path.read().expect("user path").clone()
     }
 
     /// Replace the capture backend factory (tests inject a fake; the default is the OS backend).
@@ -706,14 +646,15 @@ impl Engine {
     /// Watcher check: has the user file's *content* changed since it was last applied or
     /// rejected? A rejected file is not retried until its content changes.
     pub fn file_needs_reload(&self) -> bool {
-        let stamp = stamp_of(&self.opts.user_config);
+        let path = self.user_config();
+        let stamp = stamp_of(&path);
         {
             let st = self.state.read().expect("state");
             if stamp == st.stamp {
                 return false;
             }
         }
-        let h = hash_of(&read_user(&self.opts.user_config).ok().flatten());
+        let h = hash_of(&read_user(&path).ok().flatten());
         let mut st = self.state.write().expect("state");
         st.stamp = stamp;
         h != st.good && h != st.bad
@@ -772,7 +713,7 @@ impl Engine {
 
     fn record(&self, good: bool, text: &Option<String>) {
         let mut st = self.state.write().expect("state");
-        st.stamp = stamp_of(&self.opts.user_config);
+        st.stamp = stamp_of(&self.user_config());
         if good {
             st.good = hash_of(text);
             st.bad = None;
@@ -785,14 +726,15 @@ impl Engine {
     /// active and `config-reload-failed` is published.
     pub fn reload(&self, source: &str) -> Result<Vec<String>> {
         let _g = self.write_lock.lock().expect("write lock");
-        let text = match read_user(&self.opts.user_config) {
+        let path = self.user_config();
+        let text = match read_user(&path) {
             Ok(t) => t,
             Err(e) => {
                 self.reload_failed(source, &e);
                 return Err(e);
             }
         };
-        let result = Self::resolve_with(&self.opts, text.as_deref())
+        let result = Self::resolve_with(&self.opts, text.as_deref(), &path)
             .and_then(|r| self.swap(r, source, &mut || Ok(())));
         match result {
             Ok(changed) => {
@@ -846,28 +788,54 @@ impl Engine {
     pub fn set(&self, key: &str, value: &Value, source: &str) -> Result<Value> {
         let value = Self::coerce(key, value)?;
         let _g = self.write_lock.lock().expect("write lock");
-        let text = read_user(&self.opts.user_config)?.unwrap_or_default();
-        let mut doc: toml_edit::DocumentMut = text
-            .parse()
-            .map_err(|e| ConfigError::new("parse_error", format!("user config: {e}")))?;
-        set_in_doc(&mut doc, key, &value)?;
-        let new_text = doc.to_string();
-        let resolved = Self::resolve_with(&self.opts, Some(&new_text))?;
-        let path = self.opts.user_config.clone();
-        let changed = self.swap(resolved, source, &mut || {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)
-                    .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", dir.display())))?;
-            }
-            let tmp = path.with_extension(format!("toml.tmp{}", std::process::id()));
-            std::fs::write(&tmp, &new_text)
-                .and_then(|_| std::fs::rename(&tmp, &path))
-                .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", path.display())))
-        })?;
+        let path = self.user_config();
+        let text = read_user(&path)?.unwrap_or_default();
+        let new_text = format::set(&text, Format::of(&path), key, &value)?;
+        let resolved = Self::resolve_with(&self.opts, Some(&new_text), &path)?;
+        let changed = self.swap(resolved, source, &mut || write_user(&path, &new_text))?;
         self.record(true, &Some(new_text));
-        Ok(
-            json!({"key": key, "value": value, "changed": !changed.is_empty(), "path": self.opts.user_config}),
-        )
+        Ok(json!({"key": key, "value": value, "changed": !changed.is_empty(), "path": path}))
+    }
+
+    /// Rewrite the user file in format `to` beside it (`config.toml` -> `config.json`) and remove
+    /// the old one. The new file must resolve to exactly the same config first; comments are not
+    /// carried over. The engine reads and writes the new file from then on.
+    pub fn convert(&self, to: &str) -> Result<Value> {
+        let to = Format::named(to)?;
+        let _g = self.write_lock.lock().expect("write lock");
+        let from = self.user_config();
+        let target = from.with_extension(to.ext());
+        if Format::of(&from) == to {
+            return Ok(json!({"from": from, "path": from, "format": to.ext(), "changed": false}));
+        }
+        if target.exists() {
+            return Err(ConfigError::new(
+                "conflicting_config",
+                format!("{} already exists; remove it first", target.display()),
+            ));
+        }
+        let text = read_user(&from)?.unwrap_or_default();
+        let new_text = format::convert(&text, Format::of(&from), to)?;
+        let before = Self::resolve_with(&self.opts, Some(&text), &from)?;
+        let after = Self::resolve_with(&self.opts, Some(&new_text), &target)?;
+        if before.flat != after.flat {
+            return Err(ConfigError::new(
+                "invalid_value",
+                format!(
+                    "{} would not read back the same in {}",
+                    from.display(),
+                    to.ext()
+                ),
+            ));
+        }
+        write_user(&target, &new_text)?;
+        if from.exists() {
+            std::fs::remove_file(&from)
+                .map_err(|e| ConfigError::new("io_error", format!("{}: {e}", from.display())))?;
+        }
+        *self.user_path.write().expect("user path") = target.clone();
+        self.record(true, &Some(new_text));
+        Ok(json!({"from": from, "path": target, "format": to.ext(), "changed": true}))
     }
 
     /// Whether `privacy.hide_from_capture` can take effect: `privacy.hide_method` names a method
@@ -962,7 +930,9 @@ impl Engine {
                 let changed = self.reload("config-reload")?;
                 Ok(json!({"changed": changed}))
             }
+            Action::ConfigConvert { to } => self.convert(to),
             Action::ConfigCheck {} => {
+                format::sibling_conflict(&self.user_config())?;
                 let typed = self.resolved().typed()?;
                 crate::ics::validate_settings(&typed.ics)?;
                 crate::calendar::validate(&typed.calendar)?;

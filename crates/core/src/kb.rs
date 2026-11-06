@@ -337,7 +337,7 @@ mod tests {
             os: "linux",
             arch: "x",
             machine: "default",
-            user_toml: None,
+            user: None,
         })
         .unwrap()
         .typed()

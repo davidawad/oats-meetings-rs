@@ -81,6 +81,19 @@
       "status": "implemented"
     },
     {
+      "doc": "Rewrite the user config file in another format (to: toml, json or yaml) beside it, the same keys, and remove the old file; comments are not carried over.",
+      "effect": "write",
+      "name": "config-convert",
+      "params": [
+        {
+          "name": "to",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Validate the resolved config.",
       "effect": "read",
       "name": "config-check",

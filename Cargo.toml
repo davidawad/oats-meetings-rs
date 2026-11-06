@@ -20,6 +20,8 @@ interprocess = "2"
 tiny_http = "0.12"
 trash = "5"
 toml_edit = "0.22"
+# The user config file may be YAML (dot-4uzgol.87); the maintained fork of serde_yaml.
+serde_yaml_ng = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 tempfile = "3"
 icalendar = "0.17"

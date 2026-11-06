@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 
 use super::resolve::{self, Inputs};
-use super::{generate, ConfigError, Result, SCHEMA_VERSION};
+use super::{format, generate, ConfigError, Result, SCHEMA_VERSION};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Out {
@@ -68,31 +68,45 @@ fn parse(args: &[String]) -> Result<Opts> {
     Ok(o)
 }
 
-fn user_config_path(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Option<(PathBuf, bool)> {
+fn user_config_path(
+    o: &Opts,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<(PathBuf, bool)>> {
     default_user_config_path(o.config.clone(), env)
 }
 
-/// (path, explicit): an explicitly named file must exist; the default one may be absent.
+/// (path, explicit): an explicitly named file must exist; the default one may be absent. The
+/// default is the one `config.{toml,json,yaml,yml}` in the config dir; two of them is an error
+/// (`conflicting_config`) naming both.
 pub fn default_user_config_path(
     flag: Option<String>,
     env: &dyn Fn(&str) -> Option<String>,
-) -> Option<(PathBuf, bool)> {
+) -> Result<Option<(PathBuf, bool)>> {
     if let Some(p) = flag.or_else(|| env("OATS_CONFIG")) {
-        return Some((PathBuf::from(p), true));
+        return Ok(Some((PathBuf::from(p), true)));
     }
-    let base = env("XDG_CONFIG_HOME")
+    let Some(base) = env("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| env("APPDATA").map(PathBuf::from))
-        .or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some((base.join("oats-meetings-rs").join("config.toml"), false))
+        .or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config")))
+    else {
+        return Ok(None);
+    };
+    Ok(Some((
+        format::discover(&base.join("oats-meetings-rs"))?,
+        false,
+    )))
 }
 
-fn load_user(o: &Opts, env: &dyn Fn(&str) -> Option<String>) -> Result<Option<String>> {
-    let Some((path, explicit)) = user_config_path(o, env) else {
+fn load_user(
+    o: &Opts,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<(String, format::Format)>> {
+    let Some((path, explicit)) = user_config_path(o, env)? else {
         return Ok(None);
     };
     match std::fs::read_to_string(&path) {
-        Ok(s) => Ok(Some(s)),
+        Ok(s) => Ok(Some((s, format::Format::of(&path)))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && !explicit => Ok(None),
         Err(e) => Err(ConfigError::new(
             "io_error",
@@ -127,7 +141,7 @@ fn resolved_for(
         os: &h.0,
         arch: &h.1,
         machine: &h.2,
-        user_toml: user.as_deref(),
+        user: user.as_ref().map(|(t, f)| (t.as_str(), *f)),
     })?;
     Ok((r, h))
 }
@@ -143,6 +157,7 @@ fn remote_code(code: &str) -> &'static str {
         "io_error",
         "already_running",
         "unsupported_version",
+        "conflicting_config",
     ];
     KNOWN
         .iter()

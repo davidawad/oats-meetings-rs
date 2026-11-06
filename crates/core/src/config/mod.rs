@@ -5,6 +5,7 @@
 //! Layer order, lowest first: defaults < axes (os, arch, machine) < pack < user file.
 
 pub mod cli;
+pub mod format;
 pub mod generate;
 pub mod keys;
 pub mod resolve;
