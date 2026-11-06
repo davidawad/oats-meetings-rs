@@ -347,7 +347,7 @@ tick = "100ms"
 tz = ""
 
 [ui.keys]
-# Back out: close the shortcuts overlay, leave Recently deleted, clear the search, then the selection. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+# Back out: close the shortcuts overlay, leave Recently deleted, clear the Sessions or Settings search, then the selection. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 back = "escape"
 # Show or hide the overlay listing every shortcut. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 help = "?"
@@ -363,7 +363,7 @@ record-start = "mod-shift-r"
 record-stop = "mod-shift-s, s"
 # Start recording when idle, else pause or resume it (never stops). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 record-toggle = "space"
-# Search sessions (opens Sessions with the search box focused). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+# Search: on Settings, focus its search bar (filters settings live); anywhere else, open Sessions with the search box focused. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 search = "/"
 # Reload the session list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 session-list = "mod-r"

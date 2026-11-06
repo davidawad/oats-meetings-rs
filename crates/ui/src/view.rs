@@ -50,6 +50,8 @@ pub struct MainWindow {
     /// Keyboard focus for the settings text editor; created on first render.
     pub(crate) focus: Option<FocusHandle>,
     live_scroll: ScrollHandle,
+    /// The Settings rows' scroll, reset when the search's Enter jumps to the first match.
+    pub(crate) settings_scroll: ScrollHandle,
     /// Where the view state goes when the window closes, for the next window to resume.
     keep: Option<Rc<RefCell<Option<State>>>>,
     /// The `(mic, system)` RMS levels for the meters, read each tick: the recording's, else the
@@ -101,6 +103,7 @@ impl MainWindow {
             trash,
             focus: None,
             live_scroll: ScrollHandle::new(),
+            settings_scroll: ScrollHandle::new(),
             keep: None,
             levels: (0., 0.),
             meter_source: "none",
@@ -882,7 +885,10 @@ impl Render for MainWindow {
             Tab::Calendar => views::calendar::render(self, cx),
             Tab::Trash => views::trash::render(self, cx),
             Tab::Models => views::models::render(self, cx),
-            Tab::Settings => views::settings::render(self, cx),
+            Tab::Settings => {
+                views::settings::prepare(self);
+                views::settings::render(self, cx)
+            }
         };
         // Live shows the banner under its record strip; the other tabs above their content.
         let banner = (self.state.tab != Tab::Live)

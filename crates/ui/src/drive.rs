@@ -137,6 +137,11 @@ pub const OPS: &[(&str, &str, &str)] = &[
     ("models.delete", "model", "Delete a downloaded model"),
     ("settings.set", "key, value", "change one setting row"),
     (
+        "settings.search",
+        "query",
+        "type into the Settings search bar and press Enter (empty clears it)",
+    ),
+    (
         "keys.press",
         "keys",
         "press one keystroke (space, 1, mod-shift-r) as the keyboard would: bare keys only while nothing is being typed in",
@@ -489,6 +494,15 @@ impl MainWindow {
             "settings.calendar_access" => {
                 calendar_sources::act(self, "calendar-access", json!({"request": true}), cx)
             }
+            "settings.search" => {
+                let q = arg(args, "query").unwrap_or_default().to_string();
+                views::settings::clear(&mut self.state);
+                views::settings::begin_search(&mut self.state);
+                if let Some(e) = self.state.edit.as_mut() {
+                    e.buf = q;
+                }
+                views::settings::commit(&mut self.state);
+            }
             _ => unreachable!("listed in OPS"),
         }
         Ok(())
@@ -676,6 +690,13 @@ impl MainWindow {
                 })
             }
             Tab::Settings => json!({
+                "search": {
+                    "query": views::settings::query(st),
+                    "open": st.edit.as_ref().is_some_and(|e| e.path == views::settings::SEARCH),
+                    "matches": views::settings::visible(st).iter().map(|g| g.rows.len()).sum::<usize>(),
+                    "shown": views::settings::visible(st).iter().flat_map(|g| g.rows.iter().map(|r| r.path)).collect::<Vec<_>>(),
+                    "target": st.settings_ui.target,
+                },
                 "groups": st.settings.iter().map(|g| json!({
                     "name": g.name,
                     "rows": g.rows.iter().map(|r| json!({

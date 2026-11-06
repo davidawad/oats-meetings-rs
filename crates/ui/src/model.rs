@@ -124,7 +124,11 @@ pub const BINDINGS: &[Binding] = &[
     window("sessions-next", "Next session", "Sessions"),
     window("sessions-prev", "Previous session", "Sessions"),
     window("sessions-open", "Open the session's notes", "Sessions"),
-    window("search", "Search sessions", "Sessions"),
+    window(
+        "search",
+        "Search sessions, or settings on Settings",
+        "Sessions",
+    ),
     action("session-list", "Reload the session list", "Sessions"),
     window("back", "Back", "Window"),
     window("help", "Show / hide this list", "Window"),

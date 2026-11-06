@@ -4,6 +4,7 @@
 //! write the same user layer and trigger the same reload.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use oats_core::config::keys::{self, Kind, Reload};
 use oats_core::config::resolve::Flat;
@@ -218,6 +219,82 @@ pub fn next_value(row: &Row) -> Option<Value> {
     }
 }
 
+/// A row's current value as the search reads it: `true` / `false`, the choice, the text, the
+/// number or duration, a shortcut's keys as this platform spells them.
+pub fn value_text(w: &Widget) -> String {
+    match w {
+        Widget::Toggle(b) => b.to_string(),
+        Widget::Choice { current, .. } => current.clone(),
+        Widget::Text(t) => t.clone(),
+        Widget::Number { value, .. } => value.to_string(),
+        Widget::Duration { text, .. } => text.clone(),
+        Widget::Keys(keys) => keys
+            .iter()
+            .map(|k| crate::shortcuts::display(k))
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+/// The search's words, lower-cased (ASCII, so byte offsets survive for highlighting).
+fn words(q: &str) -> Vec<String> {
+    q.split_whitespace().map(str::to_ascii_lowercase).collect()
+}
+
+/// A row matches when every word of `q` appears (case-insensitively) in its label, key path, doc
+/// or current value. An empty query matches every row.
+pub fn row_matches(row: &Row, q: &str) -> bool {
+    let hay = format!(
+        "{}\n{}\n{}\n{}",
+        row.label,
+        row.path,
+        row.doc,
+        value_text(&row.widget)
+    )
+    .to_ascii_lowercase();
+    words(q).iter().all(|w| hay.contains(w.as_str()))
+}
+
+/// The groups with only their matching rows; a section with none is dropped.
+pub fn filter(groups: &[Group], q: &str) -> Vec<Group> {
+    groups
+        .iter()
+        .map(|g| Group {
+            name: g.name.clone(),
+            rows: g
+                .rows
+                .iter()
+                .filter(|r| row_matches(r, q))
+                .cloned()
+                .collect(),
+        })
+        .filter(|g| !g.rows.is_empty())
+        .collect()
+}
+
+/// Where the words of `q` occur in `text` (byte ranges, sorted, overlaps merged): what a
+/// matching row highlights.
+pub fn highlights(text: &str, q: &str) -> Vec<Range<usize>> {
+    let hay = text.to_ascii_lowercase();
+    let mut found: Vec<Range<usize>> = words(q)
+        .iter()
+        .flat_map(|w| {
+            hay.match_indices(w.as_str())
+                .map(|(i, m)| i..i + m.len())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    found.sort_by_key(|r| r.start);
+    let mut out: Vec<Range<usize>> = vec![];
+    for r in found {
+        match out.last_mut() {
+            Some(l) if r.start <= l.end => l.end = l.end.max(r.end),
+            _ => out.push(r),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +391,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn search_matches_label_path_doc_and_value_and_hides_empty_sections() {
+        let (engine, _d) = testutil::engine(&[("ui.tz", json!("Europe/Lisbon"))]);
+        let groups = build(&engine.resolved().flat);
+        let paths = |q: &str| -> Vec<&'static str> {
+            filter(&groups, q)
+                .iter()
+                .flat_map(|g| g.rows.iter().map(|r| r.path))
+                .collect()
+        };
+        // By label, key path, doc and current value; every word must match.
+        assert!(paths("microphone").contains(&"audio.mic.device"));
+        assert!(paths("STT.LOCAL.model").contains(&"stt.local.model"));
+        assert!(paths("lisbon").contains(&"ui.tz"));
+        assert_eq!(paths("time zone lisbon"), ["ui.tz"]);
+        assert!(paths("").len() == groups.iter().map(|g| g.rows.len()).sum::<usize>());
+        let doc = keys::find("ui.keys.help").unwrap().doc;
+        let word = doc.split_whitespace().nth(2).unwrap();
+        assert!(paths(word).contains(&"ui.keys.help"), "{word}");
+        // Sections with no matching row are dropped; nothing matches nonsense.
+        let only = filter(&groups, "lisbon");
+        assert!(only.iter().all(|g| !g.rows.is_empty()));
+        assert!(only.len() < groups.len());
+        assert!(filter(&groups, "zzqqxx").is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)]
+    fn highlights_cover_every_word_case_insensitively_and_merge() {
+        assert_eq!(highlights("Time zone", "zone"), [5..9]);
+        assert_eq!(highlights("ui.live_follow", "LIVE ive_f"), [3..9]);
+        assert_eq!(highlights("abcabc", "b"), [1..2, 4..5]);
+        assert!(highlights("Theme", "").is_empty());
     }
 }

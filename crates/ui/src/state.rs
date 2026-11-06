@@ -328,6 +328,7 @@ pub struct State {
     pub devices_note: Option<String>,
     pub status: String,
     pub sessions_ui: crate::views::sessions::Ui,
+    pub settings_ui: crate::views::settings::Ui,
     /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
     /// status line.
     pub model: Option<(String, String)>,
@@ -612,12 +613,14 @@ impl State {
         });
     }
 
-    /// Close the editor without saving. The Sessions search is a live filter, so closing it keeps
-    /// what was typed (its clear chip empties it).
+    /// Close the editor without saving. The Sessions and Settings searches are live filters, so
+    /// closing one keeps what was typed (its clear chip, or Esc, empties it).
     pub fn cancel_edit(&mut self) {
         if let Some(e) = self.edit.take() {
             if e.path == crate::views::sessions::SEARCH {
                 self.sessions_ui.query = e.buf.trim().to_string();
+            } else if e.path == crate::views::settings::SEARCH {
+                self.settings_ui.query = e.buf.trim().to_string();
             }
         }
     }
@@ -645,6 +648,9 @@ impl State {
         let Some(e) = self.edit.clone() else { return };
         if crate::views::sessions::is_ours(e.path) {
             return crate::views::sessions::commit(self, engine);
+        }
+        if e.path == crate::views::settings::SEARCH {
+            return crate::views::settings::commit(self);
         }
         match model::dispatch(
             engine,

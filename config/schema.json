@@ -1444,7 +1444,7 @@
           "properties": {
             "back": {
               "default": "escape",
-              "description": "Back out: close the shortcuts overlay, leave Recently deleted, clear the search, then the selection. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "description": "Back out: close the shortcuts overlay, leave Recently deleted, clear the Sessions or Settings search, then the selection. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
               "type": "string",
               "x-kind": "keys",
               "x-reload": "live",
@@ -1508,7 +1508,7 @@
             },
             "search": {
               "default": "/",
-              "description": "Search sessions (opens Sessions with the search box focused). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "description": "Search: on Settings, focus its search bar (filters settings live); anywhere else, open Sessions with the search box focused. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
               "type": "string",
               "x-kind": "keys",
               "x-reload": "live",

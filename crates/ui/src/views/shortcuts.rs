@@ -17,7 +17,7 @@ use crate::shortcuts::{self, Applied, Keymap};
 use crate::state::{Control, EditKey, Rec, Tab};
 use crate::theme::{self, MONO};
 use crate::view::MainWindow;
-use crate::views::{calendar::Cal, notes::Notes, sessions, templates::Templates};
+use crate::views::{calendar::Cal, notes::Notes, sessions, settings, templates::Templates};
 
 /// The window's keyboard state.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -67,7 +67,11 @@ impl MainWindow {
         if self.state.edit.is_some() {
             match self.state.edit_key(&k.key, k.key_char.as_deref(), command) {
                 EditKey::Commit => self.state.commit_edit(&self.engine),
-                EditKey::Cancel => self.state.cancel_edit(),
+                EditKey::Cancel => {
+                    if !settings::escape(&mut self.state) {
+                        self.state.cancel_edit();
+                    }
+                }
                 EditKey::Handled => {}
                 EditKey::Ignored => return false,
             }
@@ -125,6 +129,11 @@ impl MainWindow {
             }
             "help" => self.keys.help = !self.keys.help,
             "back" => return self.back(cx),
+            // On Settings it focuses that tab's search bar; anywhere else the Sessions search.
+            "search" if self.state.tab == Tab::Settings => {
+                self.menu = None;
+                settings::begin_search(&mut self.state);
+            }
             "search" => {
                 if self.state.tab != Tab::Sessions {
                     self.switch_tab(Tab::Sessions, cx);
@@ -183,7 +192,7 @@ impl MainWindow {
         .detach();
     }
 
-    /// Esc: the overlay, an open menu, Recently deleted, the search, then the selection.
+    /// Esc: the overlay, an open menu, Recently deleted, a search, then the selection.
     fn back(&mut self, cx: &mut Context<Self>) -> bool {
         let tab = self.state.tab;
         if self.keys.help {
@@ -192,6 +201,8 @@ impl MainWindow {
             self.menu = None;
         } else if tab == Tab::Trash {
             self.switch_tab(Tab::Sessions, cx);
+        } else if tab == Tab::Settings && !self.state.settings_ui.query.is_empty() {
+            settings::clear(&mut self.state);
         } else if tab == Tab::Sessions && !self.state.sessions_ui.query.is_empty() {
             self.state.sessions_ui.query.clear();
         } else if tab == Tab::Sessions && self.state.selected.is_some() {
