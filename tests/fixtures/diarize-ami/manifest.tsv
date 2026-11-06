@@ -1,0 +1,10 @@
+# AMI Meeting Corpus (c) University of Edinburgh / AMI Consortium, CC BY 4.0, https://groups.inf.ed.ac.uk/ami/corpus/license.shtml
+# (licence text: https://creativecommons.org/licenses/by/4.0/). Audio: the single distant microphone (Array1-01, 16 kHz mono)
+# from the AMI mirror, fetched and checked by ci/fetch-models.sh, not committed. <meeting>.rttm beside this file: the
+# word-aligned speaker turns ("only_words") of pyannote/AMI-diarization-setup at 67c2d539 (Apache-2.0, from the AMI
+# CC BY 4.0 annotations), committed unchanged.
+# columns: meeting<TAB>wav_url<TAB>wav_sha256<TAB>licence<TAB>rttm_url<TAB>der_ceiling_spectral<TAB>der_ceiling_sherpa_onnx
+# Ceilings (percent, final pass, the default keys): measured 2026-11-06 spectral 65.7 / 42.6, sherpa-onnx titanet-small
+# 47.0 / 29.2 (oracle-label floor from overlapped speech 26.4 / 23.1), plus about 3 points.
+ES2004a	https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2004a/audio/ES2004a.Array1-01.wav	6936edac5d0904fc5c4ab175546c5cc5366601fdc1b1e5183a6ea2c10f05d150	CC-BY-4.0	https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/67c2d539286e89f68952d5dcf83912bd9f01dfae/only_words/rttms/test/ES2004a.rttm	69	50
+IS1009a	https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1009a/audio/IS1009a.Array1-01.wav	23fd54fd6dbe23870f10317b256f7c648fe0fd587e56d2f940840309f1578b60	CC-BY-4.0	https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/67c2d539286e89f68952d5dcf83912bd9f01dfae/only_words/rttms/test/IS1009a.rttm	46	32

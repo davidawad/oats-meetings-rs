@@ -14,17 +14,18 @@
 //!   frames, less the mean over bands, so the level does not count). Pure Rust, no model; it
 //!   follows the recording channel as much as the voice, so it is the fallback, not the default.
 //!
-//! `auto` is neural on macOS and sherpa-onnx elsewhere. An algorithm whose runtime this build
+//! `auto` is sherpa-onnx on every platform (the one tests/diarize_ami.rs measures on real
+//! meetings; neural is opt-in until a DER run backs it). An algorithm whose runtime this build
 //! lacks, or whose model is missing or will not load, falls back down the chain neural ->
 //! sherpa-onnx -> spectral; `status` says which ran and why.
 //!
-//! Live, prints are clustered online: an utterance joins the most similar speaker heard so far
-//! when the cosine similarity to its centroid reaches the algorithm's threshold, else it starts a
-//! new one (at most `stt.diarization.max_speakers`; one shorter than `stt.diarization.min_new`
-//! never does). The final pass sees the whole channel, so it clusters agglomeratively instead:
-//! every utterance long enough starts as its own speaker and the two most similar speakers
-//! (centroid cosine) merge until none reach the threshold and at most `max_speakers` remain; the
-//! short ones then join their nearest speaker, and speakers are numbered by first appearance.
+//! Prints are clustered agglomeratively (average linkage): every utterance at least
+//! `stt.diarization.min_new` long starts as its own speaker and the two most similar speakers
+//! merge until none reach the algorithm's threshold and at most `stt.diarization.max_speakers`
+//! remain; speakers with less speech than `stt.diarization.min_speaker` join their nearest, the
+//! short utterances join theirs, and speakers are numbered by first appearance. The final pass
+//! clusters the whole channel once; live, everything heard so far is clustered again each window
+//! and each speaker keeps the label most of its earlier utterances got, so labels stay put.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -134,9 +135,6 @@ impl Diarization {
             SttDiarizationAlgorithm::Spectral => vec![Spectral],
             SttDiarizationAlgorithm::Neural => vec![Neural, SherpaOnnx, Spectral],
             SttDiarizationAlgorithm::SherpaOnnx => vec![SherpaOnnx, Spectral],
-            SttDiarizationAlgorithm::Auto if cfg!(target_os = "macos") => {
-                vec![Neural, SherpaOnnx, Spectral]
-            }
             SttDiarizationAlgorithm::Auto | SttDiarizationAlgorithm::Off => {
                 vec![SherpaOnnx, Spectral]
             }
@@ -242,8 +240,11 @@ impl Diarization {
     }
 }
 
-/// What the last diarizer ran: (requested, algorithm, provider, fallback reasons).
-static ACTIVE: Mutex<Option<(String, Algorithm, Option<String>, Vec<String>)>> = Mutex::new(None);
+/// What a diarizer ran: (requested, algorithm, provider, fallback reasons).
+type Ran = (String, Algorithm, Option<String>, Vec<String>);
+
+/// What the last diarizer ran.
+static ACTIVE: Mutex<Option<Ran>> = Mutex::new(None);
 
 /// Forget what ran (config reload changed `stt.diarization.*`) and drop the loaded models.
 pub fn clear() {
@@ -305,6 +306,21 @@ impl Embedder {
             #[cfg(feature = "parakeet")]
             Algorithm::SherpaOnnx => {
                 let m = &d.sherpa;
+                // onnxruntime aborts the process on a malformed file (a C++ exception through
+                // FFI), so a file that is not the catalog's size is never handed to it.
+                let want = m.entry.files[0].bytes;
+                let got = std::fs::metadata(&m.path).map_or(0, |f| f.len());
+                if got != want {
+                    return Err(ConfigError::new(
+                        "model_load_failed",
+                        format!(
+                            "{} is {got} bytes, not the {want} of {}; delete it and fetch it again with `ctl stt model fetch model={}`",
+                            m.path.display(),
+                            m.entry.id,
+                            m.entry.id
+                        ),
+                    ));
+                }
                 let x = super::sherpa::SpeakerExtractor::load(&m.path, m.threads, m.provider)?;
                 let p = x.provider().to_string();
                 Ok((Embedder::Sherpa(x), Some(p)))
@@ -542,9 +558,12 @@ impl Diarizer {
         let long: Vec<usize> = (0..prints.len())
             .filter(|&i| prints[i].is_some() && lens[i] >= self.cfg.min_new_samples)
             .collect();
-        // Nothing long enough to found a speaker: cluster whatever has a print.
+        // Nothing long enough to found a speaker: the first print founds the only one.
         let seeds: Vec<usize> = if long.is_empty() {
-            (0..prints.len()).filter(|&i| prints[i].is_some()).collect()
+            (0..prints.len())
+                .find(|&i| prints[i].is_some())
+                .into_iter()
+                .collect()
         } else {
             long
         };
@@ -758,6 +777,59 @@ mod tests {
             voice_print(&mel, &half).unwrap(),
         );
         assert!(cosine(&a, &b) > 0.99, "{}", cosine(&a, &b));
+    }
+
+    fn cfg(over: &[(&str, Value)]) -> Config {
+        let mut c = crate::config::resolve::defaults_flat();
+        for (k, v) in over {
+            c.insert((*k).into(), v.clone());
+        }
+        serde_json::from_value(crate::config::resolve::nest(&c)).unwrap()
+    }
+
+    /// dot-4uzgol.83: stt.diarization.algorithm picks the chain; a missing model falls back to
+    /// spectral and stt-status says why.
+    #[test]
+    fn the_algorithm_key_picks_a_chain_that_falls_back_to_spectral() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = |over: &[(&str, Value)]| Diarization::from_config(&cfg(over), dir.path()).unwrap();
+        assert!(d(&[("stt.diarization.algorithm", json!("off"))]).is_none());
+        assert!(d(&[("stt.diarization.enabled", json!(false))]).is_none());
+        assert_eq!(status(None)["setting"], "off");
+        let auto = d(&[]).unwrap();
+        assert_eq!(auto.chain, [Algorithm::SherpaOnnx, Algorithm::Spectral]);
+        assert_eq!(auto.sherpa.entry.id, "titanet-small");
+        assert!((auto.sherpa.threshold - 0.2).abs() < 1e-6);
+        let neural = d(&[("stt.diarization.algorithm", json!("neural"))]).unwrap();
+        assert_eq!(
+            neural.chain,
+            [
+                Algorithm::Neural,
+                Algorithm::SherpaOnnx,
+                Algorithm::Spectral
+            ]
+        );
+        let spectral = d(&[("stt.diarization.algorithm", json!("spectral"))]).unwrap();
+        assert_eq!(spectral.plan(), (Algorithm::Spectral, vec![]));
+        // No model downloaded: spectral runs, and each step says why it was skipped.
+        let (planned, why) = neural.plan();
+        assert_eq!(planned, Algorithm::Spectral);
+        assert_eq!(why.len(), 2, "{why:?}");
+        assert!(why[0].starts_with("neural: ") && why[1].starts_with("sherpa-onnx: "));
+        let st = status(Some(&neural));
+        assert_eq!(st["setting"], "neural");
+        assert_eq!(st["planned"], "spectral");
+        assert_eq!(st["chain"], json!(["neural", "sherpa-onnx", "spectral"]));
+        assert_eq!(Diarizer::new(neural).algorithm(), Algorithm::Spectral);
+        // A model file present is tried; one of the wrong size is not loaded: still spectral.
+        let m = &auto.sherpa;
+        std::fs::write(&m.path, b"not onnx").unwrap();
+        if Algorithm::SherpaOnnx.compiled() {
+            assert_eq!(auto.plan().0, Algorithm::SherpaOnnx);
+        }
+        assert_eq!(Diarizer::new(auto).algorithm(), Algorithm::Spectral);
+        let bad = cfg(&[("stt.diarization.sherpa_onnx.model", json!("nope"))]);
+        assert!(Diarization::from_config(&bad, dir.path()).is_err());
     }
 
     #[test]

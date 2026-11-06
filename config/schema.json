@@ -1205,7 +1205,7 @@
           "properties": {
             "algorithm": {
               "default": "auto",
-              "description": "How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is stt.speaker_them. auto: neural on macOS, sherpa-onnx elsewhere. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.",
+              "description": "How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is stt.speaker_them. auto: sherpa-onnx, the one measured on real meetings (crates/core/tests/diarize_ami.rs); neural is opt-in until it is. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.",
               "enum": [
                 "auto",
                 "spectral",
@@ -1247,6 +1247,20 @@
               "x-reload": "live",
               "x-ui": false
             },
+            "min_speaker": {
+              "default": "0s",
+              "description": "A remote speaker with less speech than this in the whole recording is merged into the most similar one: a few stray utterances (a cough, a burst of crosstalk, an echo) do not make a speaker of their own. 0s keeps every speaker found.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1h",
+              "x-max-ms": 3600000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
+            },
             "neural": {
               "additionalProperties": false,
               "properties": {
@@ -1278,12 +1292,11 @@
               "additionalProperties": false,
               "properties": {
                 "model": {
-                  "default": "wespeaker-resnet34-lm",
-                  "description": "sherpa-onnx: the speaker-embedding model (crates/core/data/speaker-models.json): wespeaker-resnet34-lm (26 MB, the network the neural algorithm runs), wespeaker-campplus (29 MB), titanet-small (40 MB, NVIDIA NeMo).",
+                  "default": "titanet-small",
+                  "description": "sherpa-onnx: the speaker-embedding model (crates/core/data/speaker-models.json): titanet-small (40 MB, NVIDIA NeMo; the best on the AMI meetings of crates/core/tests/diarize_ami.rs), wespeaker-resnet34-lm (26 MB, the network the neural algorithm runs). stt.diarization.sherpa_onnx.threshold is tuned for titanet-small.",
                   "enum": [
-                    "wespeaker-resnet34-lm",
-                    "wespeaker-campplus",
-                    "titanet-small"
+                    "titanet-small",
+                    "wespeaker-resnet34-lm"
                   ],
                   "type": "string",
                   "x-reload": "live",
@@ -1311,7 +1324,7 @@
                   "x-ui": false
                 },
                 "threshold": {
-                  "default": 50,
+                  "default": 20,
                   "description": "sherpa-onnx: percent speaker-embedding (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
                   "maximum": 100,
                   "minimum": 1,

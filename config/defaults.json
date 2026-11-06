@@ -150,15 +150,16 @@
       "enabled": true,
       "max_speakers": 8,
       "min_new": "1s",
+      "min_speaker": "0s",
       "neural": {
         "provider": "auto",
         "threshold": 50
       },
       "sherpa_onnx": {
-        "model": "wespeaker-resnet34-lm",
+        "model": "titanet-small",
         "provider": "auto",
         "threads": 2,
-        "threshold": 50
+        "threshold": 20
       },
       "threshold": 70
     },

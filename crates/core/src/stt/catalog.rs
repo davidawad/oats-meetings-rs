@@ -400,6 +400,65 @@ mod tests {
         assert!(!e.present(&p));
     }
 
+    /// dot-4uzgol.83: the diarizer's speaker-embedding models, kept apart from the speech models.
+    #[test]
+    fn the_speaker_models_are_complete_and_the_config_key_allows_the_sherpa_ones() {
+        let all = speakers();
+        let mut places = std::collections::BTreeSet::new();
+        for e in all {
+            assert!(safe_name(&e.id), "{}", e.id);
+            assert!(get(&e.id).is_none(), "{} is not a speech model too", e.id);
+            assert_eq!(e.arch, "speaker-embedding", "{}", e.id);
+            assert!(!e.name.is_empty() && !e.files.is_empty(), "{}", e.id);
+            for f in &e.files {
+                assert!(f.name.split('/').all(safe_name), "{}: {}", e.id, f.name);
+                assert!(f.url.starts_with("https://"), "{}: {}", e.id, f.url);
+                assert_eq!(f.sha256.len(), 64, "{}: {}", e.id, f.name);
+                assert!(f.bytes > 0, "{}: {}", e.id, f.name);
+            }
+            match e.runtime {
+                Runtime::SherpaOnnx => {
+                    assert!(!e.is_dir(), "{}: one .onnx file", e.id);
+                    assert_eq!(e.files.len(), 1, "{}", e.id);
+                }
+                Runtime::CoreMl => {
+                    assert!(safe_name(&e.dir), "{}", e.id);
+                    for role in ["fbank", "embedding"] {
+                        assert!(e.files.iter().any(|f| f.role == role), "{}: {role}", e.id);
+                    }
+                }
+                r => panic!("{}: runtime {r:?}", e.id),
+            }
+            assert!(places.insert(e.location(Path::new("m"))), "{}", e.id);
+        }
+        let sherpa: Vec<&str> = all
+            .iter()
+            .filter(|e| e.runtime == Runtime::SherpaOnnx)
+            .map(|e| e.id.as_str())
+            .collect();
+        assert_eq!(sherpa, crate::config::keys::STT_SPEAKER_MODELS);
+        assert_eq!(
+            speaker(crate::stt::diarize::NEURAL_MODEL).map(|e| e.runtime),
+            Some(Runtime::CoreMl)
+        );
+        let crate::config::keys::Def::S(d) =
+            crate::config::keys::find("stt.diarization.sherpa_onnx.model")
+                .unwrap()
+                .default
+        else {
+            panic!("a string default")
+        };
+        assert_eq!(speaker(d).map(|e| e.runtime), Some(Runtime::SherpaOnnx));
+        // ci/fetch-models.sh fetches the default for tests/diarize_ami.rs, pinned to the catalog.
+        let script = include_str!("../../../../ci/fetch-models.sh");
+        let pin = script
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("_spk_sha="))
+            .expect("ci/fetch-models.sh pins the speaker model");
+        assert!(script.contains(&format!("_spk={}", speaker(d).unwrap().files[0].name)));
+        assert_eq!(pin, speaker(d).unwrap().files[0].sha256);
+    }
+
     #[test]
     fn presence_needs_every_file_of_a_directory_model() {
         let d = tempfile::tempdir().unwrap();
