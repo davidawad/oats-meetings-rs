@@ -109,7 +109,7 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
     ("Sessions", &["sessions."]),
     ("Notes and templates", &["notes.", "templates.", "llm."]),
     ("Knowledge base", &["kb."]),
-    ("Calendar", &["ics."]),
+    ("Calendar", &["calendar.", "ics."]),
 ];
 
 /// Names for the rows whose path does not read well on its own.
@@ -129,6 +129,8 @@ const LABELS: &[(&str, &str)] = &[
     ("ui.show_elapsed", "Show elapsed time"),
     ("ui.tz", "Time zone"),
     ("ics.feeds", "Feeds"),
+    ("calendar.sources", "Calendar sources"),
+    ("calendar.me", "Your email addresses"),
 ];
 
 /// The section a key belongs to (`Other` when none claims it).

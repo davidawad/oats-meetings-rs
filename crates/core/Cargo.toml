@@ -49,7 +49,10 @@ ureq = { workspace = true, features = ["native-tls"] }
 sherpa-onnx = { workspace = true, optional = true, features = ["shared"] }
 # The CoreML runtime (dot-4uzgol.69): Parakeet v2 as compiled .mlmodelc bundles on the Neural Engine, driven from Rust.
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDate", "NSDictionary", "NSEnumerator", "NSError", "NSPredicate", "NSSet", "NSString", "NSURL", "NSValue"] }
+# The macOS Calendar app's store (dot-4uzgol.88): eventkit calendar sources.
+objc2-event-kit = { version = "0.3", default-features = false, features = ["std", "block2", "EKCalendar", "EKCalendarItem", "EKEvent", "EKEventStore", "EKObject", "EKParticipant", "EKSource", "EKTypes"] }
+block2 = "0.6"
 objc2-core-ml = { version = "0.3", default-features = false, features = ["std", "MLDictionaryFeatureProvider", "MLFeatureDescription", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModelDescription", "MLMultiArray", "MLMultiArrayConstraint", "MLPredictionOptions"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

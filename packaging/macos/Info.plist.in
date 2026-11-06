@@ -14,6 +14,8 @@
   <key>NSMicrophoneUsageDescription</key><string>Oats Meetings records meeting audio for transcription.</string>
   <key>NSScreenCaptureUsageDescription</key><string>Oats Meetings captures system audio (what the other people in a meeting say) through ScreenCaptureKit. No screen content is recorded.</string>
   <key>NSAudioCaptureUsageDescription</key><string>Oats Meetings captures system audio (what the other people in a meeting say) for transcription.</string>
+  <key>NSCalendarsUsageDescription</key><string>Oats Meetings reads your calendar to name a recording after the meeting it overlaps.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Oats Meetings reads your calendar to name a recording after the meeting it overlaps, with its attendees.</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>

@@ -17,7 +17,9 @@ use serde_json::{json, Value};
 use crate::settings::Widget;
 use crate::state::{badge_text, Control, Controls, Rec, Tab};
 use crate::view::MainWindow;
-use crate::views::{self, calendar, models, notes::Notes, sessions, templates::Templates, trash};
+use crate::views::{
+    self, calendar, calendar_sources, models, notes::Notes, sessions, templates::Templates, trash,
+};
 
 /// One `ui-*` request waiting for the GPUI thread, and where its answer goes.
 pub struct Request {
@@ -141,6 +143,26 @@ pub const OPS: &[(&str, &str, &str)] = &[
     ),
     ("keys.reset", "command", "Reset a shortcut to its default"),
     ("keys.clear", "command", "Clear a shortcut (no keys)"),
+    (
+        "settings.calendar_select",
+        "source, account? | calendar?, selected?",
+        "tick (default) or untick a calendar or account checkbox under Calendar sources",
+    ),
+    (
+        "settings.calendar_enable",
+        "name, enabled?",
+        "a calendar source's on/off toggle (turning eventkit on asks for Calendars access once)",
+    ),
+    (
+        "settings.calendar_use_mac",
+        "",
+        "Use macOS Calendar: add the eventkit source (asks for Calendars access once)",
+    ),
+    (
+        "settings.calendar_access",
+        "",
+        "Allow Calendars access (the one macOS prompt, only while undetermined)",
+    ),
 ];
 
 fn bad(msg: impl Into<String>) -> ConfigError {
@@ -426,6 +448,35 @@ impl MainWindow {
                     json!({"key": key, "value": value}),
                 );
             }
+            "settings.calendar_select" => {
+                let source = need(args, op, "source")?;
+                let (account, cal) = (arg(args, "account"), arg(args, "calendar"));
+                if account.is_none() && cal.is_none() {
+                    return Err(bad(format!("{op} needs args.account or args.calendar")));
+                }
+                let selected = args
+                    .get("selected")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
+                let params = json!({"source": source, "account": account, "calendar": cal,
+                                    "selected": selected});
+                calendar_sources::act(self, "calendar-select", params, cx);
+            }
+            "settings.calendar_enable" => {
+                let name = need(args, op, "name")?;
+                let on = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+                let params = json!({"name": name, "enabled": on});
+                calendar_sources::act(self, "calendar-source-enable", params, cx);
+            }
+            "settings.calendar_use_mac" => calendar_sources::act(
+                self,
+                "calendar-source-add",
+                json!({"name": "mac", "kind": "eventkit"}),
+                cx,
+            ),
+            "settings.calendar_access" => {
+                calendar_sources::act(self, "calendar-access", json!({"request": true}), cx)
+            }
             _ => unreachable!("listed in OPS"),
         }
         Ok(())
@@ -457,6 +508,7 @@ impl MainWindow {
                     c.load(self);
                 }
             }
+            Tab::Settings => calendar_sources::prepare(self, cx),
             _ => {}
         }
     }
@@ -618,6 +670,7 @@ impl MainWindow {
                         "path": r.path, "value": widget_value(&r.widget),
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
+                "calendar_sources": cx.default_global::<calendar_sources::Sources>().dump(),
             }),
         };
         json!({

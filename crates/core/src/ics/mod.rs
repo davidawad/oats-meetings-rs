@@ -623,7 +623,7 @@ fn refresh_one(engine: &Engine, c: &Ctx, f: &Feed, now: i64) -> Result<Value> {
     }
 }
 
-fn parse_instant(label: &str, v: &str, tz: Tz) -> Result<DateTime<Utc>> {
+pub(crate) fn parse_instant(label: &str, v: &str, tz: Tz) -> Result<DateTime<Utc>> {
     let bad = || {
         ConfigError::new(
             "invalid_argument",

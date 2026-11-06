@@ -3,6 +3,7 @@
 //! window's keyboard (shortcut commands, the `?` overlay, the Settings rebind controls).
 
 pub mod calendar;
+pub mod calendar_sources;
 pub mod models;
 pub mod notes;
 pub mod sessions;

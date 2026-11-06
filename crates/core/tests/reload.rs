@@ -97,6 +97,10 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
             json!(r#"[{"name":"a","url":"https://example.invalid/a.ics"}]"#),
             json!(r#"[{"name":"b","url":"file:///tmp/b.ics","enabled":false}]"#),
         ],
+        Kind::Str if k.path == "calendar.sources" => vec![
+            json!(r#"[{"name":"mac","kind":"eventkit","account":"me@example.com"}]"#),
+            json!(r#"[{"name":"ics","kind":"ics","feeds":["a"],"enabled":false}]"#),
+        ],
         Kind::Str if k.path == "ics.default_tz" => vec![json!("Europe/Paris"), json!("Asia/Tokyo")],
         // A host with an audio stack vetoes a device name it does not have, so only "" is safe here;
         // the veto itself is tested in record.rs with a fake backend.

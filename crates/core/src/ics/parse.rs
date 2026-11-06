@@ -50,6 +50,32 @@ pub struct RawEvent {
     pub rdates: Vec<When>,
     pub exdates: Vec<When>,
     pub recurrence_id: Option<When>,
+    pub url: Option<String>,
+    pub attendees: Vec<Attendee>,
+}
+
+/// One ATTENDEE: its CN, its address (the `mailto:` stripped) and its PARTSTAT (upper case, empty
+/// when absent).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attendee {
+    pub name: String,
+    pub email: String,
+    pub status: String,
+}
+
+fn attendee_of(p: &Property<'_>) -> Attendee {
+    let v = p.val.as_str().trim();
+    let email = match v.get(..7) {
+        Some(head) if head.eq_ignore_ascii_case("mailto:") => &v[7..],
+        _ => v,
+    };
+    Attendee {
+        name: param(&p.params, "CN").unwrap_or_default().to_string(),
+        email: email.to_string(),
+        status: param(&p.params, "PARTSTAT")
+            .unwrap_or_default()
+            .to_ascii_uppercase(),
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -276,8 +302,12 @@ fn build_event(
         };
     let mut rdates = Vec::new();
     let mut exdates = Vec::new();
+    let mut attendees = Vec::new();
     for p in &comp.properties {
         let n = p.name.as_str();
+        if n.eq_ignore_ascii_case("ATTENDEE") {
+            attendees.push(attendee_of(p));
+        }
         let wrap = |e: ConfigError| ConfigError::new(e.code, format!("{uid}: {}", e.message));
         if n.eq_ignore_ascii_case("RDATE") {
             whens_from(p, o, &mut rdates).map_err(wrap)?;
@@ -307,6 +337,10 @@ fn build_event(
         rdates,
         exdates,
         recurrence_id,
+        url: find("URL")
+            .map(|p| p.val.as_str().trim().to_string())
+            .filter(|s| !s.is_empty()),
+        attendees,
     };
     if ev.rrule.is_some() {
         rule_set(&ev)?; // a bad RRULE fails at refresh time, not on a later query
@@ -471,6 +505,10 @@ pub fn expand(
                 "local_start": wall.format("%Y-%m-%dT%H:%M:%S").to_string(),
                 "recurring": recurring,
                 "override": ev.recurrence_id.is_some(),
+                "url": ev.url,
+                "attendees": ev.attendees.iter().map(|a| json!({
+                    "name": a.name, "email": a.email, "status": a.status,
+                })).collect::<Vec<_>>(),
             });
             if all_day {
                 v["start_date"] = json!(wall.date().format("%Y-%m-%d").to_string());

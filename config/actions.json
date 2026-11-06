@@ -269,6 +269,164 @@
       "status": "implemented"
     },
     {
+      "doc": "Calendar sources (calendar.sources) with what each can read: an ics source's feeds, an eventkit source's macOS Calendar accounts and calendars, each marked selected or not, and the Calendars access state. Never asks for access.",
+      "effect": "read",
+      "name": "calendar-sources-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Add a calendar source: kind ics (feeds: feed names, default every enabled feed) or eventkit (macOS Calendar; accounts: account titles or emails, calendars: calendar titles or ids, default every calendar). Each list takes one string or an array. Enabling an eventkit source asks macOS for Calendars access the first time.",
+      "effect": "write",
+      "name": "calendar-source-add",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "feeds",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "accounts",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "calendars",
+          "required": false,
+          "type": "Option<Value>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Remove a calendar source.",
+      "effect": "write",
+      "name": "calendar-source-remove",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Turn a calendar source on (default) or off; turning an eventkit source on asks macOS for Calendars access the first time.",
+      "effect": "write",
+      "name": "calendar-source-enable",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Tick (selected=true, default) or untick one calendar (title or id) or a whole account (title, email or id) of an eventkit source, as the Settings checkboxes do.",
+      "effect": "write",
+      "name": "calendar-select",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "account",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "calendar",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "selected",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "The macOS Calendars access state; request=true asks for it (the one system prompt, only while undetermined).",
+      "effect": "control",
+      "name": "calendar-access",
+      "params": [
+        {
+          "name": "request",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Events from every enabled calendar source (or one) in a time window (RFC 3339 or YYYY-MM-DD), with attendees and video links.",
+      "effect": "read",
+      "name": "calendar-events",
+      "params": [
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "source",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Which event would title a recording starting at 'at' (default now; to: its end) and the title it gets, with every overlapping candidate and why it lost.",
+      "effect": "read",
+      "name": "calendar-match",
+      "params": [
+        {
+          "name": "at",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Store a secret under key 'namespace/name' in the writable secrets backend (OS keychain). The value is never shown again.",
       "effect": "write",
       "name": "secret-set",

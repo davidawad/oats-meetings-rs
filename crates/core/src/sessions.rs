@@ -670,6 +670,20 @@ impl Store {
         Ok(summary(&l))
     }
 
+    /// Merge `fields` into a session's `session.json`; a null value removes its key.
+    pub fn merge_meta(&self, id: &str, fields: &Map<String, Value>) -> Result<Value> {
+        let mut l = self.find(id)?;
+        for (k, v) in fields {
+            if v.is_null() {
+                l.meta.remove(k);
+            } else {
+                l.meta.insert(k.clone(), v.clone());
+            }
+        }
+        write_meta(&l.dir, &l.meta)?;
+        Ok(summary(&l))
+    }
+
     /// Mark (or unmark) a session as recorded while transcription was unavailable, so it is
     /// transcribed once the model arrives (`transcribePending` in session.json).
     pub fn set_pending(&self, id: &str, pending: bool) -> Result<()> {

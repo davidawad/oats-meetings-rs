@@ -39,6 +39,7 @@ impl Serialize for Dur {
 pub struct Config {
     pub app: App,
     pub audio: Audio,
+    pub calendar: Calendar,
     pub config: ConfigSection,
     pub control: Control,
     pub kb: Kb,
@@ -431,6 +432,25 @@ pub struct Ics {
     pub unknown_tz: IcsUnknownTz,
     pub webcal_scheme: IcsWebcalScheme,
     pub window_days: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Calendar {
+    pub access_timeout: Dur,
+    pub ignore_all_day: bool,
+    pub ignore_cancelled: bool,
+    pub ignore_declined: bool,
+    pub match_lead: Dur,
+    pub me: String,
+    pub prefer_attendees: bool,
+    pub prefer_video: bool,
+    pub retitle_on_save: bool,
+    pub sources: String,
+    pub title_fallback: String,
+    pub title_from_event: bool,
+    pub title_template: String,
+    pub video_hosts: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

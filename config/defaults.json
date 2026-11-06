@@ -30,6 +30,22 @@
     "system_backend": "auto",
     "transcribe": "auto"
   },
+  "calendar": {
+    "access_timeout": "2m",
+    "ignore_all_day": true,
+    "ignore_cancelled": true,
+    "ignore_declined": true,
+    "match_lead": "5m",
+    "me": "",
+    "prefer_attendees": true,
+    "prefer_video": true,
+    "retitle_on_save": true,
+    "sources": "[{\"name\":\"ics\",\"kind\":\"ics\"}]",
+    "title_fallback": "",
+    "title_from_event": true,
+    "title_template": "{event.title}",
+    "video_hosts": "zoom.us,meet.google.com,teams.microsoft.com,teams.live.com,webex.com,whereby.com,around.co,facetime.apple.com,chime.aws"
+  },
   "config": {
     "hot_reload": true,
     "poll_interval": "250ms"

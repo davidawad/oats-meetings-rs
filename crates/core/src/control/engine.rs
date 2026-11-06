@@ -128,6 +128,7 @@ pub struct Engine {
     // One session-transcribe at a time (ctl, the GUI and the model-arrived pass).
     transcribe_lock: Mutex<()>,
     ui: RwLock<Option<Arc<dyn UiPort>>>,
+    event_store: crate::calendar::StoreSlot,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -297,12 +298,14 @@ impl Engine {
             me: me.clone(),
             transcribe_lock: Mutex::new(()),
             ui: RwLock::new(None),
+            event_store: crate::calendar::StoreSlot::default(),
         });
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
         engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(
             &engine,
         ))));
+        engine.register(Arc::new(crate::calendar::CalendarSubsystem));
         engine.register(Arc::new(crate::stt::SttSubsystem::new(Arc::downgrade(
             &engine,
         ))));
@@ -566,6 +569,15 @@ impl Engine {
     }
 
     /// Route the `ui-*` actions to a GUI (or stop routing them, with `None`).
+    /// The macOS Calendar store the eventkit sources read (tests inject a fake).
+    pub fn event_store(&self) -> Arc<dyn crate::calendar::eventkit::EventStore> {
+        Arc::clone(&self.event_store.0.lock().expect("event store"))
+    }
+
+    pub fn set_event_store(&self, store: Arc<dyn crate::calendar::eventkit::EventStore>) {
+        *self.event_store.0.lock().expect("event store") = store;
+    }
+
     pub fn set_ui(&self, port: Option<Arc<dyn UiPort>>) {
         *self.ui.write().expect("ui") = port;
     }
@@ -849,6 +861,7 @@ impl Engine {
             Action::ConfigCheck {} => {
                 let typed = self.resolved().typed()?;
                 crate::ics::validate_settings(&typed.ics)?;
+                crate::calendar::validate(&typed.calendar)?;
                 Ok(json!({"valid": true}))
             }
             Action::ConfigResolved {} => {
@@ -887,24 +900,37 @@ impl Engine {
                 // Saved as audio only for want of the model: transcribed once it is present.
                 let pending = why["code"] == "model_not_found";
                 let store = self.store();
-                let v = self.recorder.start(
+                // The event overlapping now names the session unless a title was given.
+                let cal = crate::calendar::for_start(self, chrono::Utc::now(), title.as_deref());
+                let mut v = self.recorder.start(
                     &self.audio_settings()?,
                     &store,
                     session.as_deref(),
-                    title.as_deref(),
+                    cal.title.as_deref(),
                     plan,
                     why,
                 )?;
-                if pending {
-                    if let Some(id) = v["session"].as_str() {
+                if let Some(id) = v["session"].as_str() {
+                    if pending {
                         store.set_pending(id, true)?;
                     }
+                    if !cal.fields.is_empty() {
+                        store.merge_meta(id, &cal.fields)?;
+                    }
                 }
+                v["title"] = json!(cal.title.unwrap_or_default());
+                v["calendar"] = cal.report;
                 self.bus.publish("recording-started", v.clone());
                 Ok(v)
             }
             Action::RecordStop {} => {
-                let v = self.recorder.stop()?;
+                let mut v = self.recorder.stop()?;
+                if let Some(c) = v["session"]
+                    .as_str()
+                    .and_then(|id| crate::calendar::on_saved(self, id))
+                {
+                    v["calendar"] = c;
+                }
                 self.bus.publish("recording-stopped", v.clone());
                 self.session_saved(&v["session"]);
                 // The model may have arrived while this pending recording was running.
@@ -1120,6 +1146,14 @@ impl Engine {
             | Action::IcsList {}
             | Action::IcsRefresh { .. }
             | Action::IcsEvents { .. } => crate::ics::dispatch(self, a),
+            Action::CalendarSourcesList {}
+            | Action::CalendarSourceAdd { .. }
+            | Action::CalendarSourceRemove { .. }
+            | Action::CalendarSourceEnable { .. }
+            | Action::CalendarSelect { .. }
+            | Action::CalendarAccess { .. }
+            | Action::CalendarEvents { .. }
+            | Action::CalendarMatch { .. } => crate::calendar::dispatch(self, a),
             // Every action is implemented today; a new "planned" one lands here until its handler.
             #[allow(unreachable_patterns)]
             other => {

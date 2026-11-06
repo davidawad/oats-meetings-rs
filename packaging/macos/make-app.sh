@@ -19,7 +19,7 @@ otool -l "$app/Contents/MacOS/oats-meetings-rs" | grep -q "@loader_path" || { ec
 sed "s/@VERSION@/$ver/" packaging/macos/Info.plist.in > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
 # TCC needs these strings or macOS kills the app on first capture (dot-4uzgol.6).
-for k in NSMicrophoneUsageDescription NSScreenCaptureUsageDescription NSAudioCaptureUsageDescription; do
+for k in NSMicrophoneUsageDescription NSScreenCaptureUsageDescription NSAudioCaptureUsageDescription NSCalendarsUsageDescription NSCalendarsFullAccessUsageDescription; do
   plutil -extract "$k" raw "$app/Contents/Info.plist" >/dev/null || { echo "make-app: Info.plist lacks $k" >&2; exit 1; }
 done
 # Icon A (assets/icon/AppIcon.png, 1024px): iconset sizes 16..512 at @1x/@2x via sips, then iconutil.

@@ -1,4 +1,5 @@
-//! Calendar tab: the upcoming meetings from the ICS feed caches as a month-style grid (one row
+//! Calendar tab: the upcoming meetings of every calendar source (`calendar-events`: the ICS feed
+//! caches, and the macOS Calendar app when an eventkit source is on) as a month-style grid (one row
 //! per week of the window, today marked), beside the feed subscriptions (add / remove / refresh), over the same actions as `ctl ics-*`. Every choice is an `ics.*` config key: the
 //! upcoming window is `ics.window_days` (`ics-events` with no bounds), and the view re-reads the
 //! feeds and events at most once per `ics.poll_interval` (the scheduler's own cadence), plus after
@@ -197,7 +198,8 @@ impl Cal {
                 self.error = Some(e.to_string());
             }
         }
-        match model::dispatch(&w.engine, "ics-events", json!({})) {
+        // Every calendar source's meetings (the ICS feeds and, on macOS, the Calendar app).
+        match model::dispatch(&w.engine, "calendar-events", json!({})) {
             Ok(v) => {
                 self.meetings = v
                     .get("events")
@@ -212,9 +214,13 @@ impl Cal {
                     .and_then(Value::as_array)
                     .and_then(|a| a.first())
                 {
+                    let name = [s(e, "feed"), s(e, "source"), s(e, "name")]
+                        .into_iter()
+                        .find(|n| !n.is_empty())
+                        .unwrap_or_default();
                     self.error = Some(format!(
                         "{}: {}",
-                        s(e, "name"),
+                        name,
                         e.get("error").and_then(err_text).unwrap_or_default()
                     ));
                 }

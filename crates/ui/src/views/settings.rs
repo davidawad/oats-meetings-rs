@@ -299,6 +299,9 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
                     ),
                 ),
         );
+        if g.name == "Calendar" {
+            col = col.child(super::calendar_sources::panel(w, cx));
+        }
     }
     div()
         .flex()
