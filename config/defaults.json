@@ -194,6 +194,7 @@
       "record-toggle": "space",
       "search": "/",
       "session-list": "mod-r",
+      "session-new": "mod-shift-n, n",
       "sessions-next": "j, down",
       "sessions-open": "enter",
       "sessions-prev": "k, up",

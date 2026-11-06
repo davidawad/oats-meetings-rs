@@ -500,6 +500,24 @@ impl State {
         }
     }
 
+    /// Whether New session applies: idle, nothing pending, and Live still shows a finished session.
+    pub fn can_new_session(&self) -> bool {
+        self.pending.is_none() && matches!(self.rec, Rec::Idle) && self.live_session.is_some()
+    }
+
+    /// New session (dot-4uzgol.91): Live drops the finished session it shows (it stays in
+    /// Sessions) and is empty again; the next Start makes the session and names it. False, and
+    /// nothing changes, when it does not apply.
+    pub fn new_session(&mut self) -> bool {
+        if !self.can_new_session() {
+            return false;
+        }
+        self.live.clear();
+        self.live_session = None;
+        self.status.clear();
+        true
+    }
+
     fn saved_lines(&self, engine: &Engine, session: &str) -> Option<Vec<Line>> {
         let v = model::dispatch(engine, "transcript-get", json!({"session": session})).ok()?;
         Some(

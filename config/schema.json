@@ -1522,6 +1522,14 @@
               "x-reload": "live",
               "x-ui": true
             },
+            "session-new": {
+              "default": "mod-shift-n, n",
+              "description": "New session: clear the Live tab of the finished session it shows (it stays in Sessions), ready for the next Start. Only while idle. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
             "sessions-next": {
               "default": "j, down",
               "description": "Select the next session in the Sessions list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",

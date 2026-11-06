@@ -363,6 +363,8 @@ record-toggle = "space"
 search = "/"
 # Reload the session list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 session-list = "mod-r"
+# New session: clear the Live tab of the finished session it shows (it stays in Sessions), ready for the next Start. Only while idle. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+session-new = "mod-shift-n, n"
 # Select the next session in the Sessions list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
 sessions-next = "j, down"
 # Open the selected session's notes. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.

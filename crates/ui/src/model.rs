@@ -113,6 +113,7 @@ pub const BINDINGS: &[Binding] = &[
     action("record-start", "Start recording", "Recording"),
     action("record-pause", "Pause / resume", "Recording"),
     action("record-stop", "Stop recording", "Recording"),
+    window("session-new", "New session (clear Live)", "Recording"),
     window("tab-live", "Live", "Tabs"),
     window("tab-sessions", "Sessions", "Tabs"),
     window("tab-notes", "Notes", "Tabs"),

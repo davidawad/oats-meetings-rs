@@ -115,6 +115,14 @@ impl MainWindow {
             "record-start" => self.press(Control::Start, cx),
             "record-pause" => self.press(Control::Pause, cx),
             "record-stop" => self.press(Control::Stop, cx),
+            "session-new" => {
+                if !self.new_session(cx) {
+                    return false;
+                }
+                if self.state.tab != Tab::Live {
+                    self.switch_tab(Tab::Live, cx);
+                }
+            }
             "help" => self.keys.help = !self.keys.help,
             "back" => return self.back(cx),
             "search" => {
@@ -888,5 +896,107 @@ mod tests {
         let d = invoke(&view, cx, "keys.press", json!({"keys": "1"})).unwrap();
         assert_eq!(d["tab"], "Live");
         assert_eq!(d["keys"]["map"]["quit"], json!([]));
+    }
+
+    #[test]
+    fn new_session_is_enabled_only_when_idle_with_a_finished_session_shown() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = window(&engine, &mut cx);
+        let invoke = |view: &gpui::Entity<MainWindow>, cx: &mut VisualTestContext, name: &str| {
+            view.update(cx, |v, cx| {
+                v.drive(&json!({"op": "invoke", "name": name, "args": {}}), cx)
+            })
+            .unwrap();
+            // A record press runs off the UI thread: the dump after it lands.
+            cx.run_until_parked();
+            dump(view, cx)
+        };
+        // Idle with nothing shown: nothing to clear.
+        let d = dump(&view, cx);
+        assert_eq!(d["recording"]["new_session"], false);
+        assert_eq!(
+            invoke(&view, cx, "session.new")["view"]["session"],
+            Value::Null
+        );
+        // Recording and paused: off, and pressing it changes nothing.
+        let d = invoke(&view, cx, "record.start");
+        assert_eq!(d["recording"]["state"], "recording");
+        assert_eq!(d["recording"]["new_session"], false);
+        let session = d["recording"]["session"].as_str().unwrap().to_string();
+        assert_eq!(invoke(&view, cx, "session.new")["view"]["session"], session);
+        let d = invoke(&view, cx, "record.pause");
+        assert_eq!(d["recording"]["state"], "paused");
+        assert_eq!(d["recording"]["new_session"], false);
+        assert_eq!(invoke(&view, cx, "session.new")["view"]["session"], session);
+        // Saved: Live keeps the finished session until New session.
+        let d = invoke(&view, cx, "record.stop");
+        assert_eq!(d["recording"]["state"], "idle");
+        view.update(cx, |v, cx| {
+            v.event(
+                &json!({"event": "recording-stopped", "data": {"session": session}}).to_string(),
+                cx,
+            );
+            v.state.live.push(crate::state::Line {
+                speaker: "you".into(),
+                text: "hello".into(),
+                start: None,
+            });
+            v.switch_tab(Tab::Sessions, cx);
+        });
+        let d = dump(&view, cx);
+        assert_eq!(d["recording"]["new_session"], true);
+        assert_eq!(d["status"], format!("Saved session {session}"));
+        let d = invoke(&view, cx, "session.new");
+        assert_eq!(d["tab"], "Live");
+        assert_eq!(d["view"]["session"], Value::Null);
+        assert_eq!(d["view"]["lines"], json!([]));
+        assert_eq!(d["status"], "");
+        assert_eq!(d["recording"]["state"], "idle");
+        assert_eq!(d["recording"]["start"], true);
+        assert_eq!(d["recording"]["new_session"], false);
+        // The finished session is still in Sessions.
+        view.update(cx, |v, _| {
+            v.state.refresh(&v.engine);
+            assert!(
+                v.state.sessions.iter().any(|r| r.id == session),
+                "{session}"
+            );
+        });
+    }
+
+    #[test]
+    fn n_is_new_session_and_rebindable() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = window(&engine, &mut cx);
+        assert_eq!(
+            dump(&view, cx)["keys"]["map"]["session-new"],
+            json!([shortcuts::display("mod-shift-n"), "n"])
+        );
+        let shown = |view: &gpui::Entity<MainWindow>, cx: &mut VisualTestContext| {
+            view.update(cx, |v, _| {
+                v.state.live_session = Some("old".into());
+                v.state.status = "Saved session old".into();
+            });
+        };
+        shown(&view, cx);
+        view.update(cx, |v, cx| v.switch_tab(Tab::Settings, cx));
+        keys(cx, "n");
+        let d = dump(&view, cx);
+        assert_eq!(d["tab"], "Live");
+        assert_eq!(d["view"]["session"], Value::Null);
+        shown(&view, cx);
+        keys(cx, &own("shift-n"));
+        assert_eq!(dump(&view, cx)["view"]["session"], Value::Null);
+        // Rebound: the old bare key does nothing, the new one clears.
+        view.update(cx, |v, cx| v.rebind("session-new", "mod-alt-n", cx))
+            .unwrap();
+        cx.run_until_parked();
+        shown(&view, cx);
+        keys(cx, "n");
+        assert_eq!(dump(&view, cx)["view"]["session"], "old");
+        keys(cx, &own("alt-n"));
+        assert_eq!(dump(&view, cx)["view"]["session"], Value::Null);
     }
 }

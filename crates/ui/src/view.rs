@@ -178,6 +178,16 @@ impl MainWindow {
         .detach();
     }
 
+    /// The New session button: Live is cleared to an empty session, the finished one stays in
+    /// Sessions. False when it does not apply (recording, paused, busy, or Live already empty).
+    pub fn new_session(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.state.new_session() {
+            return false;
+        }
+        cx.notify();
+        true
+    }
+
     fn button(
         &self,
         id: &'static str,
@@ -235,14 +245,33 @@ impl MainWindow {
                 .child(kit::meter(if idle { 0. } else { level }))
         };
         let controls = if idle && self.state.pending.is_none() {
-            div().flex().gap(px(8.)).child(self.button(
-                "rec-start",
-                "Start recording",
-                Kind::Rec,
-                c.start,
-                Control::Start,
-                cx,
-            ))
+            let fresh = self.state.can_new_session();
+            let new = kit::button_with(
+                "rec-new",
+                None,
+                "New session",
+                Kind::Secondary,
+                Size::Big,
+                fresh,
+            );
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(if fresh {
+                    new.on_click(cx.listener(|this, _, _, cx| {
+                        this.new_session(cx);
+                    }))
+                } else {
+                    new
+                })
+                .child(self.button(
+                    "rec-start",
+                    "Start recording",
+                    Kind::Rec,
+                    c.start,
+                    Control::Start,
+                    cx,
+                ))
         } else {
             div()
                 .flex()

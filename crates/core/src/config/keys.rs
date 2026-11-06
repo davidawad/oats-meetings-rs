@@ -478,6 +478,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "ui.keys.session-new",
+        kind: Kind::Keys,
+        default: Def::S("mod-shift-n, n"),
+        doc: "New session: clear the Live tab of the finished session it shows (it stays in Sessions), ready for the next Start. Only while idle. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
         path: "ui.keys.privacy-toggle",
         kind: Kind::Keys,
         default: Def::S("mod-shift-h"),

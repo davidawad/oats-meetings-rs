@@ -62,6 +62,11 @@ pub const OPS: &[(&str, &str, &str)] = &[
     ("record.pause", "", "the Pause / Resume button"),
     ("record.stop", "", "the Stop button"),
     (
+        "session.new",
+        "",
+        "the New session button: clear Live of the finished session (idle only; it stays in Sessions)",
+    ),
+    (
         "sessions.search",
         "query",
         "type into the search box (empty clears it)",
@@ -255,7 +260,11 @@ impl MainWindow {
         if !OPS.iter().any(|o| o.0 == op) {
             return Err(bad(format!("no op '{op}' (ui-invoke op=help lists them)")));
         }
-        if view != "record" && view != "keys" {
+        if view == "session" {
+            if self.state.tab != Tab::Live {
+                self.switch_tab(Tab::Live, cx);
+            }
+        } else if view != "record" && view != "keys" {
             let t = tab_named(view)?;
             if self.state.tab != t {
                 self.switch_tab(t, cx);
@@ -268,6 +277,9 @@ impl MainWindow {
             "record.start" => self.press(Control::Start, cx),
             "record.pause" => self.press(Control::Pause, cx),
             "record.stop" => self.press(Control::Stop, cx),
+            "session.new" => {
+                self.new_session(cx);
+            }
             "sessions.search" => {
                 self.state.cancel_edit();
                 self.state.sessions_ui.query = arg(args, "query").unwrap_or_default().trim().into();
@@ -687,6 +699,7 @@ impl MainWindow {
                 "pause": controls.pause,
                 "pause_label": controls.pause_label,
                 "stop": controls.stop,
+                "new_session": st.can_new_session(),
                 "shown": cfg.config.ui.record_controls,
                 "chrome": crate::view::chrome(&st.rec),
             },
