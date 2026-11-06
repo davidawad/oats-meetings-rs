@@ -146,9 +146,20 @@
       "url": "https://api.openai.com/v1"
     },
     "diarization": {
+      "algorithm": "auto",
       "enabled": true,
       "max_speakers": 8,
       "min_new": "1s",
+      "neural": {
+        "provider": "auto",
+        "threshold": 50
+      },
+      "sherpa_onnx": {
+        "model": "wespeaker-resnet34-lm",
+        "provider": "auto",
+        "threads": 2,
+        "threshold": 50
+      },
       "threshold": 70
     },
     "echo_overlap": 60,

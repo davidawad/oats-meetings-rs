@@ -1,38 +1,335 @@
-//! Speaker diarization of the system-audio channel (dot-4uzgol.77). Everything the speakers play
-//! is the other side of the call, so only that channel is split: its utterances are labelled
-//! `remote_1..remote_N` (from `stt.speaker_them`) by voice, the microphone stays `you`.
+//! Speaker diarization of the system-audio channel (dot-4uzgol.77, algorithms dot-4uzgol.83).
+//! Everything the speakers play is the other side of the call, so only that channel is split: its
+//! utterances are labelled `remote_1..remote_N` (from `stt.speaker_them`) by voice, the
+//! microphone stays `you`.
 //!
-//! Each utterance gets a voice print: the shape of its long-term log-mel spectrum (the mean over
-//! its louder frames, less the mean over bands, so the level does not count), as a unit vector.
-//! Prints are clustered online: an utterance joins the most similar speaker heard so far when the
-//! cosine similarity reaches `stt.diarization.threshold`, else it starts a new one (at most
-//! `stt.diarization.max_speakers`; one shorter than `stt.diarization.min_new` never does). The
-//! final pass then moves each utterance to its nearest speaker once more and numbers speakers in
-//! order of first appearance. Pure Rust, no model to download, the same on every platform.
+//! Each utterance gets a voice print, a unit vector, from the algorithm
+//! `stt.diarization.algorithm` picks:
+//!
+//! - `neural`: a speaker embedding from the pyannote community-1 WeSpeaker ResNet34 networks on
+//!   the Apple Neural Engine (`coreml::SpeakerNet`, macOS), the model FluidAudio diarizes with.
+//! - `sherpa-onnx`: a speaker embedding from a sherpa-onnx model
+//!   (`stt.diarization.sherpa_onnx.model`, `sherpa::SpeakerExtractor`).
+//! - `spectral`: the shape of the utterance's long-term log-mel spectrum (the mean over its louder
+//!   frames, less the mean over bands, so the level does not count). Pure Rust, no model; it
+//!   follows the recording channel as much as the voice, so it is the fallback, not the default.
+//!
+//! `auto` is neural on macOS and sherpa-onnx elsewhere. An algorithm whose runtime this build
+//! lacks, or whose model is missing or will not load, falls back down the chain neural ->
+//! sherpa-onnx -> spectral; `status` says which ran and why.
+//!
+//! Live, prints are clustered online: an utterance joins the most similar speaker heard so far
+//! when the cosine similarity to its centroid reaches the algorithm's threshold, else it starts a
+//! new one (at most `stt.diarization.max_speakers`; one shorter than `stt.diarization.min_new`
+//! never does). The final pass sees the whole channel, so it clusters agglomeratively instead:
+//! every utterance long enough starts as its own speaker and the two most similar speakers
+//! (centroid cosine) merge until none reach the threshold and at most `max_speakers` remain; the
+//! short ones then join their nearest speaker, and speakers are numbered by first appearance.
 
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use serde_json::{json, Value};
+
+use super::catalog::{self, Entry};
 use super::mel::{Mel, PARAKEET};
 use super::wav::SAMPLE_RATE;
 use super::Utt;
-use crate::config::typed::Config;
+use crate::config::typed::{Config, SttDiarizationAlgorithm, SttProvider};
+use crate::config::{ConfigError, Result};
 
-/// The `stt.diarization.*` tunables; `None` in `Settings` when diarization is off.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Diarization {
-    pub max_speakers: usize,
+/// A way to make voice prints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Algorithm {
+    Spectral,
+    Neural,
+    SherpaOnnx,
+}
+
+impl Algorithm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Algorithm::Spectral => "spectral",
+            Algorithm::Neural => "neural",
+            Algorithm::SherpaOnnx => "sherpa-onnx",
+        }
+    }
+
+    /// Whether this build can run it (CoreML on macOS, sherpa-onnx with cargo feature
+    /// `parakeet`).
+    pub fn compiled(self) -> bool {
+        match self {
+            Algorithm::Spectral => true,
+            Algorithm::Neural => catalog::Runtime::CoreMl.compiled(),
+            Algorithm::SherpaOnnx => catalog::Runtime::SherpaOnnx.compiled(),
+        }
+    }
+}
+
+/// The model an embedding algorithm runs and its tunables.
+#[derive(Clone, Debug)]
+pub struct Model {
+    pub entry: &'static Entry,
+    /// The file (sherpa-onnx) or directory of bundles (CoreML) under the models directory.
+    pub path: PathBuf,
     /// Cosine similarity, 0..1.
     pub threshold: f32,
+    pub provider: SttProvider,
+    pub threads: u32,
+}
+
+/// The `stt.diarization.*` settings; `None` in `Settings` when diarization is off.
+#[derive(Clone, Debug)]
+pub struct Diarization {
+    /// `stt.diarization.algorithm` as configured (never `off` here).
+    pub requested: SttDiarizationAlgorithm,
+    /// What to try, in order; always ends with spectral.
+    pub chain: Vec<Algorithm>,
+    pub max_speakers: usize,
     /// Samples: a shorter utterance joins the nearest speaker rather than starting one.
     pub min_new_samples: usize,
+    /// Samples: a speaker with less speech than this is merged into the nearest one.
+    pub min_speaker_samples: usize,
+    /// `stt.diarization.threshold`, cosine similarity 0..1.
+    pub spectral_threshold: f32,
+    pub neural: Model,
+    pub sherpa: Model,
+}
+
+/// The CoreML embedding model `neural` runs.
+pub const NEURAL_MODEL: &str = "pyannote-community-1-coreml";
+
+fn pct(v: u32) -> f32 {
+    v.min(100) as f32 / 100.0
 }
 
 impl Diarization {
-    pub fn from_config(cfg: &Config) -> Option<Diarization> {
+    /// The settings `cfg` asks for, models under `models_dir`; `None` when diarization is off.
+    pub fn from_config(cfg: &Config, models_dir: &std::path::Path) -> Result<Option<Diarization>> {
         let d = &cfg.stt.diarization;
-        d.enabled.then(|| Diarization {
+        if !d.enabled || d.algorithm == SttDiarizationAlgorithm::Off {
+            return Ok(None);
+        }
+        let speaker = |id: &str, key: &str| {
+            catalog::speaker(id).ok_or_else(|| {
+                ConfigError::new(
+                    "invalid_value",
+                    format!("stt.diarization.{key}: '{id}' is not a speaker model (crates/core/data/speaker-models.json)"),
+                )
+            })
+        };
+        let neural = speaker(NEURAL_MODEL, "neural")?;
+        let sherpa = speaker(d.sherpa_onnx.model.trim(), "sherpa_onnx.model")?;
+        if sherpa.runtime != catalog::Runtime::SherpaOnnx {
+            return Err(ConfigError::new(
+                "invalid_value",
+                format!("stt.diarization.sherpa_onnx.model: '{}' is not a sherpa-onnx model", sherpa.id),
+            ));
+        }
+        use Algorithm::*;
+        let chain = match d.algorithm {
+            SttDiarizationAlgorithm::Spectral => vec![Spectral],
+            SttDiarizationAlgorithm::Neural => vec![Neural, SherpaOnnx, Spectral],
+            SttDiarizationAlgorithm::SherpaOnnx => vec![SherpaOnnx, Spectral],
+            SttDiarizationAlgorithm::Auto if cfg!(target_os = "macos") => vec![Neural, SherpaOnnx, Spectral],
+            SttDiarizationAlgorithm::Auto | SttDiarizationAlgorithm::Off => vec![SherpaOnnx, Spectral],
+        };
+        Ok(Some(Diarization {
+            requested: d.algorithm,
+            chain,
             max_speakers: d.max_speakers.max(1) as usize,
-            threshold: d.threshold as f32 / 100.0,
             min_new_samples: super::samples_of(d.min_new),
+            min_speaker_samples: super::samples_of(d.min_speaker),
+            spectral_threshold: pct(d.threshold),
+            neural: Model {
+                entry: neural,
+                path: neural.location(models_dir),
+                threshold: pct(d.neural.threshold),
+                provider: d.neural.provider,
+                threads: 1,
+            },
+            sherpa: Model {
+                entry: sherpa,
+                path: sherpa.location(models_dir),
+                threshold: pct(d.sherpa_onnx.threshold),
+                provider: d.sherpa_onnx.provider,
+                threads: d.sherpa_onnx.threads.max(1),
+            },
+        }))
+    }
+
+    /// Spectral only, with these tunables (tests, and a fallback with nothing to load).
+    pub fn spectral(max_speakers: usize, threshold: f32, min_new_samples: usize) -> Diarization {
+        let e = catalog::speaker(NEURAL_MODEL).expect("the neural speaker model is in the catalog");
+        let m = Model {
+            entry: e,
+            path: PathBuf::new(),
+            threshold,
+            provider: SttProvider::Auto,
+            threads: 1,
+        };
+        Diarization {
+            requested: SttDiarizationAlgorithm::Spectral,
+            chain: vec![Algorithm::Spectral],
+            max_speakers: max_speakers.max(1),
+            min_new_samples,
+            min_speaker_samples: 0,
+            spectral_threshold: threshold,
+            neural: m.clone(),
+            sherpa: m,
+        }
+    }
+
+    /// The model of an embedding algorithm.
+    pub fn model(&self, a: Algorithm) -> Option<&Model> {
+        match a {
+            Algorithm::Spectral => None,
+            Algorithm::Neural => Some(&self.neural),
+            Algorithm::SherpaOnnx => Some(&self.sherpa),
+        }
+    }
+
+    fn threshold(&self, a: Algorithm) -> f32 {
+        self.model(a).map_or(self.spectral_threshold, |m| m.threshold)
+    }
+
+    /// Why `a` cannot run now without loading anything (no runtime, model not downloaded), or
+    /// `None` when it can be tried.
+    fn unavailable(&self, a: Algorithm) -> Option<String> {
+        let m = self.model(a)?;
+        if !a.compiled() {
+            return Some(format!(
+                "this build has no {} runtime ({})",
+                m.entry.runtime.label(),
+                m.entry.runtime.how_to_build()
+            ));
+        }
+        (!m.entry.present(&m.path)).then(|| {
+            format!(
+                "the {} model is not downloaded ({}); fetch it with `ctl stt model fetch model={}`",
+                m.entry.id,
+                m.path.display(),
+                m.entry.id
+            )
         })
+    }
+
+    /// The algorithm the chain would run now, and why each one before it would not.
+    pub fn plan(&self) -> (Algorithm, Vec<String>) {
+        let mut why = Vec::new();
+        for &a in &self.chain {
+            match self.unavailable(a) {
+                None => return (a, why),
+                Some(w) => why.push(format!("{}: {w}", a.as_str())),
+            }
+        }
+        (Algorithm::Spectral, why)
+    }
+
+    /// The embedding model this build would use first and that is worth downloading: the first
+    /// algorithm of the chain this build has the runtime for, when it needs a model.
+    pub fn wanted_model(&self) -> Option<&Model> {
+        let a = *self.chain.iter().find(|a| a.compiled())?;
+        self.model(a)
+    }
+}
+
+/// What the last diarizer ran: (requested, algorithm, provider, fallback reasons).
+static ACTIVE: Mutex<Option<(String, Algorithm, Option<String>, Vec<String>)>> = Mutex::new(None);
+
+/// Forget what ran (config reload changed `stt.diarization.*`) and drop the loaded models.
+pub fn clear() {
+    *ACTIVE.lock().expect("diarizer status") = None;
+    #[cfg(feature = "parakeet")]
+    super::sherpa::clear_speaker_cache();
+    #[cfg(target_os = "macos")]
+    super::coreml::clear_speaker_cache();
+}
+
+/// The `diarization` object of `stt-status`: the setting, what would run now (`planned`) and why
+/// the algorithms before it would not (`fallback`), what the last recording or transcription ran
+/// (`active`, `provider`; null until one did), the embedding model and its threshold.
+pub fn status(d: Option<&Diarization>) -> Value {
+    let Some(d) = d else {
+        return json!({"setting": "off", "planned": "off", "active": null, "provider": null, "fallback": []});
+    };
+    let (planned, why) = d.plan();
+    let active = ACTIVE
+        .lock()
+        .expect("diarizer status")
+        .clone()
+        .filter(|a| a.0 == d.requested.as_str());
+    let model = d.model(planned).or_else(|| d.wanted_model());
+    json!({
+        "setting": d.requested.as_str(),
+        "chain": d.chain.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+        "planned": planned.as_str(),
+        "fallback": why,
+        "active": active.as_ref().map(|a| a.1.as_str()),
+        "provider": active.as_ref().and_then(|a| a.2.clone()),
+        "active_fallback": active.as_ref().map(|a| a.3.clone()),
+        "model": model.map(|m| json!({
+            "id": m.entry.id, "name": m.entry.name, "runtime": m.entry.runtime.label(),
+            "path": m.path, "present": m.entry.present(&m.path), "compiled": m.entry.runtime.compiled(),
+        })),
+        "threshold": (d.threshold(planned) * 100.0).round(),
+        "max_speakers": d.max_speakers,
+    })
+}
+
+/// Makes voice prints for one algorithm.
+enum Embedder {
+    Spectral(Mel),
+    #[cfg(feature = "parakeet")]
+    Sherpa(std::sync::Arc<super::sherpa::SpeakerExtractor>),
+    #[cfg(target_os = "macos")]
+    Neural(std::sync::Arc<Mutex<super::coreml::SpeakerNet>>),
+}
+
+impl Embedder {
+    /// Load `a`'s model: the embedder and the provider it runs on.
+    fn load(d: &Diarization, a: Algorithm) -> Result<(Embedder, Option<String>)> {
+        if let Some(w) = d.unavailable(a) {
+            return Err(ConfigError::new("model_not_found", w));
+        }
+        match a {
+            Algorithm::Spectral => Ok((Embedder::Spectral(Mel::new(PARAKEET)), None)),
+            #[cfg(feature = "parakeet")]
+            Algorithm::SherpaOnnx => {
+                let m = &d.sherpa;
+                let x = super::sherpa::SpeakerExtractor::load(&m.path, m.threads, m.provider)?;
+                let p = x.provider().to_string();
+                Ok((Embedder::Sherpa(x), Some(p)))
+            }
+            #[cfg(target_os = "macos")]
+            Algorithm::Neural => {
+                let m = &d.neural;
+                let n = super::coreml::SpeakerNet::load(m.entry, &m.path, m.provider)?;
+                let p = n.lock().expect("coreml speaker net").units_label().to_string();
+                Ok((Embedder::Neural(n), Some(p)))
+            }
+            #[allow(unreachable_patterns)]
+            _ => Err(ConfigError::new(
+                "backend_unavailable",
+                format!("this build has no runtime for {}", a.as_str()),
+            )),
+        }
+    }
+
+    fn print(&self, pcm: &[f32]) -> Option<Vec<f32>> {
+        match self {
+            Embedder::Spectral(mel) => voice_print(mel, pcm),
+            #[cfg(feature = "parakeet")]
+            Embedder::Sherpa(x) => x.embed(pcm).and_then(unit),
+            #[cfg(target_os = "macos")]
+            Embedder::Neural(n) => n
+                .lock()
+                .expect("coreml speaker net")
+                .embed(pcm)
+                .ok()
+                .flatten()
+                .and_then(unit),
+        }
     }
 }
 
@@ -89,70 +386,299 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
-/// Online speaker clustering over voice prints.
+/// Speaker clustering over voice prints. Live, every utterance heard so far is kept and each new
+/// window's are labelled by clustering them all again the way the final pass does; each speaker
+/// found keeps the label most of its earlier utterances got, so labels stay put.
 pub struct Diarizer {
     cfg: Diarization,
-    mel: Mel,
-    /// Per speaker: the sum of its members' prints and the centroid (the sum, normalised).
-    voices: Vec<(Vec<f32>, Vec<f32>)>,
-    last: usize,
+    embedder: Embedder,
+    algorithm: Algorithm,
+    threshold: f32,
+    /// Every utterance so far: its print, its length in samples and the label index it got.
+    heard: Vec<(Option<Vec<f32>>, usize, usize)>,
+    /// Label indices handed out so far.
+    labels: usize,
 }
 
 impl Diarizer {
+    /// The diarizer for `cfg`: the first algorithm of its chain that loads (spectral always
+    /// does). What ran, and why the ones before it did not, go to `status`.
     pub fn new(cfg: Diarization) -> Diarizer {
-        Diarizer {
-            cfg,
-            mel: Mel::new(PARAKEET),
-            voices: Vec::new(),
-            last: 0,
+        let mut why = Vec::new();
+        let mut loaded = None;
+        for &a in &cfg.chain {
+            match Embedder::load(&cfg, a) {
+                Ok((e, p)) => {
+                    loaded = Some((a, e, p));
+                    break;
+                }
+                Err(e) => why.push(format!("{}: {}", a.as_str(), e.message)),
+            }
         }
+        let (algorithm, embedder, provider) = loaded
+            .unwrap_or_else(|| (Algorithm::Spectral, Embedder::Spectral(Mel::new(PARAKEET)), None));
+        *ACTIVE.lock().expect("diarizer status") =
+            Some((cfg.requested.as_str().to_string(), algorithm, provider, why));
+        Diarizer {
+            threshold: cfg.threshold(algorithm),
+            cfg,
+            embedder,
+            algorithm,
+            heard: Vec::new(),
+            labels: 0,
+        }
+    }
+
+    /// The algorithm this diarizer runs.
+    pub fn algorithm(&self) -> Algorithm {
+        self.algorithm
     }
 
     pub fn print(&self, pcm: &[f32]) -> Option<Vec<f32>> {
-        voice_print(&self.mel, pcm)
+        self.embedder.print(pcm)
     }
 
-    fn nearest(&self, p: &[f32]) -> Option<(usize, f32)> {
-        self.voices
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (i, cosine(p, &v.1)))
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-    }
-
-    /// The speaker index of an utterance whose audio is `pcm`. An utterance with no usable audio
-    /// goes to the speaker heard last; one that joins a speaker only because it may not start one
-    /// (too short, or `max_speakers` reached) does not move that speaker's centroid.
+    /// The speaker index of the next utterance, whose audio is `pcm`.
     pub fn assign(&mut self, pcm: &[f32]) -> usize {
-        let Some(p) = self.print(pcm) else {
-            return self.last;
-        };
-        let may_start = pcm.len() >= self.cfg.min_new_samples;
-        let (i, learn) = match self.nearest(&p) {
-            Some((i, sim)) if sim >= self.cfg.threshold => (i, true),
-            Some((i, _)) if !may_start || self.voices.len() >= self.cfg.max_speakers => (i, false),
-            _ => {
-                self.voices.push((vec![0.0; p.len()], Vec::new()));
-                (self.voices.len() - 1, true)
+        let p = self.print(pcm);
+        self.assign_prints(vec![(p, pcm.len())])[0]
+    }
+
+    /// The speaker indices of the next utterances (print, samples): everything heard clustered
+    /// again; a speaker keeps the index most of its earlier utterances got, a new one takes the
+    /// next index (or, at `max_speakers`, one no speaker holds any more).
+    fn assign_prints(&mut self, new: Vec<(Option<Vec<f32>>, usize)>) -> Vec<usize> {
+        let old = self.heard.len();
+        let fresh = new.len();
+        self.heard.extend(new.into_iter().map(|(p, n)| (p, n, usize::MAX)));
+        let prints: Vec<Option<Vec<f32>>> = self.heard.iter().map(|h| h.0.clone()).collect();
+        let lens: Vec<usize> = self.heard.iter().map(|h| h.1).collect();
+        let ids = self.cluster(&prints, &lens);
+        let k = ids.iter().max().map_or(0, |m| m + 1);
+        let mut votes: Vec<(usize, usize, usize)> = Vec::new();
+        for c in 0..k {
+            for l in 0..self.labels {
+                let n = (0..old)
+                    .filter(|&i| ids[i] == c && self.heard[i].2 == l)
+                    .count();
+                if n > 0 {
+                    votes.push((n, c, l));
+                }
             }
-        };
-        if learn {
-            let sum = &mut self.voices[i].0;
-            sum.iter_mut().zip(&p).for_each(|(s, x)| *s += x);
-            self.voices[i].1 = unit(sum.clone()).unwrap_or(p);
         }
-        self.last = i;
-        i
+        votes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut map: Vec<Option<usize>> = vec![None; k];
+        let mut used = vec![false; self.labels];
+        for (_, c, l) in votes {
+            if map[c].is_none() && !used[l] {
+                map[c] = Some(l);
+                used[l] = true;
+            }
+        }
+        let mut out = Vec::with_capacity(fresh);
+        for i in old..old + fresh {
+            let c = ids[i];
+            let l = match map[c] {
+                Some(l) => l,
+                None => {
+                    let l = if self.labels < self.cfg.max_speakers {
+                        self.labels += 1;
+                        used.push(true);
+                        self.labels - 1
+                    } else {
+                        let free = used.iter().position(|u| !u).unwrap_or(0);
+                        used[free] = true;
+                        free
+                    };
+                    map[c] = Some(l);
+                    l
+                }
+            };
+            self.heard[i].2 = l;
+            out.push(l);
+        }
+        out
     }
 
     /// Label the `them` utterances of a live window whose audio is `pcm`, starting at `offset`
     /// seconds.
     pub fn label_live(&mut self, utts: &mut [Utt], pcm: &[f32], offset: f64, them: &str) {
-        for u in utts.iter_mut() {
-            let i = self.assign(span(pcm, offset, u));
+        let new: Vec<(Option<Vec<f32>>, usize)> = utts
+            .iter()
+            .map(|u| {
+                let a = span(pcm, offset, u);
+                (self.print(a), a.len())
+            })
+            .collect();
+        for (u, i) in utts.iter_mut().zip(self.assign_prints(new)) {
             u.speaker = label(them, i);
         }
     }
+
+    /// The speaker (0..k) of each of a channel's utterances (`prints[i]` from utterance `i`,
+    /// `lens[i]` its samples): agglomerative clustering of the long ones, a speaker with less
+    /// speech than `stt.diarization.min_speaker` merged into its nearest; then each short one
+    /// joins the speaker it is most similar to on average (one with no print the speaker before
+    /// it). Speakers are numbered by first appearance.
+    fn cluster(&self, prints: &[Option<Vec<f32>>], lens: &[usize]) -> Vec<usize> {
+        let long: Vec<usize> = (0..prints.len())
+            .filter(|&i| prints[i].is_some() && lens[i] >= self.cfg.min_new_samples)
+            .collect();
+        // Nothing long enough to found a speaker: cluster whatever has a print.
+        let seeds: Vec<usize> = if long.is_empty() {
+            (0..prints.len()).filter(|&i| prints[i].is_some()).collect()
+        } else {
+            long
+        };
+        if seeds.is_empty() {
+            return vec![0; prints.len()];
+        }
+        let vecs: Vec<&[f32]> = seeds
+            .iter()
+            .map(|&i| prints[i].as_deref().expect("seeds have prints"))
+            .collect();
+        let seed_lens: Vec<usize> = seeds.iter().map(|&i| lens[i]).collect();
+        let owner = agglomerate(&vecs, self.threshold, self.cfg.max_speakers);
+        let owner = absorb_small(&vecs, owner, &seed_lens, self.cfg.min_speaker_samples);
+        let mut of: Vec<Option<usize>> = vec![None; prints.len()];
+        for (k, &i) in seeds.iter().enumerate() {
+            of[i] = Some(owner[k]);
+        }
+        let mut out = vec![0usize; prints.len()];
+        let (mut prev, mut order) = (None, Vec::<usize>::new());
+        for (i, p) in prints.iter().enumerate() {
+            let c = of[i]
+                .or_else(|| {
+                    let p = p.as_deref()?;
+                    closest(&vecs, &owner, |x| cosine(p, x))
+                })
+                .or(prev)
+                .unwrap_or(owner[0]);
+            prev = Some(c);
+            out[i] = order.iter().position(|&x| x == c).unwrap_or_else(|| {
+                order.push(c);
+                order.len() - 1
+            });
+        }
+        out
+    }
+}
+
+/// The cluster of `owner` whose members score highest on average by `score`.
+fn closest(v: &[&[f32]], owner: &[usize], score: impl Fn(&[f32]) -> f32) -> Option<usize> {
+    let mut sum: std::collections::BTreeMap<usize, (f32, usize)> = Default::default();
+    for (x, &o) in v.iter().zip(owner) {
+        let e = sum.entry(o).or_default();
+        e.0 += score(x);
+        e.1 += 1;
+    }
+    sum.into_iter()
+        .map(|(c, (s, n))| (c, s / n as f32))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(c, _)| c)
+}
+
+/// Clusters with less than `min` samples of speech merged, smallest first, into the cluster
+/// they are most similar to on average, while more than one remains.
+fn absorb_small(v: &[&[f32]], mut owner: Vec<usize>, lens: &[usize], min: usize) -> Vec<usize> {
+    loop {
+        let mut ids: Vec<usize> = owner.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.len() < 2 {
+            return owner;
+        }
+        let size = |c: usize| -> usize {
+            owner.iter().zip(lens).filter(|(o, _)| **o == c).map(|(_, n)| n).sum()
+        };
+        let Some(&small) = ids.iter().filter(|&&c| size(c) < min).min_by_key(|&&c| size(c)) else {
+            return owner;
+        };
+        let members: Vec<&[f32]> = v
+            .iter()
+            .zip(&owner)
+            .filter(|(_, o)| **o == small)
+            .map(|(x, _)| *x)
+            .collect();
+        let (rest, rest_owner): (Vec<&[f32]>, Vec<usize>) = v
+            .iter()
+            .zip(&owner)
+            .filter(|(_, o)| **o != small)
+            .map(|(x, o)| (*x, *o))
+            .unzip();
+        let score = |x: &[f32]| members.iter().map(|m| cosine(m, x)).sum::<f32>();
+        match closest(&rest, &rest_owner, score) {
+            Some(to) => owner.iter_mut().filter(|o| **o == small).for_each(|o| *o = to),
+            None => return owner,
+        }
+    }
+}
+
+/// Agglomerative clustering of unit vectors with average linkage: every vector starts as its own
+/// cluster, and the two clusters whose members are most similar on average (mean cosine over
+/// every pair across them) merge while that reaches `threshold`, or while more than `max`
+/// clusters remain. Average rather than centroid linkage: every print of a channel shares a part
+/// that is not the voice (the room, the line), and summed into centroids it makes any two
+/// speakers look alike. Returns each vector's cluster (the index of one of its members).
+fn agglomerate(v: &[&[f32]], threshold: f32, max: usize) -> Vec<usize> {
+    let n = v.len();
+    // dot[a][b]: the sum of the cosines over every pair across clusters a and b, so their mean is
+    // dot[a][b] / (size[a] size[b]) and a merge just adds rows.
+    let mut dot: Vec<Vec<f32>> = (0..n)
+        .map(|a| (0..n).map(|b| cosine(v[a], v[b])).collect())
+        .collect();
+    let mut size = vec![1usize; n];
+    let mut alive = vec![true; n];
+    let mut owner: Vec<usize> = (0..n).collect();
+    let sim = |dot: &Vec<Vec<f32>>, size: &[usize], a: usize, b: usize| {
+        dot[a][b] / (size[a] * size[b]) as f32
+    };
+    let best_of = |dot: &Vec<Vec<f32>>, size: &[usize], alive: &[bool], a: usize| {
+        (0..n)
+            .filter(|&b| b != a && alive[b])
+            .map(|b| (b, sim(dot, size, a, b)))
+            .max_by(|x, y| x.1.total_cmp(&y.1))
+    };
+    let mut best: Vec<Option<(usize, f32)>> =
+        (0..n).map(|a| best_of(&dot, &size, &alive, a)).collect();
+    let mut count = n;
+    while count > 1 {
+        let Some((a, (b, s))) = (0..n)
+            .filter(|&a| alive[a])
+            .filter_map(|a| best[a].map(|x| (a, x)))
+            .max_by(|x, y| x.1 .1.total_cmp(&y.1 .1))
+        else {
+            break;
+        };
+        if s < threshold && count <= max {
+            break;
+        }
+        // Merge b into a.
+        for c in 0..n {
+            let x = dot[a][c] + dot[b][c];
+            dot[a][c] = x;
+            dot[c][a] = x;
+        }
+        size[a] += size[b];
+        alive[b] = false;
+        best[b] = None;
+        owner.iter_mut().filter(|o| **o == b).for_each(|o| *o = a);
+        count -= 1;
+        best[a] = best_of(&dot, &size, &alive, a);
+        for c in (0..n).filter(|&c| alive[c] && c != a) {
+            match best[c] {
+                Some((x, _)) if x == a || x == b => best[c] = best_of(&dot, &size, &alive, c),
+                Some((_, bs)) => {
+                    let sc = sim(&dot, &size, c, a);
+                    if sc > bs {
+                        best[c] = Some((a, sc));
+                    }
+                }
+                None => best[c] = best_of(&dot, &size, &alive, c),
+            }
+        }
+    }
+    owner
 }
 
 /// The audio of `u` within `pcm`, which starts at `offset` seconds.
@@ -162,23 +688,15 @@ fn span<'a>(pcm: &'a [f32], offset: f64, u: &Utt) -> &'a [f32] {
     &pcm[a..b.max(a)]
 }
 
-/// Label the final pass's `them` utterances (`pcm` is the whole channel): online clustering, then
-/// each utterance moves to its nearest speaker and speakers are numbered by first appearance.
-pub fn label_final(cfg: Diarization, utts: &mut [Utt], pcm: &[f32], them: &str) {
-    let mut d = Diarizer::new(cfg);
-    let mut ids: Vec<usize> = utts.iter().map(|u| d.assign(span(pcm, 0.0, u))).collect();
-    for (u, id) in utts.iter().zip(ids.iter_mut()) {
-        if let Some((i, _)) = d.print(span(pcm, 0.0, u)).and_then(|p| d.nearest(&p)) {
-            *id = i;
-        }
-    }
-    let mut order: Vec<usize> = Vec::new();
-    for (u, id) in utts.iter_mut().zip(ids) {
-        let n = order.iter().position(|&x| x == id).unwrap_or_else(|| {
-            order.push(id);
-            order.len() - 1
-        });
-        u.speaker = label(them, n);
+/// Label the final pass's `them` utterances (`pcm` is the whole channel): agglomerative
+/// clustering over the whole channel, speakers numbered by first appearance.
+pub fn label_final(cfg: &Diarization, utts: &mut [Utt], pcm: &[f32], them: &str) {
+    let d = Diarizer::new(cfg.clone());
+    let spans: Vec<&[f32]> = utts.iter().map(|u| span(pcm, 0.0, u)).collect();
+    let prints: Vec<Option<Vec<f32>>> = spans.iter().map(|s| d.print(s)).collect();
+    let lens: Vec<usize> = spans.iter().map(|s| s.len()).collect();
+    for (u, id) in utts.iter_mut().zip(d.cluster(&prints, &lens)) {
+        u.speaker = label(them, id);
     }
 }
 
@@ -214,27 +732,17 @@ mod tests {
 
     #[test]
     fn max_speakers_caps_the_labels() {
-        let cfg = Diarization {
-            max_speakers: 1,
-            threshold: 1.0,
-            min_new_samples: 0,
-        };
-        let mut d = Diarizer::new(cfg);
+        let cfg = |max, min_new| Diarization::spectral(max, 1.0, min_new);
+        let mut d = Diarizer::new(cfg(1, 0));
         let tone =
             |k: f32| -> Vec<f32> { (0..16_000).map(|i| (i as f32 * k).sin() * 0.3).collect() };
         assert_eq!(d.assign(&tone(0.05)), 0);
         assert_eq!(d.assign(&tone(0.9)), 0);
-        let mut d = Diarizer::new(Diarization {
-            max_speakers: 2,
-            ..cfg
-        });
+        let mut d = Diarizer::new(cfg(2, 0));
         assert_eq!(d.assign(&tone(0.05)), 0);
         assert_eq!(d.assign(&tone(0.9)), 1);
         // Too short to start a second: joins the nearest.
-        let mut d = Diarizer::new(Diarization {
-            min_new_samples: 20_000,
-            ..cfg
-        });
+        let mut d = Diarizer::new(cfg(2, 20_000));
         assert_eq!(d.assign(&tone(0.05)), 0);
         assert_eq!(d.assign(&tone(0.9)), 0);
     }

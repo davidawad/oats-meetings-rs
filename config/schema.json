@@ -1203,9 +1203,23 @@
         "diarization": {
           "additionalProperties": false,
           "properties": {
+            "algorithm": {
+              "default": "auto",
+              "description": "How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is stt.speaker_them. auto: neural on macOS, sherpa-onnx elsewhere. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.",
+              "enum": [
+                "auto",
+                "spectral",
+                "neural",
+                "sherpa-onnx",
+                "off"
+              ],
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
             "enabled": {
               "default": true,
-              "description": "Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them.",
+              "description": "Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them, whatever stt.diarization.algorithm says.",
               "type": "boolean",
               "x-reload": "live",
               "x-ui": true
@@ -1233,9 +1247,84 @@
               "x-reload": "live",
               "x-ui": false
             },
+            "neural": {
+              "additionalProperties": false,
+              "properties": {
+                "provider": {
+                  "default": "auto",
+                  "description": "neural: where the CoreML embedding network runs. auto and coreml: the Neural Engine with the CPU for what it cannot run (MLComputeUnits cpuAndNeuralEngine); cpu: the CPU only.",
+                  "enum": [
+                    "auto",
+                    "cpu",
+                    "coreml"
+                  ],
+                  "type": "string",
+                  "x-reload": "live",
+                  "x-ui": false
+                },
+                "threshold": {
+                  "default": 50,
+                  "description": "neural: percent speaker-embedding (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer",
+                  "x-reload": "live",
+                  "x-ui": true
+                }
+              },
+              "type": "object"
+            },
+            "sherpa_onnx": {
+              "additionalProperties": false,
+              "properties": {
+                "model": {
+                  "default": "wespeaker-resnet34-lm",
+                  "description": "sherpa-onnx: the speaker-embedding model (crates/core/data/speaker-models.json): wespeaker-resnet34-lm (26 MB, the network the neural algorithm runs), wespeaker-campplus (29 MB), titanet-small (40 MB, NVIDIA NeMo).",
+                  "enum": [
+                    "wespeaker-resnet34-lm",
+                    "wespeaker-campplus",
+                    "titanet-small"
+                  ],
+                  "type": "string",
+                  "x-reload": "live",
+                  "x-ui": true
+                },
+                "provider": {
+                  "default": "auto",
+                  "description": "sherpa-onnx: the onnxruntime execution provider for the speaker-embedding model: auto is coreml on macOS and cpu elsewhere; coreml falls back to the CPU when it cannot load the model.",
+                  "enum": [
+                    "auto",
+                    "cpu",
+                    "coreml"
+                  ],
+                  "type": "string",
+                  "x-reload": "live",
+                  "x-ui": false
+                },
+                "threads": {
+                  "default": 2,
+                  "description": "sherpa-onnx: CPU threads for the speaker-embedding model.",
+                  "maximum": 256,
+                  "minimum": 1,
+                  "type": "integer",
+                  "x-reload": "live",
+                  "x-ui": false
+                },
+                "threshold": {
+                  "default": 50,
+                  "description": "sherpa-onnx: percent speaker-embedding (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+                  "maximum": 100,
+                  "minimum": 1,
+                  "type": "integer",
+                  "x-reload": "live",
+                  "x-ui": true
+                }
+              },
+              "type": "object"
+            },
             "threshold": {
               "default": 70,
-              "description": "Percent voice-print (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+              "description": "spectral: percent voice-print (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
               "maximum": 100,
               "minimum": 1,
               "type": "integer",

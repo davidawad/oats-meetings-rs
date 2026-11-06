@@ -15,7 +15,8 @@
 //! the final pass transcribes each whole channel again. Both write OpenOats-layout JSONL into the
 //! session store (`transcript.live.jsonl`, `transcript.final.jsonl`), speakers `stt.speaker_you`
 //! / `stt.speaker_them`. With `stt.diarization.enabled` the system-audio channel is split by
-//! voice (`diarize`): `remote_1`, `remote_2`, ... one label per remote speaker; the mic stays "you".
+//! voice (`diarize`, the algorithm `stt.diarization.algorithm` picks): `remote_1`, `remote_2`, ...
+//! one label per remote speaker; the mic stays "you".
 //!
 //! Stable error codes: `backend_unavailable`, `model_not_found`, `model_load_failed`,
 //! `asr_failed`, `network_denied`, `invalid_combination`, `secret_*` (see secrets), `stt_timeout`,
@@ -350,6 +351,7 @@ impl Settings {
         } else {
             PathBuf::from(c.local.model_path.trim())
         };
+        let diarize = diarize::Diarization::from_config(cfg, &models_dir)?;
         Ok(Settings {
             backend: c.backend,
             adapter: c.cloud.adapter,
@@ -383,7 +385,7 @@ impl Settings {
             error_snippet: cfg.network.error_snippet as usize,
             max_response: c.cloud.max_response,
             tuning: Tuning::from_config(cfg),
-            diarize: diarize::Diarization::from_config(cfg),
+            diarize,
         })
     }
 
@@ -463,6 +465,22 @@ fn local_asr(s: &Settings) -> Result<Arc<dyn Asr>> {
         catalog::Runtime::WhisperCpp => whisper_asr(s),
         catalog::Runtime::SherpaOnnx => sherpa_asr(s),
         catalog::Runtime::CoreMl => coreml_asr(s),
+    }
+}
+
+/// With `stt.local.auto_download`, start fetching the speaker-embedding model the diarizer wants
+/// when it is missing (dot-4uzgol.83), in the background; until it lands the diarizer falls back
+/// down its chain. True when a download is under way.
+pub fn fetch_speaker_model(s: &Settings, bus: Option<Arc<Bus>>) -> bool {
+    let Some(m) = s.diarize.as_ref().and_then(|d| d.wanted_model()) else {
+        return false;
+    };
+    if !s.auto_download || m.entry.present(&m.path) {
+        return false;
+    }
+    match models::for_model(s, &m.entry.id) {
+        Ok(t) => models::spawn(&t, bus, Box::new(|| {})).is_ok(),
+        Err(_) => false,
     }
 }
 
@@ -857,7 +875,7 @@ impl Live {
             &s.speaker_you,
             &s.speaker_them,
         )
-        .with_diarization(s.diarize)
+        .with_diarization(s.diarize.clone())
     }
 
     /// Transcribe `chunk` of channel `ch`, which starts at `offset` seconds.
@@ -988,7 +1006,7 @@ pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<
     let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
     let recognised = all.len();
     let mut them = final_channel(asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?;
-    if let Some(d) = s.diarize {
+    if let Some(d) = &s.diarize {
         diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
     }
     all.extend(them);
@@ -1295,6 +1313,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                     "auto_download": s.auto_download, "url": s.model_url,
                     "download": models::progress(&s.model_file).map(|p| p.to_json()),
                 },
+                "diarization": diarize::status(s.diarize.as_ref()),
                 "problem": problem(&s),
                 "cloud": {
                     "adapter": match s.adapter { SttAdapter::None => "none", SttAdapter::OpenaiCompatible => "openai-compatible" },
@@ -1377,6 +1396,9 @@ impl Subsystem for SttSubsystem {
             #[cfg(target_os = "macos")]
             coreml::clear_cache();
             set_fallback(None);
+        }
+        if old.stt.diarization != new.stt.diarization || old.stt.local.models_dir != new.stt.local.models_dir {
+            diarize::clear();
         }
     }
 }

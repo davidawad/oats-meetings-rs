@@ -151,6 +151,12 @@ pub fn retired_stt_model(id: &str) -> Option<String> {
 /// onnxruntime execution providers for sherpa-onnx models: auto is coreml on macOS, cpu elsewhere.
 pub const STT_PROVIDERS: &[&str] = &["auto", "cpu", "coreml"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
+/// How the system-audio channel is split by voice (dot-4uzgol.83): auto is neural on macOS and
+/// sherpa-onnx elsewhere; neural and sherpa-onnx fall back to spectral when their model is missing.
+pub const STT_DIARIZATION_ALGORITHMS: &[&str] = &["auto", "spectral", "neural", "sherpa-onnx", "off"];
+/// Speaker-embedding models `stt.diarization.sherpa_onnx.model` accepts: the sherpa-onnx entries
+/// of crates/core/data/speaker-models.json, in its order (a test keeps them equal).
+pub const STT_SPEAKER_MODELS: &[&str] = &["wespeaker-resnet34-lm", "wespeaker-campplus", "titanet-small"];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
 pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];
@@ -1543,7 +1549,15 @@ pub const KEYS: &[Key] = &[
         path: "stt.diarization.enabled",
         kind: Kind::Bool,
         default: Def::B(true),
-        doc: "Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them.",
+        doc: "Split the system-audio (them) channel by voice: its utterances are labelled stt.speaker_them, then remote_2, remote_3 ... per distinct remote speaker. The microphone channel is always stt.speaker_you. Off labels all remote speech stt.speaker_them, whatever stt.diarization.algorithm says.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.algorithm",
+        kind: Kind::Enum(STT_DIARIZATION_ALGORITHMS),
+        default: Def::S("auto"),
+        doc: "How remote speakers are told apart. neural: a speaker-embedding network (WeSpeaker ResNet34, pyannote community-1, as FluidAudio runs it) on the Apple Neural Engine through CoreML, macOS only. sherpa-onnx: a speaker-embedding network (stt.diarization.sherpa_onnx.model) through onnxruntime, any platform with the sherpa-onnx runtime. spectral: the shape of each utterance's long-term spectrum, pure Rust, no model. off: all remote speech is stt.speaker_them. auto: neural on macOS, sherpa-onnx elsewhere. neural falls back to sherpa-onnx and then spectral, sherpa-onnx to spectral, when the model is missing or cannot load (stt-status says which runs and why); the model downloads with stt.local.auto_download, or `ctl stt model fetch model=<id>`.",
         ui: true,
         reload: Reload::Live,
     },
@@ -1559,7 +1573,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.diarization.threshold",
         kind: Kind::Int { min: 1, max: 100 },
         default: Def::I(70),
-        doc: "Percent voice-print (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+        doc: "spectral: percent voice-print (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
         ui: true,
         reload: Reload::Live,
     },
@@ -1571,6 +1585,65 @@ pub const KEYS: &[Key] = &[
         },
         default: Def::D(SEC),
         doc: "A remote utterance shorter than this never starts a new speaker (too little audio for a reliable voice print); it joins the most similar one.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.min_speaker",
+        kind: Kind::Duration {
+            min_ms: 0,
+            max_ms: HOUR,
+        },
+        default: Def::D(0),
+        doc: "A remote speaker with less speech than this in the whole recording is merged into the most similar one: a few stray utterances (a cough, a burst of crosstalk, an echo) do not make a speaker of their own. 0s keeps every speaker found.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.neural.threshold",
+        kind: Kind::Int { min: 1, max: 100 },
+        default: Def::I(50),
+        doc: "neural: percent speaker-embedding (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.neural.provider",
+        kind: Kind::Enum(STT_PROVIDERS),
+        default: Def::S("auto"),
+        doc: "neural: where the CoreML embedding network runs. auto and coreml: the Neural Engine with the CPU for what it cannot run (MLComputeUnits cpuAndNeuralEngine); cpu: the CPU only.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.sherpa_onnx.model",
+        kind: Kind::Enum(STT_SPEAKER_MODELS),
+        default: Def::S("wespeaker-resnet34-lm"),
+        doc: "sherpa-onnx: the speaker-embedding model (crates/core/data/speaker-models.json): wespeaker-resnet34-lm (26 MB, the network the neural algorithm runs), wespeaker-campplus (29 MB), titanet-small (40 MB, NVIDIA NeMo).",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.sherpa_onnx.threshold",
+        kind: Kind::Int { min: 1, max: 100 },
+        default: Def::I(50),
+        doc: "sherpa-onnx: percent speaker-embedding (cosine) similarity at which a remote utterance belongs to a speaker already heard; below it the utterance starts a new remote speaker. Higher splits voices more readily.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.sherpa_onnx.threads",
+        kind: Kind::Int { min: 1, max: 256 },
+        default: Def::I(2),
+        doc: "sherpa-onnx: CPU threads for the speaker-embedding model.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.diarization.sherpa_onnx.provider",
+        kind: Kind::Enum(STT_PROVIDERS),
+        default: Def::S("auto"),
+        doc: "sherpa-onnx: the onnxruntime execution provider for the speaker-embedding model: auto is coreml on macOS and cpu elsewhere; coreml falls back to the CPU when it cannot load the model.",
         ui: false,
         reload: Reload::Live,
     },

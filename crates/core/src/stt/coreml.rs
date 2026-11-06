@@ -582,3 +582,110 @@ impl Asr for CoreMlAsr {
         Ok(out)
     }
 }
+
+/// The pyannote community-1 speaker-embedding networks as FluidAudio runs them
+/// (`stt.diarization.algorithm = neural`, dot-4uzgol.83): `FBank.mlmodelc` turns a 10 s window of
+/// audio into 80 x 998 filterbank features (it scales the samples to 16-bit range itself), and
+/// `Embedding.mlmodelc` (WeSpeaker ResNet34) pools them, weighted per segmentation frame (589 per
+/// window), into a 256-d speaker embedding. An utterance shorter than the window is zero-padded
+/// with the padding weighted out; a longer one is embedded window by window and the embeddings
+/// averaged by their audio.
+pub struct SpeakerNet {
+    fbank: Retained<MLModel>,
+    embedding: Retained<MLModel>,
+    units_label: &'static str,
+    /// Samples per window (160 000) and weight frames per window (589).
+    window: usize,
+    frames: usize,
+}
+
+// SAFETY: as for `Loaded`: MLModel is thread-safe for prediction and every use goes through the
+// cache's mutex, one utterance at a time.
+unsafe impl Send for SpeakerNet {}
+
+type SpeakerCached = (PathBuf, MLComputeUnits, Arc<Mutex<SpeakerNet>>);
+
+static SPEAKER_CACHE: Mutex<Option<SpeakerCached>> = Mutex::new(None);
+
+pub fn clear_speaker_cache() {
+    *SPEAKER_CACHE.lock().expect("coreml speaker cache") = None;
+}
+
+impl SpeakerNet {
+    /// Load `entry`'s `fbank` and `embedding` bundles from `dir` on the compute units `provider`
+    /// asks for. Cached per directory and compute units.
+    pub fn load(entry: &Entry, dir: &Path, provider: SttProvider) -> Result<Arc<Mutex<SpeakerNet>>> {
+        let (units, units_label) = units(provider);
+        let mut cache = SPEAKER_CACHE.lock().expect("coreml speaker cache");
+        if let Some((d, u, l)) = cache.as_ref() {
+            if d == dir && *u == units {
+                return Ok(Arc::clone(l));
+            }
+        }
+        let net = autoreleasepool(|_| -> Result<SpeakerNet> {
+            let fbank = load_model(&bundle(entry, dir, "fbank")?, units)?;
+            let embedding = load_model(&bundle(entry, dir, "embedding")?, units)?;
+            let audio = io_shape(&fbank, "audio", true)?;
+            let weights = io_shape(&embedding, "weights", true)?;
+            match (audio.as_slice(), weights.as_slice()) {
+                ([1, 1, window], [1, frames]) if *window > 0 && *frames > 0 => Ok(SpeakerNet {
+                    fbank,
+                    embedding,
+                    units_label,
+                    window: *window,
+                    frames: *frames,
+                }),
+                _ => Err(load_failed(format!(
+                    "{}: unexpected shapes: fbank audio {audio:?}, embedding weights {weights:?}",
+                    dir.display()
+                ))),
+            }
+        })?;
+        let net = Arc::new(Mutex::new(net));
+        *cache = Some((dir.to_path_buf(), units, Arc::clone(&net)));
+        Ok(net)
+    }
+
+    pub fn units_label(&self) -> &'static str {
+        self.units_label
+    }
+
+    /// The embedding of `pcm` (16 kHz mono), averaged over its windows by their audio.
+    pub fn embed(&self, pcm: &[f32]) -> Result<Option<Vec<f32>>> {
+        let mut sum: Vec<f32> = Vec::new();
+        for chunk in pcm.chunks(self.window) {
+            let e = autoreleasepool(|_| self.embed_window(chunk))?;
+            if sum.is_empty() {
+                sum = vec![0.0; e.len()];
+            }
+            let w = chunk.len() as f32 / self.window as f32;
+            sum.iter_mut().zip(&e).for_each(|(s, x)| *s += w * x);
+        }
+        Ok((!sum.is_empty() && sum.iter().all(|x| x.is_finite())).then_some(sum))
+    }
+
+    fn embed_window(&self, chunk: &[f32]) -> Result<Vec<f32>> {
+        let f32t = MLMultiArrayDataType::Float32;
+        let audio = array(&[1, 1, self.window], f32t)?;
+        let mut padded = chunk.to_vec();
+        padded.resize(self.window, 0.0);
+        write_f32(&audio, &padded);
+        let out = predict(&self.fbank, &*provider(&[("audio", &audio)])?, "fbank")?;
+        let features = output(&out, "fbank_features")?;
+        // The weight frames the audio covers; the zero padding after it is weighted out.
+        let live = (chunk.len() * self.frames)
+            .div_ceil(self.window)
+            .clamp(1, self.frames);
+        let weights = array(&[1, self.frames], f32t)?;
+        let w: Vec<f32> = (0..self.frames)
+            .map(|i| if i < live { 1.0 } else { 0.0 })
+            .collect();
+        write_f32(&weights, &w);
+        let out = predict(
+            &self.embedding,
+            &*provider(&[("fbank_features", &features), ("weights", &weights)])?,
+            "embedding",
+        )?;
+        read(&*output(&out, "embedding")?)
+    }
+}

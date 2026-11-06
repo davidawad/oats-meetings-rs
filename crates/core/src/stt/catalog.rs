@@ -12,6 +12,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 const CATALOG: &str = include_str!("../../data/stt-models.json");
+/// The speaker-embedding models the diarizer runs (dot-4uzgol.83), same schema, own file: they are
+/// not speech models, so `stt.local.model`, `stt-model-list` and the Models tab never list them.
+const SPEAKERS: &str = include_str!("../../data/speaker-models.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub enum Runtime {
@@ -125,6 +128,20 @@ pub fn all() -> &'static [Entry] {
 
 pub fn get(id: &str) -> Option<&'static Entry> {
     all().iter().find(|e| e.id == id)
+}
+
+/// Every speaker-embedding entry (crates/core/data/speaker-models.json), in file order.
+pub fn speakers() -> &'static [Entry] {
+    static C: OnceLock<Vec<Entry>> = OnceLock::new();
+    C.get_or_init(|| {
+        serde_json::from_str::<Catalog>(SPEAKERS)
+            .expect("data/speaker-models.json (checked by the catalog tests)")
+            .models
+    })
+}
+
+pub fn speaker(id: &str) -> Option<&'static Entry> {
+    speakers().iter().find(|e| e.id == id)
 }
 
 impl Entry {

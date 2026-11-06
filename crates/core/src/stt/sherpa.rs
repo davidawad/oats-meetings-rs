@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use sherpa_onnx::{
     OfflineMoonshineModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
-    OfflineTransducerModelConfig,
+    OfflineTransducerModelConfig, SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
 };
 
 use super::catalog::Entry;
@@ -202,5 +202,80 @@ impl Asr for SherpaAsr {
             }));
         }
         Ok(out)
+    }
+}
+
+/// A sherpa-onnx speaker-embedding model (`stt.diarization.algorithm = sherpa-onnx`,
+/// dot-4uzgol.83): one embedding per utterance, from the whole utterance.
+pub struct SpeakerExtractor {
+    extractor: SpeakerEmbeddingExtractor,
+    provider: String,
+}
+
+type SpeakerCached = (PathBuf, SttProvider, u32, Arc<SpeakerExtractor>);
+
+static SPEAKER_CACHE: Mutex<Option<SpeakerCached>> = Mutex::new(None);
+
+pub fn clear_speaker_cache() {
+    *SPEAKER_CACHE.lock().expect("sherpa speaker cache") = None;
+}
+
+impl SpeakerExtractor {
+    /// Load the model file `path`, trying the providers `provider` allows in order. Cached per
+    /// file, provider and threads.
+    pub fn load(path: &Path, threads: u32, provider: SttProvider) -> Result<Arc<SpeakerExtractor>> {
+        let mut cache = SPEAKER_CACHE.lock().expect("sherpa speaker cache");
+        if let Some((p, pv, t, l)) = cache.as_ref() {
+            if p == path && *pv == provider && *t == threads {
+                return Ok(Arc::clone(l));
+            }
+        }
+        if !path.is_file() {
+            return Err(ConfigError::new(
+                "model_not_found",
+                format!("{} not found", path.display()),
+            ));
+        }
+        let mut tried = vec![];
+        for name in super::provider_order(provider) {
+            let cfg = SpeakerEmbeddingExtractorConfig {
+                model: Some(path.display().to_string()),
+                num_threads: i32::try_from(threads.max(1)).unwrap_or(i32::MAX),
+                debug: false,
+                provider: Some((*name).to_string()),
+            };
+            if let Some(extractor) = SpeakerEmbeddingExtractor::create(&cfg) {
+                let loaded = Arc::new(SpeakerExtractor {
+                    extractor,
+                    provider: (*name).to_string(),
+                });
+                *cache = Some((path.to_path_buf(), provider, threads, Arc::clone(&loaded)));
+                return Ok(loaded);
+            }
+            tried.push(*name);
+        }
+        Err(ConfigError::new(
+            "model_load_failed",
+            format!(
+                "sherpa-onnx could not load the speaker model {} (providers tried: {})",
+                path.display(),
+                tried.join(", ")
+            ),
+        ))
+    }
+
+    pub fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    /// The embedding of `pcm` (16 kHz mono); `None` when the model wants more audio.
+    pub fn embed(&self, pcm: &[f32]) -> Option<Vec<f32>> {
+        let stream = self.extractor.create_stream()?;
+        stream.accept_waveform(SAMPLE_RATE as i32, pcm);
+        stream.input_finished();
+        if !self.extractor.is_ready(&stream) {
+            return None;
+        }
+        self.extractor.compute(&stream)
     }
 }

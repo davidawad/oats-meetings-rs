@@ -308,8 +308,9 @@ pub fn spawn(
     Ok(start.to_json())
 }
 
+/// A speech model of the catalog, or a speaker-embedding model of the diarizer's.
 fn known(model: &str) -> Result<&'static Entry> {
-    catalog::get(model).ok_or_else(|| {
+    catalog::get(model).or_else(|| catalog::speaker(model)).ok_or_else(|| {
         let ids: Vec<&str> = catalog::all().iter().map(|e| e.id.as_str()).collect();
         let msg = crate::config::keys::retired_stt_model(model)
             .unwrap_or_else(|| format!("'{model}' is not a catalog model ({})", ids.join(", ")));
@@ -323,6 +324,10 @@ pub fn for_model(s: &Settings, model: &str) -> Result<Settings> {
     let mut t = s.clone();
     t.entry = entry;
     t.model = model.to_string();
+    // stt.local.model_path names a speech model; a speaker model always lives in models_dir.
+    if catalog::get(model).is_none() {
+        t.explicit_model_path = false;
+    }
     if !t.explicit_model_path {
         t.model_file = entry.location(&s.models_dir);
     }

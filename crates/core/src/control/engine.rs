@@ -443,6 +443,7 @@ impl Engine {
         let mut note = None;
         let built = (|| -> Result<crate::stt::capture::Plan> {
             let settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
+            crate::stt::fetch_speaker_model(&settings, Some(Arc::clone(&self.bus)));
             if !settings.live_enabled && !settings.final_enabled {
                 return Err(ConfigError::new(
                     "nothing_enabled",
@@ -500,6 +501,9 @@ impl Engine {
         self.enable_monitor();
         let cfg = self.snapshot().config.clone();
         if let Ok(s) = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir()) {
+            if cfg.audio.transcribe != AudioTranscribe::Off {
+                crate::stt::fetch_speaker_model(&s, Some(Arc::clone(&self.bus)));
+            }
             if s.entry.runtime.compiled()
                 && cfg.audio.transcribe != AudioTranscribe::Off
                 && s.backend == SttBackend::Local

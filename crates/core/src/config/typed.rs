@@ -367,10 +367,52 @@ pub struct SttFinal {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SttDiarization {
+    pub algorithm: SttDiarizationAlgorithm,
     pub enabled: bool,
     pub max_speakers: u32,
     pub threshold: u32,
     pub min_new: Dur,
+    pub min_speaker: Dur,
+    pub neural: SttDiarizationNeural,
+    pub sherpa_onnx: SttDiarizationSherpa,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SttDiarizationAlgorithm {
+    Auto,
+    Spectral,
+    Neural,
+    SherpaOnnx,
+    Off,
+}
+
+impl SttDiarizationAlgorithm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SttDiarizationAlgorithm::Auto => "auto",
+            SttDiarizationAlgorithm::Spectral => "spectral",
+            SttDiarizationAlgorithm::Neural => "neural",
+            SttDiarizationAlgorithm::SherpaOnnx => "sherpa-onnx",
+            SttDiarizationAlgorithm::Off => "off",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SttDiarizationNeural {
+    pub provider: SttProvider,
+    pub threshold: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SttDiarizationSherpa {
+    pub model: String,
+    pub provider: SttProvider,
+    pub threads: u32,
+    pub threshold: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
