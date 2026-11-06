@@ -6,8 +6,14 @@
 //!   <root>/<id>/transcript.final.jsonl  one JSON object per utterance (batch re-transcription)
 //!   <root>/<id>/transcript.live.jsonl   live transcript
 //!
-//! We add keys to `session.json`, which the OpenOats reader ignores: `schemaVersion`
-//! (this store's layout version), `tags` and `transcribePending`. Unknown keys written by OpenOats are preserved.
+//!   <root>/<id>/notes.md, notes.meta.json  notes and the OpenOats `NotesMeta` it needs to show them
+//!
+//! Keys only oats-rs writes live in one `x_oats` object in `session.json` (and in each utterance),
+//! which the OpenOats reader ignores: `schemaVersion` (this store's layout version),
+//! `transcribePending`, the notes provenance and the recording's audio facts. Older builds wrote
+//! them at the top level; they are read from there too and moved on the next write. Unknown keys
+//! written by OpenOats are preserved. `crate::openoats` holds the format checks and the markdown
+//! export.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +21,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config::typed::DeleteMode;
 use crate::config::{ConfigError, Result};
+use crate::openoats;
 
 pub const SCHEMA_VERSION: u64 = 1;
 const TRANSCRIPTS: [(&str, &str); 2] = [
@@ -23,6 +30,62 @@ const TRANSCRIPTS: [(&str, &str); 2] = [
 ];
 /// A recording saved as audio only while the model was missing; cleared once it is transcribed.
 const PENDING: &str = "transcribePending";
+/// The object holding the keys OpenOats does not know.
+pub const X_OATS: &str = "x_oats";
+/// Our keys older builds wrote at the top level of `session.json`.
+const LEGACY_KEYS: [&str; 10] = [
+    "schemaVersion",
+    PENDING,
+    "notesTemplate",
+    "notesBackend",
+    "notesModel",
+    "notesEdited",
+    "durationMs",
+    "audioFile",
+    "audioChannels",
+    "audioRate",
+];
+
+/// One of our keys: under `x_oats`, else (written by an older build) at the top level.
+pub fn ext<'a>(meta: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    meta.get(X_OATS)
+        .and_then(|x| x.get(key))
+        .or_else(|| meta.get(key).filter(|_| LEGACY_KEYS.contains(&key)))
+}
+
+fn ext_map(meta: &mut Map<String, Value>) -> &mut Map<String, Value> {
+    let x = meta.entry(X_OATS).or_insert_with(|| json!({}));
+    if !x.is_object() {
+        *x = json!({});
+    }
+    x.as_object_mut().expect("x_oats object")
+}
+
+pub fn set_ext(meta: &mut Map<String, Value>, key: &str, v: Value) {
+    meta.remove(key);
+    ext_map(meta).insert(key.into(), v);
+}
+
+pub fn remove_ext(meta: &mut Map<String, Value>, key: &str) -> Option<Value> {
+    let top = LEGACY_KEYS
+        .contains(&key)
+        .then(|| meta.remove(key))
+        .flatten();
+    let x = meta
+        .get_mut(X_OATS)
+        .and_then(Value::as_object_mut)
+        .and_then(|x| x.remove(key));
+    x.or(top)
+}
+
+/// Move legacy top-level keys under `x_oats`.
+fn normalize(meta: &mut Map<String, Value>) {
+    for k in LEGACY_KEYS {
+        if let Some(v) = meta.remove(k) {
+            ext_map(meta).entry(k).or_insert(v);
+        }
+    }
+}
 
 fn io(what: &Path, e: impl std::fmt::Display) -> ConfigError {
     ConfigError::new("io_error", format!("{}: {e}", what.display()))
@@ -134,7 +197,7 @@ fn summary(l: &Loaded) -> Value {
         "speaker_names": l.meta.get("speakerNames").cloned().unwrap_or(Value::Null),
         "utterance_count": utterances.len(),
         "tags": l.meta.get("tags").cloned().unwrap_or_else(|| json!([])),
-        "schema_version": l.meta.get("schemaVersion").cloned().unwrap_or(Value::Null),
+        "schema_version": ext(&l.meta, "schemaVersion").cloned().unwrap_or(Value::Null),
         "path": l.dir,
     })
 }
@@ -149,13 +212,14 @@ fn utterance_text(u: &Value) -> String {
         .to_string()
 }
 
-/// Seconds into the recording: `startSeconds` (or the live `start`), else the utterance timestamp
-/// less the session start; null when neither is known.
+/// Seconds into the recording: `x_oats.startSeconds` (older builds: top-level `startSeconds`, or
+/// the live `start`), else the utterance timestamp less the session start; null when neither is known.
 fn utterance_offset(u: &Value, started: Option<&str>) -> Value {
-    if let Some(s) = ["startSeconds", "start"]
-        .iter()
-        .find_map(|k| u.get(*k).and_then(Value::as_f64))
-    {
+    if let Some(s) = u[X_OATS]["startSeconds"].as_f64().or_else(|| {
+        ["startSeconds", "start"]
+            .iter()
+            .find_map(|k| u.get(*k).and_then(Value::as_f64))
+    }) {
         return json!(s);
     }
     let parse = |v: &str| chrono::DateTime::parse_from_rfc3339(v).ok();
@@ -198,10 +262,13 @@ fn snippet(text: &str, at: usize, len: usize, ctx: usize) -> String {
     out
 }
 
-fn write_meta(dir: &Path, meta: &Map<String, Value>) -> Result<()> {
+/// Write `session.json` (atomically), our keys moved under `x_oats`.
+pub(crate) fn write_meta(dir: &Path, meta: &Map<String, Value>) -> Result<()> {
     let path = dir.join("session.json");
     let tmp = dir.join(format!(".session.json.tmp{}", std::process::id()));
-    let text = serde_json::to_string_pretty(&Value::Object(meta.clone()))
+    let mut meta = meta.clone();
+    normalize(&mut meta);
+    let text = serde_json::to_string_pretty(&Value::Object(meta))
         .map_err(|e| ConfigError::new("io_error", e.to_string()))?;
     std::fs::write(&tmp, text)
         .and_then(|_| std::fs::rename(&tmp, &path))
@@ -415,36 +482,36 @@ impl Store {
             tags.push(json!(tag));
         }
         l.meta.insert("tags".into(), Value::Array(tags));
-        l.meta
-            .entry("schemaVersion")
-            .or_insert(json!(SCHEMA_VERSION));
+        stamp_schema(&mut l.meta);
         write_meta(&l.dir, &l.meta)?;
         Ok(summary(&l))
     }
 
-    /// Write `notes.md` into the session and record how it was made in `session.json`.
+    /// Write `notes.md` into the session, its OpenOats `notes.meta.json` (the template snapshot
+    /// and when), and how it was made in `session.json`.
     pub fn set_notes(
         &self,
         id: &str,
         notes: &str,
-        template: &str,
+        template: &crate::templates::Template,
         backend: &str,
         model: &str,
     ) -> Result<PathBuf> {
         let mut l = self.find(id)?;
         let path = l.dir.join("notes.md");
-        let tmp = l.dir.join(format!(".notes.md.tmp{}", std::process::id()));
-        std::fs::write(&tmp, notes)
-            .and_then(|_| std::fs::rename(&tmp, &path))
-            .map_err(|e| io(&path, e))?;
+        write_atomic(&path, notes.as_bytes())?;
+        let snap = openoats::snapshot(template);
+        write_notes_meta(
+            &l.dir,
+            openoats::notes_meta(snap.clone(), chrono::Utc::now()),
+        )?;
         l.meta.insert("hasNotes".into(), json!(true));
-        l.meta.insert("notesTemplate".into(), json!(template));
-        l.meta.insert("notesBackend".into(), json!(backend));
-        l.meta.insert("notesModel".into(), json!(model));
-        l.meta.remove("notesEdited");
-        l.meta
-            .entry("schemaVersion")
-            .or_insert(json!(SCHEMA_VERSION));
+        l.meta.insert("templateSnapshot".into(), snap);
+        set_ext(&mut l.meta, "notesTemplate", json!(template.name));
+        set_ext(&mut l.meta, "notesBackend", json!(backend));
+        set_ext(&mut l.meta, "notesModel", json!(model));
+        remove_ext(&mut l.meta, "notesEdited");
+        stamp_schema(&mut l.meta);
         write_meta(&l.dir, &l.meta)?;
         Ok(path)
     }
@@ -458,15 +525,21 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
             Err(e) => return Err(io(&path, e)),
         };
-        let m = |k: &str| l.meta.get(k).cloned().unwrap_or(Value::Null);
+        let m = |k: &str| ext(&l.meta, k).cloned().unwrap_or(Value::Null);
+        // OpenOats records the template in notes.meta.json only.
+        let template = ext(&l.meta, "notesTemplate").cloned().unwrap_or_else(|| {
+            read_json(&l.dir.join("notes.meta.json"))
+                .map(|v| v["templateSnapshot"]["name"].clone())
+                .unwrap_or(Value::Null)
+        });
         Ok(json!({
             "session": id_of(&l),
             "has_notes": has,
             "notes": text,
-            "template": m("notesTemplate"),
+            "template": template,
             "backend": m("notesBackend"),
             "model": m("notesModel"),
-            "edited": l.meta.get("notesEdited").and_then(Value::as_bool).unwrap_or(false),
+            "edited": ext(&l.meta, "notesEdited").and_then(Value::as_bool).unwrap_or(false),
             "path": path,
         }))
     }
@@ -475,15 +548,18 @@ impl Store {
     pub fn edit_notes(&self, id: &str, notes: &str) -> Result<Value> {
         let mut l = self.find(id)?;
         let path = l.dir.join("notes.md");
-        let tmp = l.dir.join(format!(".notes.md.tmp{}", std::process::id()));
-        std::fs::write(&tmp, notes)
-            .and_then(|_| std::fs::rename(&tmp, &path))
-            .map_err(|e| io(&path, e))?;
+        write_atomic(&path, notes.as_bytes())?;
+        // OpenOats shows notes.md only beside a notes.meta.json; keep the generated one's.
+        let meta_path = l.dir.join("notes.meta.json");
+        if !read_json(&meta_path).is_some_and(|v| openoats::notes_meta_ok(&v)) {
+            write_notes_meta(
+                &l.dir,
+                openoats::notes_meta(openoats::generic_snapshot(), chrono::Utc::now()),
+            )?;
+        }
         l.meta.insert("hasNotes".into(), json!(true));
-        l.meta.insert("notesEdited".into(), json!(true));
-        l.meta
-            .entry("schemaVersion")
-            .or_insert(json!(SCHEMA_VERSION));
+        set_ext(&mut l.meta, "notesEdited", json!(true));
+        stamp_schema(&mut l.meta);
         write_meta(&l.dir, &l.meta)?;
         self.notes(id)
     }
@@ -534,7 +610,8 @@ impl Store {
             check_id(&id, self.max_id)?;
             let mut meta = src.meta.clone();
             meta.insert("id".into(), json!(id));
-            meta.entry("schemaVersion").or_insert(json!(SCHEMA_VERSION));
+            normalize(&mut meta);
+            stamp_schema(&mut meta);
             let files = read_files(&src.dir)?;
             let target = self.root.join(&id);
             let existing = load(&target);
@@ -568,7 +645,11 @@ impl Store {
             std::fs::create_dir_all(&target).map_err(|e| io(&target, e))?;
             for (name, bytes) in &files {
                 if name != "session.json" {
-                    std::fs::write(target.join(name), bytes).map_err(|e| io(&target, e))?;
+                    let to = target.join(name);
+                    if let Some(parent) = to.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| io(parent, e))?;
+                    }
+                    std::fs::write(&to, bytes).map_err(|e| io(&to, e))?;
                 }
             }
             write_meta(&target, &meta)?;
@@ -578,18 +659,58 @@ impl Store {
     }
 }
 
-/// Regular files directly in the session dir (symlinks and subdirectories are not followed).
+/// The session's files by path relative to `dir` (`/`-separated): every regular file, in
+/// subdirectories too (OpenOats keeps `attachments/`, `images/` and `audio/` there, and
+/// `transcript.live.jsonl.pre-cleanup.bak` beside the transcript). Dot-files and symlinks are
+/// skipped.
 fn read_files(dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut out = vec![];
-    for e in std::fs::read_dir(dir).map_err(|e| io(dir, e))?.flatten() {
-        let ft = e.file_type().map_err(|e2| io(dir, e2))?;
-        let name = e.file_name().to_string_lossy().into_owned();
-        if ft.is_file() && !name.starts_with('.') && name != "session.json" {
-            out.push((name, std::fs::read(e.path()).map_err(|e2| io(dir, e2))?));
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
+        for e in std::fs::read_dir(dir).map_err(|e| io(dir, e))?.flatten() {
+            let ft = e.file_type().map_err(|e2| io(dir, e2))?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let rel = format!("{prefix}{name}");
+            if ft.is_dir() {
+                walk(&e.path(), &format!("{rel}/"), out)?;
+            } else if ft.is_file() && rel != "session.json" {
+                out.push((rel, std::fs::read(e.path()).map_err(|e2| io(dir, e2))?));
+            }
         }
+        Ok(())
     }
+    let mut out = vec![];
+    walk(dir, "", &mut out)?;
     out.sort();
     Ok(out)
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.tmp{}", std::process::id()));
+    std::fs::write(&tmp, bytes)
+        .and_then(|_| std::fs::rename(&tmp, path))
+        .map_err(|e| io(path, e))
+}
+
+fn write_notes_meta(dir: &Path, v: Value) -> Result<()> {
+    let text = serde_json::to_string_pretty(&v)
+        .map_err(|e| ConfigError::new("io_error", e.to_string()))?;
+    write_atomic(&dir.join("notes.meta.json"), text.as_bytes())
+}
+
+fn stamp_schema(meta: &mut Map<String, Value>) {
+    if ext(meta, "schemaVersion").is_none() {
+        set_ext(meta, "schemaVersion", json!(SCHEMA_VERSION));
+    }
 }
 
 /// Writing sessions (the transcription engine and, later, the recorder).
@@ -613,7 +734,7 @@ impl Store {
         meta.insert("hasNotes".into(), json!(false));
         meta.insert("engine".into(), json!(engine));
         meta.insert("speakerNames".into(), json!({}));
-        meta.insert("schemaVersion".into(), json!(SCHEMA_VERSION));
+        set_ext(&mut meta, "schemaVersion", json!(SCHEMA_VERSION));
         write_meta(&dir, &meta)?;
         Ok(dir)
     }
@@ -689,8 +810,8 @@ impl Store {
     pub fn set_pending(&self, id: &str, pending: bool) -> Result<()> {
         let mut l = self.find(id)?;
         if pending {
-            l.meta.insert(PENDING.into(), json!(true));
-        } else if l.meta.remove(PENDING).is_none() {
+            set_ext(&mut l.meta, PENDING, json!(true));
+        } else if remove_ext(&mut l.meta, PENDING).is_none() {
             return Ok(());
         }
         write_meta(&l.dir, &l.meta)
@@ -700,7 +821,7 @@ impl Store {
     pub fn pending(&self) -> Vec<String> {
         self.discover()
             .iter()
-            .filter(|l| l.meta.get(PENDING) == Some(&json!(true)))
+            .filter(|l| ext(&l.meta, PENDING) == Some(&json!(true)))
             .map(id_of)
             .collect()
     }
@@ -713,9 +834,117 @@ impl Store {
         l.meta.insert("engine".into(), json!(engine));
         l.meta
             .insert("utteranceCount".into(), json!(utterances.len()));
-        l.meta.remove(PENDING);
+        remove_ext(&mut l.meta, PENDING);
         write_meta(&l.dir, &l.meta)?;
         Ok(summary(&l))
+    }
+
+    /// Set one OpenOats `session.json` key (e.g. `language`).
+    pub fn set_meta(&self, id: &str, key: &str, value: Value) -> Result<()> {
+        let mut l = self.find(id)?;
+        l.meta.insert(key.into(), value);
+        write_meta(&l.dir, &l.meta)
+    }
+}
+
+/// OpenOats interchange: the markdown export and a copy into an OpenOats store.
+impl Store {
+    /// Write the session's `openoats/v1` markdown export into `dir` (see `openoats::Export`).
+    pub fn export_markdown(
+        &self,
+        id: &str,
+        dir: &Path,
+        recorder: &str,
+        tz: chrono_tz::Tz,
+    ) -> Result<Value> {
+        let l = self.find(id)?;
+        let (source, utterances) = transcript(&l.dir);
+        let notes = std::fs::read_to_string(l.dir.join("notes.md")).ok();
+        let sid = id_of(&l);
+        let path = openoats::Export {
+            meta: &l.meta,
+            id: &sid,
+            records: &utterances,
+            notes: notes.as_deref(),
+            recorder,
+            tz,
+        }
+        .write(dir)?;
+        Ok(json!({"session": sid, "path": path, "source": source, "utterances": utterances.len()}))
+    }
+
+    /// Copy session `id` into the OpenOats sessions folder `root`, made to decode there: dates
+    /// rewritten as OpenOats writes them, its required keys filled in, utterances it could not
+    /// read dropped, and a `notes.meta.json` beside any `notes.md`. A session already there with
+    /// different content is a conflict unless `overwrite`.
+    pub fn export_openoats(&self, id: &str, root: &Path, overwrite: bool) -> Result<Value> {
+        let l = self.find(id)?;
+        let sid = id_of(&l);
+        // Staged in a dot-directory of `root` (OpenOats skips those), then imported from there.
+        let stage = root.join(format!(".oats-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&stage);
+        let out = stage.join(&sid);
+        let r = self.stage_openoats(&l, &sid, &out).and_then(|_| {
+            Store::new(root)
+                .with_max_id(self.max_id)
+                .import(&out, overwrite)
+        });
+        let _ = std::fs::remove_dir_all(&stage);
+        let mut v = r?;
+        v["path"] = json!(root.join(&sid));
+        Ok(v)
+    }
+
+    fn stage_openoats(&self, l: &Loaded, sid: &str, out: &Path) -> Result<()> {
+        std::fs::create_dir_all(out).map_err(|e| io(out, e))?;
+        for (name, bytes) in read_files(&l.dir)? {
+            let to = out.join(&name);
+            if let Some(p) = to.parent() {
+                std::fs::create_dir_all(p).map_err(|e| io(p, e))?;
+            }
+            let bytes = if TRANSCRIPTS.iter().any(|(_, f)| *f == name) {
+                // A line OpenOats already decodes is kept as it is.
+                String::from_utf8_lossy(&bytes)
+                    .lines()
+                    .filter_map(|line| {
+                        let r = serde_json::from_str::<Value>(line).ok()?;
+                        match openoats::decodes_record(&r) {
+                            Ok(()) => Some(format!("{line}\n")),
+                            Err(_) => openoats::conform_record(&r).map(|r| format!("{r}\n")),
+                        }
+                    })
+                    .collect::<String>()
+                    .into_bytes()
+            } else {
+                bytes
+            };
+            std::fs::write(&to, bytes).map_err(|e| io(&to, e))?;
+        }
+        let mut meta = l.meta.clone();
+        if meta
+            .get("templateSnapshot")
+            .is_some_and(|s| !s.is_null() && !openoats::snapshot_ok(s))
+        {
+            meta.remove("templateSnapshot");
+        }
+        let has_notes = out.join("notes.md").is_file();
+        if has_notes
+            && !read_json(&out.join("notes.meta.json")).is_some_and(|v| openoats::notes_meta_ok(&v))
+        {
+            let snap = meta
+                .get("templateSnapshot")
+                .filter(|s| openoats::snapshot_ok(s))
+                .cloned()
+                .unwrap_or_else(openoats::generic_snapshot);
+            write_notes_meta(out, openoats::notes_meta(snap, chrono::Utc::now()))?;
+        }
+        if has_notes {
+            meta.insert("hasNotes".into(), json!(true));
+        }
+        openoats::conform_meta(&mut meta, sid, transcript(out).1.len(), has_notes);
+        openoats::decodes_meta(&Value::Object(meta.clone()))
+            .map_err(|e| ConfigError::new("invalid_value", format!("session '{sid}': {e}")))?;
+        write_meta(out, &meta)
     }
 }
 
@@ -1019,7 +1248,12 @@ mod tests {
         ] {
             assert!(meta.get(k).is_some(), "session.json lacks {k}");
         }
-        assert_eq!(meta["schemaVersion"], 1);
+        assert_eq!(meta["x_oats"]["schemaVersion"], 1);
+        assert!(
+            meta.get("schemaVersion").is_none(),
+            "our keys stay under x_oats"
+        );
+        assert_eq!(openoats::decodes_meta(&meta), Ok(()));
         assert_eq!(meta["speakerNames"]["remote_1"], "Dana");
         for f in ["transcript.final.jsonl", "transcript.live.jsonl"] {
             for line in std::fs::read_to_string(dir.join(f)).unwrap().lines() {

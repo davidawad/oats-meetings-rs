@@ -763,11 +763,14 @@ fn a_recording_made_while_the_model_is_missing_is_transcribed_once_it_arrives() 
     let ended = m["ended_at"].clone();
     assert!(ended.is_string());
     assert_eq!(m["utterance_count"], 0);
-    assert_eq!(m["metadata"]["transcribePending"], true);
+    assert_eq!(m["metadata"]["x_oats"]["transcribePending"], true);
     // Still missing: the pass leaves it pending and says why.
     let v = r.engine.transcribe_pending();
     assert_eq!(v["failed"][0]["code"], "model_not_found");
-    assert_eq!(meta(&r, "first")["metadata"]["transcribePending"], true);
+    assert_eq!(
+        meta(&r, "first")["metadata"]["x_oats"]["transcribePending"],
+        true
+    );
     // The model arrives: the same session gets its transcript, no second recording needed.
     present.store(true, std::sync::atomic::Ordering::SeqCst);
     // (record-stop also queued a pass in the background; either one may do the work.)
@@ -775,7 +778,10 @@ fn a_recording_made_while_the_model_is_missing_is_transcribed_once_it_arrives() 
     assert_eq!(v["failed"], json!([]), "{v}");
     let m = meta(&r, "first");
     assert!(m["utterance_count"].as_u64().unwrap() > 0, "{m}");
-    assert!(m["metadata"].get("transcribePending").is_none(), "{m}");
+    assert!(
+        m["metadata"]["x_oats"].get("transcribePending").is_none(),
+        "{m}"
+    );
     assert_eq!(m["metadata"]["engine"], "sherpa-onnx:parakeet-tdt-0.6b-v2");
     assert_eq!(m["ended_at"], ended);
     assert!(!lines(&r, "first", "final").is_empty());
@@ -816,7 +822,10 @@ fn a_pending_recording_still_running_when_the_model_arrives_is_transcribed_at_st
     }
     let m = meta(&r, "long");
     assert!(m["utterance_count"].as_u64().unwrap_or(0) > 0, "{m}");
-    assert!(m["metadata"].get("transcribePending").is_none(), "{m}");
+    assert!(
+        m["metadata"]["x_oats"].get("transcribePending").is_none(),
+        "{m}"
+    );
 }
 
 #[test]
@@ -837,7 +846,9 @@ fn session_transcribe_runs_on_a_saved_session_and_guards_its_transcript() {
     std::thread::sleep(Duration::from_millis(2500));
     stop(&r);
     // audio.transcribe = off is not a pending session.
-    assert!(meta(&r, "s")["metadata"].get("transcribePending").is_none());
+    assert!(meta(&r, "s")["metadata"]["x_oats"]
+        .get("transcribePending")
+        .is_none());
     let v = r
         .engine
         .dispatch(&Action::SessionTranscribe {

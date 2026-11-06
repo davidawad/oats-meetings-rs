@@ -900,11 +900,11 @@ fn stamp(started: DateTime<Utc>, secs: f64) -> String {
         .to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-/// The OpenOats utterance object, plus our start/end offsets (ignored by the OpenOats reader).
+/// The OpenOats utterance object, plus our start/end offsets under `x_oats` (ignored by OpenOats).
 pub fn utterance_json(u: &Utt, started: DateTime<Utc>) -> Value {
     json!({
         "speaker": u.speaker, "text": u.text, "timestamp": stamp(started, u.start),
-        "startSeconds": (u.start * 100.0).round() / 100.0, "endSeconds": (u.end * 100.0).round() / 100.0,
+        "x_oats": {"startSeconds": (u.start * 100.0).round() / 100.0, "endSeconds": (u.end * 100.0).round() / 100.0},
     })
 }
 
@@ -935,6 +935,7 @@ pub fn run(
         "",
         &s.engine_label(),
     )?;
+    store.set_meta(id, "language", json!(s.language))?;
     let (live_n, final_n) = match passes(store, bus, &asr, s, chans, id, started) {
         Ok(n) => n,
         Err(e) => {
@@ -984,6 +985,7 @@ pub fn into_session(
             return Err(e);
         }
     };
+    store.set_meta(id, "language", json!(s.language))?;
     let summary = store.transcribed(id, &s.engine_label())?;
     if let Some(b) = bus {
         b.publish("session-saved", json!({"id": id, "change": "transcribed"}));

@@ -20,6 +20,8 @@ rrule.workspace = true
 chrono-tz.workspace = true
 hound.workspace = true
 sha2.workspace = true
+# The system zone for export timestamps (ui.tz empty), as OpenOats uses the system zone.
+iana-time-zone = "0.1"
 whisper-rs = { workspace = true, optional = true }
 
 [features]

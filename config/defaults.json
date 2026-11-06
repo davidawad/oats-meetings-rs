@@ -123,7 +123,10 @@
   "sessions": {
     "confirm_delete": true,
     "delete_mode": "trash",
+    "export_dir": "",
+    "export_recorder": "",
     "max_id_len": 200,
+    "openoats_dir": "",
     "root": "",
     "search_snippet_chars": 40
   },

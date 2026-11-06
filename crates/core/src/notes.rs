@@ -217,7 +217,7 @@ pub fn generate(ctx: &Ctx, session: &str, template: &str, dry_run: bool) -> Resu
     let path = ctx.store.set_notes(
         session,
         &notes,
-        &tpl.name,
+        &tpl,
         backend_name(backend),
         &ctx.cfg.llm.model,
     )?;

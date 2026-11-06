@@ -69,6 +69,9 @@ fn absolutize(raw: &str) -> String {
 fn typed_value(wire: &str, param: &str, raw: &str) -> Value {
     if (wire == "session-import" && param == "from")
         || (wire == "stt-transcribe" && param == "path")
+        || (wire == "session-export" && param == "dir")
+        || (wire == "session-export-openoats" && param == "to")
+        || (wire == "template-export" && param == "to")
     {
         return Value::String(absolutize(raw));
     }
@@ -394,6 +397,18 @@ mod tests {
         assert_eq!(p.params["session"], json!("abc"));
         let p = parse(&s(&["session", "import", "--from", "rel/dir"])).unwrap();
         assert!(std::path::Path::new(p.params["from"].as_str().unwrap()).is_absolute());
+        let p = parse(&s(&["session", "export", "abc", "--dir", "rel/md"])).unwrap();
+        assert_eq!(p.action, "session-export");
+        assert!(std::path::Path::new(p.params["dir"].as_str().unwrap()).is_absolute());
+        let p = parse(&s(&[
+            "session", "export", "openoats", "abc", "--to", "rel/oo",
+        ]))
+        .unwrap();
+        assert_eq!(p.action, "session-export-openoats");
+        assert_eq!(p.params["session"], json!("abc"));
+        assert!(std::path::Path::new(p.params["to"].as_str().unwrap()).is_absolute());
+        let p = parse(&s(&["template", "export", "--to", "t.json"])).unwrap();
+        assert!(std::path::Path::new(p.params["to"].as_str().unwrap()).is_absolute());
         let p = parse(&s(&["session", "tag", "abc", "t", "--remove"])).unwrap();
         assert_eq!(p.params["remove"], json!(true));
     }

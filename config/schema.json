@@ -974,6 +974,20 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "export_dir": {
+          "default": "",
+          "description": "Folder session-export writes OpenOats markdown (openoats/v1) into; empty means ~/Documents/oats-meetings/recordings. Dates and file names use ui.tz (empty: the system zone), as OpenOats does.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "export_recorder": {
+          "default": "",
+          "description": "The recorder: name in markdown exports (OpenOats writes the account's full name); empty leaves the line out.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
         "max_id_len": {
           "default": 200,
           "description": "Longest session id (it becomes a directory name).",
@@ -982,6 +996,13 @@
           "type": "integer",
           "x-reload": "live",
           "x-ui": false
+        },
+        "openoats_dir": {
+          "default": "",
+          "description": "The OpenOats data folder (its sessions/ and templates.json) session-export-openoats and template-export write into; empty means ~/Library/Application Support/OpenOats.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
         },
         "root": {
           "default": "",

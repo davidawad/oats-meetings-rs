@@ -17,7 +17,7 @@ use serde_json::{json, Map, Value};
 use crate::config::resolve::Flat;
 use crate::config::typed::Config;
 use crate::config::{ConfigError, Result};
-use crate::sessions::Store;
+use crate::sessions::{ext, set_ext, Store};
 use crate::stt::capture::{Plan, Transcriber};
 use crate::stt::Asr;
 
@@ -116,10 +116,6 @@ impl Default for Recorder {
 
 fn audio_err(e: AudioError) -> ConfigError {
     ConfigError::new(e.code, e.message)
-}
-
-fn io_err(p: &Path, e: impl std::fmt::Display) -> ConfigError {
-    ConfigError::new("io_error", format!("{}: {e}", p.display()))
 }
 
 pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
@@ -240,25 +236,15 @@ fn read_meta(dir: &Path) -> Option<Map<String, Value>> {
     }
 }
 
-fn write_meta(dir: &Path, meta: &Map<String, Value>) -> Result<()> {
-    let path = dir.join("session.json");
-    let tmp = dir.join(format!(".session.json.tmp{}", std::process::id()));
-    let text = serde_json::to_string_pretty(&Value::Object(meta.clone()))
-        .map_err(|e| ConfigError::new("io_error", e.to_string()))?;
-    std::fs::write(&tmp, text)
-        .and_then(|_| std::fs::rename(&tmp, &path))
-        .map_err(|e| io_err(&path, e))
-}
-
 /// Merge the audio facts into `session.json` without touching what the store or the user wrote
 /// (title, tags, utterance count).
 fn merge_audio_meta(dir: &Path, duration_ms: u64, channels: u16) -> Result<()> {
     let mut m = read_meta(dir).unwrap_or_default();
-    m.insert("durationMs".into(), json!(duration_ms));
-    m.insert("audioFile".into(), json!(AUDIO_FILE));
-    m.insert("audioChannels".into(), json!(channels));
-    m.insert("audioRate".into(), json!(oats_audio::SAMPLE_RATE));
-    write_meta(dir, &m)
+    set_ext(&mut m, "durationMs", json!(duration_ms));
+    set_ext(&mut m, "audioFile", json!(AUDIO_FILE));
+    set_ext(&mut m, "audioChannels", json!(channels));
+    set_ext(&mut m, "audioRate", json!(oats_audio::SAMPLE_RATE));
+    crate::sessions::write_meta(dir, &m)
 }
 
 impl Recorder {
@@ -472,6 +458,9 @@ impl Recorder {
             title.unwrap_or_default(),
             &label,
         )?;
+        if let Some(p) = plan.as_ref() {
+            store.set_meta(&id, "language", json!(p.settings.language))?;
+        }
         let wav = dir.join(AUDIO_FILE);
         let trans = plan.map(|p| Transcriber::start(p, store.sibling(), &id, started_dt));
         let rec = {
@@ -582,10 +571,10 @@ impl Recorder {
         }
         v["state"] = json!("saved");
         let meta = v["metadata"].as_object().cloned().unwrap_or_default();
-        v["duration_ms"] = meta.get("durationMs").cloned().unwrap_or(Value::Null);
+        v["duration_ms"] = ext(&meta, "durationMs").cloned().unwrap_or(Value::Null);
         let audio = v["path"].as_str().map(|d| {
             Path::new(d).join(
-                meta.get("audioFile")
+                ext(&meta, "audioFile")
                     .and_then(Value::as_str)
                     .unwrap_or(AUDIO_FILE),
             )

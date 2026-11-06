@@ -1,0 +1,23 @@
+{
+  "endedAt" : "2026-11-02T19:52:41Z",
+  "engine" : "parakeetV2",
+  "hasNotes" : true,
+  "id" : "session_2026-11-02_14-30-05",
+  "language" : "en-US",
+  "meetingApp" : "zoom.us",
+  "speakerNames" : {
+    "remote_2" : "Priya"
+  },
+  "startedAt" : "2026-11-02T19:30:05Z",
+  "tags" : [
+    "customer"
+  ],
+  "templateSnapshot" : {
+    "icon" : "doc.text",
+    "id" : "00000000-0000-0000-0000-000000000000",
+    "name" : "Generic",
+    "systemPrompt" : "You are a meeting notes assistant."
+  },
+  "title" : "Q4 \"Roadmap\" review",
+  "utteranceCount" : 5
+}

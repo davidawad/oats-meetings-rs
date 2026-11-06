@@ -290,6 +290,65 @@ pub fn import_openoats(from: &Path, dir: &Path, overwrite: bool) -> Result<Value
     Ok(json!({"imported": imported, "skipped": skipped, "dir": dir}))
 }
 
+/// Merge every template in `dir` into the OpenOats `templates.json` at `to` (created when absent):
+/// one with the same OpenOats id, else the same name, is replaced and keeps its id; the rest are
+/// added; OpenOats' other templates are kept. A template with no `openoats_id` gets a stable id
+/// from its name. OpenOats reads the file at launch.
+pub fn export_openoats(dir: &Path, to: &Path) -> Result<Value> {
+    use crate::openoats;
+    let mut doc: Value = match std::fs::read_to_string(to) {
+        Ok(text) => serde_json::from_str(&text)
+            .map_err(|e| ConfigError::new("parse_error", format!("{}: {e}", to.display())))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            json!({"version": 1, "templates": []})
+        }
+        Err(e) => return Err(io(to, e)),
+    };
+    if doc["version"] != json!(1) || !doc["templates"].is_array() {
+        return Err(ConfigError::new(
+            "unsupported_version",
+            format!(
+                "{}: expected {{\"version\": 1, \"templates\": [...]}}",
+                to.display()
+            ),
+        ));
+    }
+    let list = doc["templates"].as_array_mut().expect("templates array");
+    let (mut added, mut updated) = (vec![], vec![]);
+    for t in load_all(dir)? {
+        let mut snap = openoats::snapshot(&t);
+        let at = list
+            .iter()
+            .position(|o| o["id"] == snap["id"])
+            .or_else(|| list.iter().position(|o| o["name"] == snap["name"]));
+        if let Some(i) = at {
+            snap["id"] = list[i]["id"].clone();
+        }
+        let built_in = snap["id"].as_str().is_some_and(openoats::is_builtin_id);
+        snap["isBuiltIn"] = json!(built_in);
+        match at {
+            Some(i) => {
+                list[i] = snap;
+                updated.push(t.name);
+            }
+            None => {
+                list.push(snap);
+                added.push(t.name);
+            }
+        }
+    }
+    if let Some(p) = to.parent() {
+        std::fs::create_dir_all(p).map_err(|e| io(p, e))?;
+    }
+    let text =
+        serde_json::to_string(&doc).map_err(|e| ConfigError::new("io_error", e.to_string()))?;
+    let tmp = to.with_file_name(format!(".templates.json.tmp{}", std::process::id()));
+    std::fs::write(&tmp, text)
+        .and_then(|_| std::fs::rename(&tmp, to))
+        .map_err(|e| io(to, e))?;
+    Ok(json!({"added": added, "updated": updated, "path": to}))
+}
+
 /// JSON Schema for the template file, generated from the struct's field list.
 pub fn schema_json() -> String {
     let schema = json!({

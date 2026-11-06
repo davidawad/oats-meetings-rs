@@ -247,6 +247,22 @@ impl Engine {
         }
     }
 
+    fn export_dir(&self, cfg: &Config) -> PathBuf {
+        if cfg.sessions.export_dir.is_empty() {
+            crate::openoats::default_export_dir(&|k| std::env::var(k).ok())
+        } else {
+            PathBuf::from(&cfg.sessions.export_dir)
+        }
+    }
+
+    fn openoats_dir(&self, cfg: &Config) -> PathBuf {
+        if cfg.sessions.openoats_dir.is_empty() {
+            crate::openoats::default_openoats_dir(&|k| std::env::var(k).ok())
+        } else {
+            PathBuf::from(&cfg.sessions.openoats_dir)
+        }
+    }
+
     fn kb_dir(&self, cfg: &Config) -> PathBuf {
         if cfg.kb.dir.is_empty() {
             self.opts
@@ -517,10 +533,10 @@ impl Engine {
                 format!("session {id} already has a transcript; overwrite=true replaces it"),
             ));
         }
-        let meta = &v["metadata"];
+        let meta = v["metadata"].as_object().cloned().unwrap_or_default();
         let audio = Path::new(v["path"].as_str().unwrap_or_default()).join(
-            meta["audioFile"]
-                .as_str()
+            crate::sessions::ext(&meta, "audioFile")
+                .and_then(Value::as_str)
                 .unwrap_or(crate::record::AUDIO_FILE),
         );
         if !audio.is_file() {
@@ -1118,6 +1134,39 @@ impl Engine {
                     query,
                     n,
                 )
+            }
+            Action::SessionExport { session, dir } => {
+                let cfg = &self.snapshot().config;
+                let dir = dir
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.export_dir(cfg));
+                self.store().export_markdown(
+                    session,
+                    &dir,
+                    &cfg.sessions.export_recorder,
+                    crate::openoats::zone_named(&cfg.ui.tz),
+                )
+            }
+            Action::SessionExportOpenoats {
+                session,
+                to,
+                overwrite,
+            } => {
+                let root = to
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.openoats_dir(&self.snapshot().config).join("sessions"));
+                self.store()
+                    .export_openoats(session, &root, overwrite.unwrap_or(false))
+            }
+            Action::TemplateExport { to } => {
+                let cfg = &self.snapshot().config;
+                let to = to
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| self.openoats_dir(cfg).join("templates.json"));
+                templates::export_openoats(&self.templates_dir(cfg), &to)
             }
             Action::SessionImport { from, overwrite } => {
                 let v = self

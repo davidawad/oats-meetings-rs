@@ -221,7 +221,7 @@ fn ollama_backend_generates_and_writes_notes_into_the_session() {
     let meta: Value =
         serde_json::from_str(&std::fs::read_to_string(dir.join("session.json")).unwrap()).unwrap();
     assert_eq!(meta["hasNotes"], true);
-    assert_eq!(meta["notesTemplate"], "Sales Prospect Call");
+    assert_eq!(meta["x_oats"]["notesTemplate"], "Sales Prospect Call");
     assert_eq!(meta["engine"], "parakeet", "OpenOats keys survive");
     // The exact headings the template demands are in the notes.
     for h in ["## CRM", "## Summary", "## Next Step"] {

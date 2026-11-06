@@ -216,6 +216,11 @@ fn no_timing_literals_outside_the_key_table() {
 /// goes on this list with its reason.
 const TRUE_CONSTANTS: &[(&str, &str, &str)] = &[
     (
+        "crates/core/src/openoats.rs",
+        "SLUG_MAX",
+        "openoats/v1 markdown export format: title slugs are at most 60 characters",
+    ),
+    (
         "crates/audio/src/lib.rs",
         "SAMPLE_RATE",
         "recorder output format: 48 kHz mono f32",

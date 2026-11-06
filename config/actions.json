@@ -180,6 +180,47 @@
       "status": "implemented"
     },
     {
+      "doc": "Write a session's OpenOats markdown export (openoats/v1: frontmatter, notes, [hh:mm:ss] **Speaker:** lines) into dir (default sessions.export_dir); re-exporting replaces that session's file.",
+      "effect": "write",
+      "name": "session-export",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "dir",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Copy a session into an OpenOats sessions folder (default: sessions/ in sessions.openoats_dir) in a form OpenOats lists and opens; overwrite=true replaces a different copy there.",
+      "effect": "write",
+      "name": "session-export-openoats",
+      "params": [
+        {
+          "name": "session",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "overwrite",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.",
       "effect": "write",
       "name": "ics-add",
@@ -872,6 +913,19 @@
           "name": "overwrite",
           "required": false,
           "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Merge the note templates into an OpenOats templates.json (default: templates.json in sessions.openoats_dir); same id or name is replaced, other OpenOats templates are kept.",
+      "effect": "write",
+      "name": "template-export",
+      "params": [
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<String>"
         }
       ],
       "status": "implemented"

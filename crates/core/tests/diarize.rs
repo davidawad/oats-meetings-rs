@@ -141,7 +141,9 @@ fn transcribe(chans: &Channels, live: bool) -> Vec<Value> {
 
 /// The voice of the turn an utterance falls in (by its midpoint).
 fn truth(turns: &[Turn], u: &Value) -> Option<usize> {
-    let mid = (u["startSeconds"].as_f64().unwrap() + u["endSeconds"].as_f64().unwrap()) / 2.0;
+    let mid = (u["x_oats"]["startSeconds"].as_f64().unwrap()
+        + u["x_oats"]["endSeconds"].as_f64().unwrap())
+        / 2.0;
     turns
         .iter()
         .find(|t| mid >= t.start && mid <= t.end)
@@ -204,7 +206,7 @@ fn the_microphone_stays_you_whatever_the_voice() {
     let us = transcribe(&chans, false);
     let mic: Vec<&Value> = us
         .iter()
-        .filter(|u| u["startSeconds"].as_f64().unwrap() >= turns.last().unwrap().end)
+        .filter(|u| u["x_oats"]["startSeconds"].as_f64().unwrap() >= turns.last().unwrap().end)
         .collect();
     assert!(!mic.is_empty());
     assert!(mic.iter().all(|u| u["speaker"] == "you"), "{mic:?}");

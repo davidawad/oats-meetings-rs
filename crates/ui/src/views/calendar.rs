@@ -116,21 +116,7 @@ pub(crate) fn feed_of(v: &Value) -> FeedRow {
 
 /// The zone `zone` names, else the system zone (`TZ`, then the OS setting), else UTC.
 pub(crate) fn zone_named(zone: &str) -> Tz {
-    let parse = |z: &str| {
-        // `TZ` may be `:Area/City` or a zoneinfo path.
-        let z = z.trim().trim_start_matches(':');
-        let z = z.rsplit_once("zoneinfo/").map_or(z, |(_, n)| n);
-        z.parse::<Tz>().ok()
-    };
-    parse(zone)
-        .or_else(|| std::env::var("TZ").ok().as_deref().and_then(parse))
-        .or_else(|| {
-            iana_time_zone::get_timezone()
-                .ok()
-                .as_deref()
-                .and_then(parse)
-        })
-        .unwrap_or(Tz::UTC)
+    oats_core::openoats::zone_named(zone)
 }
 
 /// The zone meeting times are shown in: `ui.tz`, empty for the system zone.

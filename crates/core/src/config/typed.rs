@@ -268,7 +268,10 @@ pub enum DeleteMode {
 pub struct Sessions {
     pub confirm_delete: bool,
     pub delete_mode: DeleteMode,
+    pub export_dir: String,
+    pub export_recorder: String,
     pub max_id_len: u32,
+    pub openoats_dir: String,
     pub root: String,
     pub search_snippet_chars: u32,
 }

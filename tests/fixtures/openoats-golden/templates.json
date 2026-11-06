@@ -1,0 +1,1 @@
+{"version":1,"templates":[{"id":"00000000-0000-0000-0000-000000000000","name":"Generic","icon":"doc.text","systemPrompt":"You are a meeting notes assistant.","isBuiltIn":true},{"id":"7D6C1A52-3B7E-4C55-9A0B-2B1E0F4C8D11","name":"Board Prep","icon":"chart.bar","systemPrompt":"## Risks\n## Asks","isBuiltIn":false}]}

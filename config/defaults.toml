@@ -217,8 +217,14 @@ max_key_len = 128
 confirm_delete = true
 # Deleting a session moves it to the OS trash (trash) or removes it for good (remove). Provisional default.
 delete_mode = "trash"
+# Folder session-export writes OpenOats markdown (openoats/v1) into; empty means ~/Documents/oats-meetings/recordings. Dates and file names use ui.tz (empty: the system zone), as OpenOats does.
+export_dir = ""
+# The recorder: name in markdown exports (OpenOats writes the account's full name); empty leaves the line out.
+export_recorder = ""
 # Longest session id (it becomes a directory name).
 max_id_len = 200
+# The OpenOats data folder (its sessions/ and templates.json) session-export-openoats and template-export write into; empty means ~/Library/Application Support/OpenOats.
+openoats_dir = ""
 # Session store directory (OpenOats layout); empty means the per-user data dir.
 root = ""
 # Characters of context kept either side of a transcript-search match in its snippet (the Sessions search shows it under the row).

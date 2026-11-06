@@ -59,6 +59,8 @@ actions! {
     RecordStop, "record-stop", "Stop recording and save the session.", "implemented", "control", {};
     RecordPause, "record-pause", "Pause or resume recording.", "implemented", "control", {};
     SessionImport, "session-import", "Import sessions from an OpenOats sessions root or one session dir.", "implemented", "write", { from: String, overwrite: Option<bool> };
+    SessionExport, "session-export", "Write a session's OpenOats markdown export (openoats/v1: frontmatter, notes, [hh:mm:ss] **Speaker:** lines) into dir (default sessions.export_dir); re-exporting replaces that session's file.", "implemented", "write", { session: String, dir: Option<String> };
+    SessionExportOpenoats, "session-export-openoats", "Copy a session into an OpenOats sessions folder (default: sessions/ in sessions.openoats_dir) in a form OpenOats lists and opens; overwrite=true replaces a different copy there.", "implemented", "write", { session: String, to: Option<String>, overwrite: Option<bool> };
     IcsAdd, "ics-add", "Subscribe to an ICS feed (http, https, webcal or file URL); header is an optional 'Name: value' request header.", "implemented", "write", { name: String, url: String, enabled: Option<bool>, refresh_secs: Option<u64>, header: Option<String> };
     IcsRemove, "ics-remove", "Unsubscribe from a feed and drop its cache.", "implemented", "write", { name: String };
     IcsList, "ics-list", "Subscribed feeds with cache and refresh state.", "implemented", "read", {};
@@ -100,6 +102,7 @@ actions! {
     TemplateSave, "template-save", "Create a note template, or edit (and rename) the one named previous; icon \"\" clears it; overwrite replaces a same-named template on create.", "implemented", "write", { name: String, system_prompt: String, icon: Option<String>, previous: Option<String>, overwrite: Option<bool> };
     TemplateDelete, "template-delete", "Delete a note template file.", "implemented", "write", { name: String };
     TemplateImport, "template-import", "Import an OpenOats templates.json into the templates folder.", "implemented", "write", { from: String, overwrite: Option<bool> };
+    TemplateExport, "template-export", "Merge the note templates into an OpenOats templates.json (default: templates.json in sessions.openoats_dir); same id or name is replaced, other OpenOats templates are kept.", "implemented", "write", { to: Option<String> };
     KbSearch, "kb-search", "Search the knowledge base (deterministic ranking).", "implemented", "read", { query: String, limit: Option<u64> };
     KbReindex, "kb-reindex", "Rebuild the knowledge base index.", "implemented", "write", {};
     UiSelect, "ui-select", "Switch the open GUI window to a tab (Live, Sessions, Notes, Templates, Calendar, Trash, Models, Settings) as a tab-bar click does; returns the ui-state dump. GUI mode only (headless: no_window).", "implemented", "control", { tab: String };

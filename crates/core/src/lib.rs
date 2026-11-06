@@ -9,6 +9,7 @@ pub mod ics;
 pub mod kb;
 pub mod log;
 pub mod notes;
+pub mod openoats;
 pub mod record;
 pub mod secrets;
 pub mod sessions;
