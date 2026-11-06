@@ -177,21 +177,34 @@ fn timed_words(u: &Utt) -> Vec<(String, f64)> {
         .collect()
 }
 
-/// Enough of `you`'s words are, or nearly are (`similarity`), said by the `them` utterances at
-/// the same moment: each word is matched to a distinct remote word estimated within the window of
-/// it. Echo repeats remote words where they were said; a whole-utterance bag of words would also
-/// match double talk that shares common words ("I think we", "the review") with a long remote
-/// sentence anywhere near it (dot-4uzgol.93).
-pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
-    let w = timed_words(you);
-    let mut near: Vec<(String, f64, bool)> = them
-        .iter()
-        .filter(|t| t.start <= you.end + d.window && t.end >= you.start - d.window)
-        .flat_map(timed_words)
+/// Words a conversation shares whatever is said: function words and short replies ("yeah",
+/// "okay", "right"). Both sides say them all the time, so they never make an utterance echo on
+/// their own (dot-4uzgol.94).
+const COMMON: &[&str] = &[
+    "a", "about", "after", "again", "ah", "all", "also", "am", "an", "and", "any", "are", "as",
+    "at", "be", "been", "but", "by", "can", "could", "did", "do", "does", "doing", "done", "for",
+    "from", "get", "go", "going", "got", "had", "has", "have", "he", "her", "here", "hi", "him",
+    "his", "hmm", "how", "i", "if", "in", "is", "it", "its", "just", "know", "like", "ll", "m",
+    "me", "mhm", "mm", "my", "no", "not", "now", "of", "oh", "ok", "okay", "on", "one", "or",
+    "our", "out", "really", "right", "s", "she", "so", "some", "sure", "t", "that", "the", "their",
+    "them", "then", "there", "they", "think", "this", "to", "uh", "um", "up", "us", "ve", "was",
+    "we", "well", "were", "what", "when", "which", "who", "will", "with", "would", "yeah", "yep",
+    "yes", "you", "your",
+];
+
+fn common(w: &str) -> bool {
+    COMMON.binary_search(&w).is_ok()
+}
+
+/// The `you` words that `t` says, or nearly says (`similarity`), at the same moment: each word
+/// matched to a distinct word of `t` estimated within the window of it: (content words, all).
+fn matched(w: &[(String, f64)], t: &Utt, d: &EchoDedupe) -> (usize, usize) {
+    let mut near: Vec<(String, f64, bool)> = timed_words(t)
+        .into_iter()
         .map(|(x, at)| (x, at, false))
         .collect();
-    let mut hits = 0;
-    for (x, at) in &w {
+    let (mut content, mut all) = (0, 0);
+    for (x, at) in w {
         let best = near
             .iter_mut()
             .filter(|(t, t_at, used)| {
@@ -202,10 +215,33 @@ pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
             .min_by(|a, b| (a.1 - at).abs().total_cmp(&(b.1 - at).abs()));
         if let Some(m) = best {
             m.2 = true;
-            hits += 1;
+            all += 1;
+            content += usize::from(!common(x));
         }
     }
-    !w.is_empty() && hits as f32 >= d.overlap * w.len() as f32
+    (content, all)
+}
+
+/// `you` is speaker echo when one remote utterance overlapping it says most of its words
+/// (`overlap`, nearly the same spelling counting, `similarity`) at the same moment, and most of
+/// its content words: words outside `COMMON`. Echo repeats one remote sentence where it was said.
+/// A bag of every remote word near it also matched double talk that shares common words ("I
+/// think we", "the review") with long remote sentences (dot-4uzgol.93); time overlap plus a few
+/// common words or replies ("yeah", "okay, right") is not echo either (dot-4uzgol.94), so an
+/// utterance of common words alone is always kept.
+pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
+    let w = timed_words(you);
+    let content = w.iter().filter(|(x, _)| !common(x)).count();
+    if content == 0 {
+        return false;
+    }
+    let most = |hits: usize, of: usize| hits as f32 >= d.overlap * of as f32;
+    them.iter()
+        .filter(|t| t.start <= you.end + d.window && t.end >= you.start - d.window)
+        .any(|t| {
+            let (c, a) = matched(&w, t, d);
+            most(c, content) && most(a, w.len())
+        })
 }
 
 /// What became of the mic ("you") channel in one pass (dot-4uzgol.93), to find the stage that
@@ -1905,11 +1941,12 @@ mod tests {
         // stt.echo_overlap 100: every word must be in the remote speech.
         let strict = tuning_with(&[("stt.echo_overlap", json!(100))]).echo;
         let partial = vec![
-            utt("remote_1", "We ship on Friday", 0.0),
-            utt("you", "we ship on monday", 0.0),
+            utt("remote_1", "We ship the build on Friday", 0.0),
+            utt("you", "we ship the build on monday", 0.0),
         ];
         assert_eq!(drop_echoes(partial.clone(), "you", strict).len(), 2);
-        assert_eq!(drop_echoes(partial, "you", echo).len(), 1); // 3 of 4 words >= 60%
+        // 5 of 6 words and 2 of 3 content words (not "the", "on") >= 60%
+        assert_eq!(drop_echoes(partial, "you", echo).len(), 1);
     }
 
     #[test]
@@ -2011,6 +2048,92 @@ mod tests {
         let mut all: Vec<Utt> = them.to_vec();
         all.extend(leak.iter().cloned());
         assert_eq!(drop_echoes(all, "you", echo), them.to_vec());
+    }
+
+    /// dot-4uzgol.94: on David's meeting the dedupe still dropped 77 of 103 mic utterances. Near
+    /// end and far end say different sentences at the same time, with the replies and common
+    /// words a conversation shares: every near-end utterance survives, while the far end's own
+    /// sentences heard by the mic still go.
+    #[test]
+    fn double_talk_with_shared_replies_and_common_words_is_never_echo() {
+        let echo = tuning_with(&[]).echo;
+        let them = [
+            said("remote_1", "Yeah.", 10.0, 10.4),
+            said(
+                "remote_1",
+                "Okay, right, so what do we do about it?",
+                10.5,
+                13.0,
+            ),
+            said("remote_2", "Right, yeah, okay.", 13.2, 14.4),
+            said(
+                "remote_1",
+                "I think we can just ship it on Friday then.",
+                15.0,
+                17.5,
+            ),
+            said(
+                "remote_2",
+                "The dashboard numbers look wrong to me since the migration.",
+                20.0,
+                23.5,
+            ),
+            said(
+                "remote_1",
+                "Can you check the billing export before the call?",
+                24.0,
+                27.0,
+            ),
+        ];
+        let you = [
+            // Replies over the far end's replies: the same words at the same moment.
+            said("you", "Yeah.", 10.1, 10.5),
+            said("you", "Okay, right.", 10.6, 11.4),
+            said("you", "Yeah, okay, right.", 13.3, 14.3),
+            // Different sentences in common words over a far-end sentence.
+            said("you", "I think we can do it then.", 15.1, 17.0),
+            said("you", "So what do we do now?", 11.0, 12.6),
+            // Content words of its own, a common word or two at the same time.
+            said(
+                "you",
+                "The pipeline was rebuilt last week after the outage.",
+                20.1,
+                23.4,
+            ),
+            said(
+                "you",
+                "I can check the invoices tomorrow morning.",
+                24.2,
+                26.8,
+            ),
+        ];
+        let mut all: Vec<Utt> = them.to_vec();
+        all.extend(you.iter().cloned());
+        assert_eq!(
+            drop_echoes(all.clone(), "you", echo),
+            all,
+            "every near-end utterance survives"
+        );
+        // The far end heard by the mic: still dropped, misheard in places, a fragment.
+        let leak = [
+            said(
+                "you",
+                "The dashboard numbers look wrong to me since the migrations.",
+                20.05,
+                23.6,
+            ),
+            said("you", "can you check the billing exports", 24.05, 25.9),
+            said("you", "ship it on friday", 16.0, 17.5),
+        ];
+        let mut all: Vec<Utt> = them.to_vec();
+        all.extend(leak.iter().cloned());
+        assert_eq!(
+            drop_echoes(all, "you", echo),
+            them.to_vec(),
+            "no echo leaks"
+        );
+        // The list is searched by bisection.
+        assert!(COMMON.windows(2).all(|p| p[0] < p[1]));
     }
 
     /// Says the near-end script for quiet audio (the mic), the far-end one for loud (the

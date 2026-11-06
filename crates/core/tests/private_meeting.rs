@@ -511,8 +511,9 @@ fn openoats_compat_round_trip() {
 
 /// The final pass re-run with this build over the oats-rs take's audio.wav (default config, the
 /// configured local model), against the OpenOats take: WER per side, echo left on the `you`
-/// channel, and the per-stage mic counts (dot-4uzgol.93). The recorded transcripts are what an
-/// older build wrote; this is what the current one writes. Skips, saying why, when this test
+/// channel, and the per-stage mic counts (dot-4uzgol.93); `wer_you` and `kept` again with the echo
+/// dedupe off (`_no_dedupe`, dot-4uzgol.94). The recorded transcripts are what an older build
+/// wrote; this is what the current one writes. Skips, saying why, when this test
 /// binary has no runtime for the model (add `--features oats-core/parakeet` or `whisper`).
 #[test]
 #[ignore = "private fixture, carbon only"]
@@ -535,6 +536,10 @@ fn final_pass_rerun_against_the_openoats_take() {
     };
     let chans = wav::read(&dir.join("audio.wav")).expect("audio.wav does not decode");
     let (ours, stages) = final_utts(&*asr, &s, &chans).expect("final pass failed");
+    // The same pass with the echo dedupe off (dot-4uzgol.94): what the dedupe costs the you side.
+    let mut raw = s.clone();
+    raw.tuning.echo = None;
+    let (all, raw_stages) = final_utts(&*asr, &raw, &chans).expect("final pass failed");
     let base = transcript(&session(&fx, "openoats"));
     let text = |us: &[Utt], you: bool| {
         us.iter()
@@ -582,5 +587,10 @@ fn final_pass_rerun_against_the_openoats_take() {
     ] {
         kv.push((k, st[k].to_string()));
     }
+    kv.push((
+        "wer_you_no_dedupe",
+        f3(wer(&joined(&base, is_you), &text(&all, true))),
+    ));
+    kv.push(("kept_no_dedupe", raw_stages.kept.to_string()));
     row("rerun", &kv);
 }

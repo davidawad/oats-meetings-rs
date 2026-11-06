@@ -1349,7 +1349,7 @@
         },
         "echo_overlap": {
           "default": 60,
-          "description": "Percent of a local-speaker utterance's words that remote speech must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo.",
+          "description": "Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.",
           "maximum": 100,
           "minimum": 1,
           "type": "integer",

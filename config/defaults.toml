@@ -244,7 +244,7 @@ search_snippet_chars = 40
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
-# Percent of a local-speaker utterance's words that remote speech must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo.
+# Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.
 echo_overlap = 60
 # Percent: a local-speaker word counts as appearing in remote speech (stt.echo_overlap) when its letter edit-distance similarity to a remote word is at least this, so a misheard echo ('Oaks meeting' for 'Oats Meetings') is still dropped. 100 asks for the exact word.
 echo_similarity = 75

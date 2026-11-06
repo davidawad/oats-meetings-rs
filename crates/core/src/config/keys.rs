@@ -766,7 +766,7 @@ pub const KEYS: &[Key] = &[
         path: "stt.echo_overlap",
         kind: Kind::Int { min: 1, max: 100 },
         default: Def::I(60),
-        doc: "Percent of a local-speaker utterance's words that remote speech must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo.",
+        doc: "Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.",
         ui: false,
         reload: Reload::Live,
     },
