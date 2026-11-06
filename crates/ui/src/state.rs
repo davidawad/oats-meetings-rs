@@ -329,6 +329,10 @@ pub struct State {
     pub status: String,
     pub sessions_ui: crate::views::sessions::Ui,
     pub settings_ui: crate::views::settings::Ui,
+    /// The Settings tab's Hooks panel (`views::hooks`).
+    pub hooks_ui: crate::views::hooks::Ui,
+    /// The last failed hook run, as the banner says it, until dismissed.
+    pub hook_failure: Option<String>,
     /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
     /// status line.
     pub model: Option<(String, String)>,
@@ -581,6 +585,21 @@ impl State {
                 self.live_session = Some(session.clone());
                 self.status = format!("Saved session {session}");
             }
+            Some("hook-finished") => {
+                // The Hooks panel re-reads its runs; a failure raises the banner.
+                self.hooks_ui.list = Value::Null;
+                if d["ok"] == false {
+                    let why = d["error"]
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("exit code {}", d["exit_code"]));
+                    self.hook_failure = Some(format!(
+                        "Hook {} ({}) failed: {why}",
+                        d["hook"].as_str().unwrap_or_default(),
+                        d["event"].as_str().unwrap_or_default()
+                    ));
+                }
+            }
             Some("segment") if d["kind"].as_str().unwrap_or("live") == "live" => {
                 if self
                     .live_session
@@ -651,6 +670,9 @@ impl State {
         }
         if e.path == crate::views::settings::SEARCH {
             return crate::views::settings::commit(self);
+        }
+        if crate::views::hooks::is_ours(e.path) {
+            return crate::views::hooks::commit(self);
         }
         match model::dispatch(
             engine,

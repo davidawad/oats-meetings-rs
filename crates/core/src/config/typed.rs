@@ -42,6 +42,7 @@ pub struct Config {
     pub calendar: Calendar,
     pub config: ConfigSection,
     pub control: Control,
+    pub hooks: Vec<crate::hooks::Hook>,
     pub kb: Kb,
     pub ics: Ics,
     pub license: License,
@@ -59,6 +60,10 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct App {
+    pub hook_history: u32,
+    pub hook_output: u32,
+    pub hook_poll: Dur,
+    pub hook_timeout: Dur,
     pub menubar: bool,
     pub single_instance: bool,
 }

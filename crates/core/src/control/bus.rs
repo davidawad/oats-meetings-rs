@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use serde_json::{json, Value};
 
@@ -12,10 +12,14 @@ struct Sub {
     tx: SyncSender<String>,
 }
 
+/// Sees every event as it is published (the engine's hook runner); must return at once.
+pub type Tap = Box<dyn Fn(&str, &Value) + Send + Sync>;
+
 #[derive(Default)]
 pub struct Bus {
     subs: Mutex<Vec<Sub>>,
     seq: AtomicU64,
+    tap: RwLock<Option<Tap>>,
 }
 
 impl Bus {
@@ -32,7 +36,15 @@ impl Bus {
         rx
     }
 
+    /// Install the one tap (or remove it with `None`).
+    pub fn set_tap(&self, tap: Option<Tap>) {
+        *self.tap.write().expect("bus tap") = tap;
+    }
+
     pub fn publish(&self, topic: &str, data: Value) {
+        if let Some(tap) = self.tap.read().expect("bus tap").as_ref() {
+            tap(topic, &data);
+        }
         let seq = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let line = json!({
             "event": topic, "seq": seq, "data": data,

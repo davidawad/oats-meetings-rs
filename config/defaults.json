@@ -1,5 +1,9 @@
 {
   "app": {
+    "hook_history": 50,
+    "hook_output": 65536,
+    "hook_poll": "20ms",
+    "hook_timeout": "30s",
     "menubar": false,
     "single_instance": true
   },
@@ -60,6 +64,7 @@
     "max_line": 1048576,
     "socket": ""
   },
+  "hooks": [],
   "ics": {
     "all_day": "include",
     "allow_file": true,

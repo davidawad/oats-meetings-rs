@@ -48,7 +48,14 @@ fn cloud_pack_differs_from_default_only_in_pack_keys() {
     let (ca, cb) = (&a["data"]["config"], &b["data"]["config"]);
     let mut changed = vec![];
     for (sec, m) in ca.as_object().unwrap() {
-        for (k, v) in m.as_object().unwrap() {
+        // A root list ([[hooks]]) is a leaf, not a section.
+        let Some(m) = m.as_object() else {
+            if &cb[sec] != m {
+                changed.push(sec.clone());
+            }
+            continue;
+        };
+        for (k, v) in m {
             if &cb[sec][k] != v {
                 changed.push(format!("{sec}.{k}"));
             }

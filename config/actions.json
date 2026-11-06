@@ -931,6 +931,158 @@
       "status": "implemented"
     },
     {
+      "doc": "The [[hooks]] entries (name, event, command, timeout, enabled, the last run) and the recent hook runs with exit code, timing and output, newest first.",
+      "effect": "read",
+      "name": "hook-list",
+      "params": [],
+      "status": "implemented"
+    },
+    {
+      "doc": "Run one hook now (by name or 1-based position, enabled or not) as if its event (or event) happened for session (default: the newest), wait for it and return the run: exit code, timed_out, stdout and stderr.",
+      "effect": "control",
+      "name": "hook-test",
+      "params": [
+        {
+          "name": "hook",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "event",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.",
+      "effect": "write",
+      "name": "hook-add",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "event",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "command",
+          "required": true,
+          "type": "Value"
+        },
+        {
+          "name": "shell",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "timeout",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "cwd",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Change fields of a hook (by name or 1-based position); timeout \"\" goes back to app.hook_timeout.",
+      "effect": "write",
+      "name": "hook-edit",
+      "params": [
+        {
+          "name": "hook",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "name",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "event",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "command",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "shell",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "timeout",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "cwd",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Remove a hook (by name or 1-based position).",
+      "effect": "write",
+      "name": "hook-remove",
+      "params": [
+        {
+          "name": "hook",
+          "required": true,
+          "type": "String"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Turn a hook on (default) or off.",
+      "effect": "write",
+      "name": "hook-enable",
+      "params": [
+        {
+          "name": "hook",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Search the knowledge base (deterministic ranking).",
       "effect": "read",
       "name": "kb-search",
@@ -1008,6 +1160,7 @@
     "session-saved",
     "session-deleted",
     "ics-updated",
+    "hook-finished",
     "quit"
   ],
   "schema_version": 1

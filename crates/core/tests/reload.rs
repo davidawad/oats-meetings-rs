@@ -110,6 +110,11 @@ fn samples(k: &oats_core::config::keys::Key, dir: &Path) -> Vec<Value> {
         Kind::Str => vec![json!("sample-x"), json!("sample-y")],
         // No default uses alt, so these clash with no other command; empty disables it.
         Kind::Keys => vec![json!("mod-alt-1, alt-shift-f12"), json!("")],
+        Kind::Hooks => vec![
+            json!([{"name": "done", "event": "record.stop", "command": ["true"]}]),
+            json!([{"event": "notes.generated", "command": ["echo hi"], "shell": true,
+                    "timeout": "5s", "enabled": false, "cwd": "/tmp"}]),
+        ],
     }
 }
 

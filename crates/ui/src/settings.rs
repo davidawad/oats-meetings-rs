@@ -80,6 +80,8 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
             min_ms,
             max_ms,
         },
+        // Edited in the Hooks panel (`views::hooks`), never as a row.
+        Kind::Hooks => Widget::Text(String::new()),
         Kind::Keys => Widget::Keys(
             shortcut::parse_list(value.and_then(Value::as_str).unwrap_or_default())
                 .unwrap_or_default(),
@@ -106,6 +108,7 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Keyboard shortcuts", &["ui.keys."]),
+    ("Hooks", &["app.hook_timeout", "hooks"]),
     ("Window", &["ui.", "app.", "config."]),
     ("Sessions", &["sessions."]),
     ("Notes and templates", &["notes.", "templates.", "llm."]),
@@ -127,6 +130,7 @@ const LABELS: &[(&str, &str)] = &[
         "Hide the window from screen capture",
     ),
     ("ui.monitor", "Input monitor"),
+    ("app.hook_timeout", "Hook timeout"),
     ("ui.theme", "Theme"),
     ("ui.show_elapsed", "Show elapsed time"),
     ("ui.tz", "Time zone"),
@@ -370,7 +374,7 @@ mod tests {
             let values: Vec<Value> = match k.kind {
                 Kind::Bool => vec![json!(true), json!(false)],
                 Kind::Enum(o) => o.iter().map(|s| json!(s)).collect(),
-                Kind::Str | Kind::Keys => continue,
+                Kind::Str | Kind::Keys | Kind::Hooks => continue,
                 // The bounds are the values a number / duration row must be able to write.
                 Kind::Int { min, max } => vec![json!(min), json!(max)],
                 Kind::Duration { min_ms, max_ms } => {

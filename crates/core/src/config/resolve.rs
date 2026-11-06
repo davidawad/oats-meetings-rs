@@ -113,9 +113,18 @@ pub fn validate_layer(flat: &Flat, layer: &str) -> Result<()> {
                     ));
                 }
             }
+            (Kind::Hooks, Value::Array(_)) => {
+                if let Err(e) = crate::hooks::parse(v) {
+                    return Err(ConfigError::new(
+                        e.code,
+                        format!("'{path}' in {layer}: {}", e.message),
+                    ));
+                }
+            }
             (kind, other) => {
                 let want = match kind {
                     Kind::Bool => "boolean",
+                    Kind::Hooks => "array of [[hooks]] tables",
                     Kind::Int { .. } => "whole number",
                     Kind::Duration { .. } => "duration string like \"15s\"",
                     _ => "string",

@@ -216,6 +216,12 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "template-get",
     "template-save",
     "template-delete",
+    "hook-list",
+    "hook-test",
+    "hook-add",
+    "hook-edit",
+    "hook-remove",
+    "hook-enable",
 ];
 
 /// Actions with deliberately no UI surface: protocol plumbing, or batch/automation verbs that need

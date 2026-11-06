@@ -21,6 +21,8 @@ pub enum Kind {
     },
     /// Keyboard shortcuts: comma-separated keystrokes (`config::shortcut`), empty for none.
     Keys,
+    /// The `[[hooks]]` array of tables (`crate::hooks::Hook`), empty for none.
+    Hooks,
 }
 
 pub const MS: u64 = 1;
@@ -91,6 +93,8 @@ pub enum Def {
     I(i64),
     /// Milliseconds; rendered as a duration string.
     D(u64),
+    /// An empty array (the `[[hooks]]` list).
+    Empty,
 }
 
 impl Def {
@@ -100,6 +104,7 @@ impl Def {
             Def::S(s) => Value::String(s.to_string()),
             Def::I(n) => Value::from(n),
             Def::D(ms) => Value::String(format_duration_ms(ms)),
+            Def::Empty => Value::Array(vec![]),
         }
     }
 }
@@ -779,6 +784,46 @@ pub const KEYS: &[Key] = &[
         kind: Kind::Int { min: 1_024, max: 1_073_741_824 },
         default: Def::I(8_388_608),
         doc: "Largest cloud transcription reply accepted, in bytes.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "hooks",
+        kind: Kind::Hooks,
+        default: Def::Empty,
+        doc: "Commands run on recording and session events, one [[hooks]] table each: event (record.start, record.stop, record.pause, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array; run through the shell only with shell = true), optional name, timeout (default app.hook_timeout), enabled (default true) and cwd (default the session folder). A hook gets OATS_EVENT, OATS_SESSION_ID, OATS_SESSION_DIR, OATS_TITLE, OATS_AUDIO, OATS_TRANSCRIPT and OATS_HOOK in its environment and the event as JSON on stdin. Hooks run in the background and never stop a recording; hook-list shows each run's exit code and output. Edit with hook-add / -edit / -remove / -enable.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "app.hook_timeout",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: HOUR },
+        default: Def::D(30 * SEC),
+        doc: "How long a hook may run before it is killed, when its [[hooks]] entry sets no timeout. A hook's own timeout must be in the same range.",
+        ui: true,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "app.hook_output",
+        kind: Kind::Int { min: 0, max: 16_777_216 },
+        default: Def::I(65_536),
+        doc: "Bytes of a hook run's stdout and of its stderr kept for hook-list and Settings; the rest is read and dropped.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "app.hook_history",
+        kind: Kind::Int { min: 1, max: 10_000 },
+        default: Def::I(50),
+        doc: "Hook runs kept (newest first) for hook-list and Settings.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "app.hook_poll",
+        kind: Kind::Duration { min_ms: MS, max_ms: SEC },
+        default: Def::D(20 * MS),
+        doc: "How often a running hook is checked for having exited (and against its timeout).",
         ui: false,
         reload: Reload::Live,
     },
@@ -1565,7 +1610,7 @@ pub fn choices() -> Vec<(&'static str, Vec<String>)> {
         .filter_map(|k| match k.kind {
             Kind::Bool => Some((k.path, vec!["true".to_string(), "false".to_string()])),
             Kind::Enum(vs) => Some((k.path, vs.iter().map(|v| v.to_string()).collect())),
-            Kind::Str | Kind::Int { .. } | Kind::Duration { .. } | Kind::Keys => None,
+            Kind::Str | Kind::Int { .. } | Kind::Duration { .. } | Kind::Keys | Kind::Hooks => None,
         })
         .collect()
 }

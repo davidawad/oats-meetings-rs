@@ -173,6 +173,36 @@ pub const OPS: &[(&str, &str, &str)] = &[
         "",
         "Allow Calendars access (the one macOS prompt, only while undetermined)",
     ),
+    (
+        "settings.hook_add",
+        "name, event, command, shell?, timeout?, cwd?",
+        "Hooks: Add hook, fill the form (command: program and arguments, or with shell the script), Save",
+    ),
+    (
+        "settings.hook_edit",
+        "hook, name?, event?, command?, shell?, timeout?, cwd?",
+        "Hooks: a hook's Edit, change the given fields, Save",
+    ),
+    (
+        "settings.hook_enable",
+        "hook, enabled?",
+        "Hooks: a hook's on/off toggle",
+    ),
+    (
+        "settings.hook_test",
+        "hook",
+        "Hooks: a hook's Test (runs it now in the background; the run shows on its row)",
+    ),
+    (
+        "settings.hook_remove",
+        "hook",
+        "Hooks: a hook's Remove (first call arms, second removes)",
+    ),
+    (
+        "settings.hook_dismiss",
+        "",
+        "Dismiss the failed-hook banner",
+    ),
 ];
 
 fn bad(msg: impl Into<String>) -> ConfigError {
@@ -503,6 +533,49 @@ impl MainWindow {
                 }
                 views::settings::commit(&mut self.state);
             }
+            "settings.hook_add" | "settings.hook_edit" => {
+                let hook = if op == "settings.hook_edit" {
+                    Some(need(args, op, "hook")?.to_string())
+                } else {
+                    for k in ["name", "event", "command"] {
+                        need(args, op, k)?;
+                    }
+                    None
+                };
+                views::hooks::prepare(&mut self.state, &self.engine);
+                views::hooks::open(&mut self.state, hook.as_deref());
+                if let Some(d) = self.state.hooks_ui.draft.as_mut() {
+                    for (k, f) in [
+                        ("name", &mut d.name),
+                        ("event", &mut d.event),
+                        ("command", &mut d.command),
+                        ("timeout", &mut d.timeout),
+                        ("cwd", &mut d.cwd),
+                    ] {
+                        if let Some(v) = arg(args, k) {
+                            *f = v.to_string();
+                        }
+                    }
+                    if let Some(b) = args.get("shell").and_then(Value::as_bool) {
+                        d.shell = b;
+                    }
+                }
+                views::hooks::save(&mut self.state, &self.engine);
+            }
+            "settings.hook_enable" => {
+                let hook = need(args, op, "hook")?.to_string();
+                let on = args.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+                views::hooks::enable(&mut self.state, &self.engine, &hook, on);
+            }
+            "settings.hook_test" => {
+                let hook = need(args, op, "hook")?.to_string();
+                views::hooks::test(self, &hook, cx);
+            }
+            "settings.hook_remove" => {
+                let hook = need(args, op, "hook")?.to_string();
+                views::hooks::remove(&mut self.state, &self.engine, &hook);
+            }
+            "settings.hook_dismiss" => self.state.hook_failure = None,
             _ => unreachable!("listed in OPS"),
         }
         Ok(())
@@ -534,7 +607,10 @@ impl MainWindow {
                     c.load(self);
                 }
             }
-            Tab::Settings => calendar_sources::prepare(self, cx),
+            Tab::Settings => {
+                calendar_sources::prepare(self, cx);
+                views::hooks::prepare(&mut self.state, &self.engine);
+            }
             _ => {}
         }
     }
@@ -704,6 +780,7 @@ impl MainWindow {
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
                 "calendar_sources": cx.default_global::<calendar_sources::Sources>().dump(),
+                "hooks": st.hooks_ui.dump(),
             }),
         };
         json!({
@@ -712,6 +789,7 @@ impl MainWindow {
             "theme": self.theme.name(),
             "status": st.status,
             "banner": st.stt_problem.as_ref().map(|p| json!({"message": p.message, "fix": p.fix})),
+            "hook_banner": st.hook_failure,
             "recording": {
                 "state": rec_state,
                 "session": st.rec.session(),

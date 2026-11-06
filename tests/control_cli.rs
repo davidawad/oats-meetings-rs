@@ -291,3 +291,41 @@ fn engine_store_for_meeting_compat() {
         .unwrap();
     assert!(status.success());
 }
+
+/// `ctl hook-add`, `hook-list` and `hook-test` (dot-4uzgol.89): a record.stop hook that writes the
+/// session id to a scratch file, run by hand against an imported session.
+#[cfg(unix)]
+#[test]
+fn ctl_hook_add_list_and_test_write_the_session_id() {
+    let e = Engine::start();
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/openoats");
+    let (code, out, err) = e.ctl(&["--json", "session", "import", "--from", fixture]);
+    assert_eq!(code, 0, "{out} {err}");
+    let scratch = format!("{}.scratch", e.cfg);
+    let script = format!("printf %s \"$OATS_SESSION_ID\" > {scratch}");
+    let cmd = serde_json::to_string(&[script]).unwrap();
+    let (code, out, err) = e.ctl(&[
+        "--json",
+        "hook-add",
+        "scratch",
+        "record.stop",
+        &cmd,
+        "--shell",
+        "true",
+    ]);
+    assert_eq!(code, 0, "{out} {err}");
+    let cfg = std::fs::read_to_string(&e.cfg).unwrap();
+    assert!(cfg.contains("[[hooks]]\nname = \"scratch\""), "{cfg}");
+    let (code, out, _) = e.ctl(&["--json", "hook-list"]);
+    assert_eq!(code, 0);
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["data"]["hooks"][0]["name"], "scratch", "{v}");
+    assert_eq!(v["data"]["hooks"][0]["event"], "record.stop");
+    let id = fixture_ids().pop().unwrap();
+    let (code, out, err) = e.ctl(&["--json", "hook-test", "scratch", "--session", &id]);
+    assert_eq!(code, 0, "{out} {err}");
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(v["data"]["ok"], true, "{v}");
+    assert_eq!(v["data"]["exit_code"], 0);
+    assert_eq!(std::fs::read_to_string(&scratch).unwrap(), id);
+}

@@ -4,6 +4,7 @@
 
 pub mod calendar;
 pub mod calendar_sources;
+pub mod hooks;
 pub mod models;
 pub mod notes;
 pub mod sessions;

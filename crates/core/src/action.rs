@@ -103,6 +103,12 @@ actions! {
     TemplateDelete, "template-delete", "Delete a note template file.", "implemented", "write", { name: String };
     TemplateImport, "template-import", "Import an OpenOats templates.json into the templates folder.", "implemented", "write", { from: String, overwrite: Option<bool> };
     TemplateExport, "template-export", "Merge the note templates into an OpenOats templates.json (default: templates.json in sessions.openoats_dir); same id or name is replaced, other OpenOats templates are kept.", "implemented", "write", { to: Option<String> };
+    HookList, "hook-list", "The [[hooks]] entries (name, event, command, timeout, enabled, the last run) and the recent hook runs with exit code, timing and output, newest first.", "implemented", "read", {};
+    HookTest, "hook-test", "Run one hook now (by name or 1-based position, enabled or not) as if its event (or event) happened for session (default: the newest), wait for it and return the run: exit code, timed_out, stdout and stderr.", "implemented", "control", { hook: String, session: Option<String>, event: Option<String> };
+    HookAdd, "hook-add", "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.", "implemented", "write", { name: String, event: String, command: Value, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
+    HookEdit, "hook-edit", "Change fields of a hook (by name or 1-based position); timeout \"\" goes back to app.hook_timeout.", "implemented", "write", { hook: String, name: Option<String>, event: Option<String>, command: Option<Value>, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
+    HookRemove, "hook-remove", "Remove a hook (by name or 1-based position).", "implemented", "write", { hook: String };
+    HookEnable, "hook-enable", "Turn a hook on (default) or off.", "implemented", "write", { hook: String, enabled: Option<bool> };
     KbSearch, "kb-search", "Search the knowledge base (deterministic ranking).", "implemented", "read", { query: String, limit: Option<u64> };
     KbReindex, "kb-reindex", "Rebuild the knowledge base index.", "implemented", "write", {};
     UiSelect, "ui-select", "Switch the open GUI window to a tab (Live, Sessions, Notes, Templates, Calendar, Trash, Models, Settings) as a tab-bar click does; returns the ui-state dump. GUI mode only (headless: no_window).", "implemented", "control", { tab: String };
@@ -124,6 +130,7 @@ pub const EVENTS: &[&str] = &[
     "session-saved",
     "session-deleted",
     "ics-updated",
+    "hook-finished",
     "quit",
 ];
 

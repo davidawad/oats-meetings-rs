@@ -562,25 +562,45 @@ impl MainWindow {
         }))
     }
 
-    /// The transcription-unavailable banner, with a button when an action fixes it.
+    /// The banners: transcription unavailable (with a button when an action fixes it), and the
+    /// last failed hook run (dismissable; its output is in Settings > Hooks).
     pub(crate) fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let p = self.state.stt_problem.as_ref()?;
-        let (lead, rest) = match p.message.split_once(": ") {
-            Some((a, b)) => (format!("{a}."), b.to_string()),
-            None => (p.message.clone(), String::new()),
-        };
-        let mut row = kit::banner(false, lead, rest);
-        if let Some(fix) = p.fix.clone() {
-            row = row.child(
-                kit::button("stt-fix", "Download model", Kind::Primary, Size::Sm, true).on_click(
-                    cx.listener(move |this, _, _, cx| {
-                        this.state.act(&this.engine, &fix, json!({}));
+        let mut rows = vec![];
+        if let Some(p) = self.state.stt_problem.as_ref() {
+            let (lead, rest) = match p.message.split_once(": ") {
+                Some((a, b)) => (format!("{a}."), b.to_string()),
+                None => (p.message.clone(), String::new()),
+            };
+            let mut row = kit::banner(false, lead, rest);
+            if let Some(fix) = p.fix.clone() {
+                row = row.child(
+                    kit::button("stt-fix", "Download model", Kind::Primary, Size::Sm, true)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.state.act(&this.engine, &fix, json!({}));
+                            cx.notify();
+                        })),
+                );
+            }
+            rows.push(row);
+        }
+        if let Some(msg) = self.state.hook_failure.as_ref() {
+            let (lead, rest) = match msg.split_once(": ") {
+                Some((a, b)) => (
+                    format!("{a}."),
+                    format!("{b} (Settings > Hooks has its output)"),
+                ),
+                None => (msg.clone(), String::new()),
+            };
+            rows.push(kit::banner(true, lead, rest).child(
+                kit::button("hook-dismiss", "Dismiss", Kind::Secondary, Size::Sm, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state.hook_failure = None;
                         cx.notify();
                     }),
                 ),
-            );
+            ));
         }
-        Some(row)
+        (!rows.is_empty()).then(|| div().flex().flex_col().gap(px(8.)).children(rows))
     }
 
     pub(crate) fn speaker_width(&self) -> f32 {

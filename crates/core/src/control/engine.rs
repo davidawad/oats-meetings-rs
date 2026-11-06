@@ -131,6 +131,8 @@ pub struct Engine {
     transcribe_lock: Mutex<()>,
     ui: RwLock<Option<Arc<dyn UiPort>>>,
     event_store: crate::calendar::StoreSlot,
+    /// The hook runs so far (`hook-list`).
+    pub(crate) hooks: crate::hooks::Runner,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -181,6 +183,9 @@ impl Subsystem for SessionsSubsystem {
 /// Set `key` (dotted) in a TOML document, keeping every comment and the layout around it.
 fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Result<()> {
     use toml_edit::{Item, Table, TableLike};
+    if let Value::Array(items) = value {
+        return set_tables_in_doc(doc, key, items);
+    }
     let new_val: toml_edit::Value = match value {
         Value::Bool(b) => (*b).into(),
         Value::String(s) => s.as_str().into(),
@@ -221,6 +226,40 @@ fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Res
             cur.insert(leaf, Item::Value(new_val));
         }
     }
+    Ok(())
+}
+
+/// Set `key` to an array of tables (`[[hooks]]`), or remove it when `items` is empty.
+fn set_tables_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, items: &[Value]) -> Result<()> {
+    use toml_edit::{ArrayOfTables, Item};
+    let bad = |e: String| ConfigError::new("type_mismatch", format!("'{key}': {e}"));
+    if key.contains('.') {
+        return Err(bad("only a top-level key holds an array of tables".into()));
+    }
+    if items.is_empty() {
+        doc.remove(key);
+        return Ok(());
+    }
+    let mut aot = ArrayOfTables::new();
+    for it in items {
+        if !it.is_object() {
+            return Err(bad(format!("{it} is not a table")));
+        }
+        let tv: toml::Value = serde_json::from_value(it.clone()).map_err(|e| bad(e.to_string()))?;
+        let text = toml::to_string(&tv).map_err(|e| bad(e.to_string()))?;
+        let one: toml_edit::DocumentMut = text.parse().map_err(|e| bad(format!("{e}")))?;
+        let mut t = one.as_table().clone();
+        // Known fields in their documented order (name, event, command, ...), the rest after.
+        let rank = |k: &str| {
+            crate::hooks::FIELDS
+                .iter()
+                .position(|f| *f == k)
+                .unwrap_or(crate::hooks::FIELDS.len())
+        };
+        t.sort_values_by(|a, _, b, _| rank(a.get()).cmp(&rank(b.get())));
+        aot.push(t);
+    }
+    doc.insert(key, Item::ArrayOfTables(aot));
     Ok(())
 }
 
@@ -318,7 +357,15 @@ impl Engine {
             transcribe_lock: Mutex::new(()),
             ui: RwLock::new(None),
             event_store: crate::calendar::StoreSlot::default(),
+            hooks: crate::hooks::Runner::default(),
         });
+        // Hooks follow the published events; the tap only starts threads, so it never blocks.
+        let me = Arc::downgrade(&engine);
+        engine.bus.set_tap(Some(Box::new(move |topic, data| {
+            if let Some(e) = me.upgrade() {
+                crate::hooks::on_event(&e, topic, data);
+            }
+        })));
         engine.register(Arc::new(SessionsSubsystem));
         engine.register(Arc::new(notes::NotesSubsystem));
         engine.register(Arc::new(crate::ics::IcsSubsystem::new(Arc::downgrade(
@@ -784,6 +831,8 @@ impl Engine {
             (Kind::Str | Kind::Enum(_) | Kind::Keys, Value::Number(n)) => {
                 Value::String(n.to_string())
             }
+            // `ctl config-set hooks '[{...}]'` passes the list as JSON text.
+            (Kind::Hooks, Value::String(s)) => serde_json::from_str(s).unwrap_or(value.clone()),
             _ => value.clone(),
         })
     }
@@ -1091,6 +1140,13 @@ impl Engine {
                 )?;
                 if !dry {
                     self.session_event(session, "notes");
+                    if let Some(me) = self.me.upgrade() {
+                        crate::hooks::fire(
+                            &me,
+                            "notes.generated",
+                            json!({"session": session, "template": template, "notes": v.clone()}),
+                        );
+                    }
                 }
                 Ok(v)
             }
@@ -1230,6 +1286,12 @@ impl Engine {
             | Action::IcsList {}
             | Action::IcsRefresh { .. }
             | Action::IcsEvents { .. } => crate::ics::dispatch(self, a),
+            Action::HookList {}
+            | Action::HookTest { .. }
+            | Action::HookAdd { .. }
+            | Action::HookEdit { .. }
+            | Action::HookRemove { .. }
+            | Action::HookEnable { .. } => crate::hooks::dispatch(self, a),
             Action::CalendarSourcesList {}
             | Action::CalendarSourceAdd { .. }
             | Action::CalendarSourceRemove { .. }

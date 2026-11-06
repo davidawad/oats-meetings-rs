@@ -4,6 +4,7 @@ pub mod action;
 pub mod calendar;
 pub mod config;
 pub mod control;
+pub mod hooks;
 pub mod http;
 pub mod ics;
 pub mod kb;

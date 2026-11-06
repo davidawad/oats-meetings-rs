@@ -48,11 +48,20 @@ pub fn defaults_toml() -> String {
     // One header per table, parents before children, whatever order the key paths sort in.
     let mut tables: std::collections::BTreeMap<&str, Vec<(&str, &super::keys::Key)>> =
         std::collections::BTreeMap::new();
+    // Undotted keys (the `[[hooks]]` list) are root values: they come before the first header.
+    let mut root = String::new();
     for k in sorted_keys() {
-        let (table, leaf) = k.path.rsplit_once('.').expect("keys are dotted");
-        tables.entry(table).or_default().push((leaf, k));
+        match k.path.rsplit_once('.') {
+            Some((table, leaf)) => tables.entry(table).or_default().push((leaf, k)),
+            None => root.push_str(&format!(
+                "\n# {}\n{} = {}\n",
+                k.doc,
+                k.path,
+                toml_lit(&k.default.to_json())
+            )),
+        }
     }
-    let mut out = format!("# {MARKER}\n");
+    let mut out = format!("# {MARKER}\n{root}");
     for (table, leaves) in tables {
         out.push_str(&format!("\n[{table}]\n"));
         for (leaf, k) in leaves {
@@ -95,6 +104,11 @@ pub fn schema_json() -> String {
             Kind::Keys => {
                 leaf.insert("type".into(), json!("string"));
                 leaf.insert("x-kind".into(), json!("keys"));
+            }
+            Kind::Hooks => {
+                leaf.insert("type".into(), json!("array"));
+                leaf.insert("x-kind".into(), json!("hooks"));
+                leaf.insert("items".into(), crate::hooks::item_schema());
             }
             Kind::Enum(vs) => {
                 leaf.insert("type".into(), json!("string"));

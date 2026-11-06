@@ -466,6 +466,9 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         if g.name == "Calendar" {
             col = col.child(super::calendar_sources::panel(w, cx));
         }
+        if g.name == "Hooks" {
+            col = col.child(super::hooks::panel(w, cx));
+        }
     }
     div()
         .flex()
@@ -479,6 +482,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
 
 /// Before a frame: Enter's jump scrolls the rows back to the top, where the first match now is.
 pub(crate) fn prepare(w: &mut MainWindow) {
+    super::hooks::prepare(&mut w.state, &w.engine);
     if std::mem::take(&mut w.state.settings_ui.jump) {
         w.settings_scroll.set_offset(point(px(0.), px(0.)));
     }
