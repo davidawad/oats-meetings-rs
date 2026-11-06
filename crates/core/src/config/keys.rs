@@ -153,10 +153,15 @@ pub const STT_PROVIDERS: &[&str] = &["auto", "cpu", "coreml"];
 pub const STT_BACKENDS: &[&str] = &["local", "cloud"];
 /// How the system-audio channel is split by voice (dot-4uzgol.83): auto is neural on macOS and
 /// sherpa-onnx elsewhere; neural and sherpa-onnx fall back to spectral when their model is missing.
-pub const STT_DIARIZATION_ALGORITHMS: &[&str] = &["auto", "spectral", "neural", "sherpa-onnx", "off"];
+pub const STT_DIARIZATION_ALGORITHMS: &[&str] =
+    &["auto", "spectral", "neural", "sherpa-onnx", "off"];
 /// Speaker-embedding models `stt.diarization.sherpa_onnx.model` accepts: the sherpa-onnx entries
 /// of crates/core/data/speaker-models.json, in its order (a test keeps them equal).
-pub const STT_SPEAKER_MODELS: &[&str] = &["wespeaker-resnet34-lm", "wespeaker-campplus", "titanet-small"];
+pub const STT_SPEAKER_MODELS: &[&str] = &[
+    "wespeaker-resnet34-lm",
+    "wespeaker-campplus",
+    "titanet-small",
+];
 pub const STT_ADAPTERS: &[&str] = &["none", "openai-compatible"];
 pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"];
 pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];

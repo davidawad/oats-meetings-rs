@@ -123,7 +123,10 @@ impl Diarization {
         if sherpa.runtime != catalog::Runtime::SherpaOnnx {
             return Err(ConfigError::new(
                 "invalid_value",
-                format!("stt.diarization.sherpa_onnx.model: '{}' is not a sherpa-onnx model", sherpa.id),
+                format!(
+                    "stt.diarization.sherpa_onnx.model: '{}' is not a sherpa-onnx model",
+                    sherpa.id
+                ),
             ));
         }
         use Algorithm::*;
@@ -131,8 +134,12 @@ impl Diarization {
             SttDiarizationAlgorithm::Spectral => vec![Spectral],
             SttDiarizationAlgorithm::Neural => vec![Neural, SherpaOnnx, Spectral],
             SttDiarizationAlgorithm::SherpaOnnx => vec![SherpaOnnx, Spectral],
-            SttDiarizationAlgorithm::Auto if cfg!(target_os = "macos") => vec![Neural, SherpaOnnx, Spectral],
-            SttDiarizationAlgorithm::Auto | SttDiarizationAlgorithm::Off => vec![SherpaOnnx, Spectral],
+            SttDiarizationAlgorithm::Auto if cfg!(target_os = "macos") => {
+                vec![Neural, SherpaOnnx, Spectral]
+            }
+            SttDiarizationAlgorithm::Auto | SttDiarizationAlgorithm::Off => {
+                vec![SherpaOnnx, Spectral]
+            }
         };
         Ok(Some(Diarization {
             requested: d.algorithm,
@@ -190,7 +197,8 @@ impl Diarization {
     }
 
     fn threshold(&self, a: Algorithm) -> f32 {
-        self.model(a).map_or(self.spectral_threshold, |m| m.threshold)
+        self.model(a)
+            .map_or(self.spectral_threshold, |m| m.threshold)
     }
 
     /// Why `a` cannot run now without loading anything (no runtime, model not downloaded), or
@@ -305,7 +313,11 @@ impl Embedder {
             Algorithm::Neural => {
                 let m = &d.neural;
                 let n = super::coreml::SpeakerNet::load(m.entry, &m.path, m.provider)?;
-                let p = n.lock().expect("coreml speaker net").units_label().to_string();
+                let p = n
+                    .lock()
+                    .expect("coreml speaker net")
+                    .units_label()
+                    .to_string();
                 Ok((Embedder::Neural(n), Some(p)))
             }
             #[allow(unreachable_patterns)]
@@ -415,8 +427,13 @@ impl Diarizer {
                 Err(e) => why.push(format!("{}: {}", a.as_str(), e.message)),
             }
         }
-        let (algorithm, embedder, provider) = loaded
-            .unwrap_or_else(|| (Algorithm::Spectral, Embedder::Spectral(Mel::new(PARAKEET)), None));
+        let (algorithm, embedder, provider) = loaded.unwrap_or_else(|| {
+            (
+                Algorithm::Spectral,
+                Embedder::Spectral(Mel::new(PARAKEET)),
+                None,
+            )
+        });
         *ACTIVE.lock().expect("diarizer status") =
             Some((cfg.requested.as_str().to_string(), algorithm, provider, why));
         Diarizer {
@@ -450,7 +467,8 @@ impl Diarizer {
     fn assign_prints(&mut self, new: Vec<(Option<Vec<f32>>, usize)>) -> Vec<usize> {
         let old = self.heard.len();
         let fresh = new.len();
-        self.heard.extend(new.into_iter().map(|(p, n)| (p, n, usize::MAX)));
+        self.heard
+            .extend(new.into_iter().map(|(p, n)| (p, n, usize::MAX)));
         let prints: Vec<Option<Vec<f32>>> = self.heard.iter().map(|h| h.0.clone()).collect();
         let lens: Vec<usize> = self.heard.iter().map(|h| h.1).collect();
         let ids = self.cluster(&prints, &lens);
@@ -589,9 +607,18 @@ fn absorb_small(v: &[&[f32]], mut owner: Vec<usize>, lens: &[usize], min: usize)
             return owner;
         }
         let size = |c: usize| -> usize {
-            owner.iter().zip(lens).filter(|(o, _)| **o == c).map(|(_, n)| n).sum()
+            owner
+                .iter()
+                .zip(lens)
+                .filter(|(o, _)| **o == c)
+                .map(|(_, n)| n)
+                .sum()
         };
-        let Some(&small) = ids.iter().filter(|&&c| size(c) < min).min_by_key(|&&c| size(c)) else {
+        let Some(&small) = ids
+            .iter()
+            .filter(|&&c| size(c) < min)
+            .min_by_key(|&&c| size(c))
+        else {
             return owner;
         };
         let members: Vec<&[f32]> = v
@@ -608,7 +635,10 @@ fn absorb_small(v: &[&[f32]], mut owner: Vec<usize>, lens: &[usize], min: usize)
             .unzip();
         let score = |x: &[f32]| members.iter().map(|m| cosine(m, x)).sum::<f32>();
         match closest(&rest, &rest_owner, score) {
-            Some(to) => owner.iter_mut().filter(|o| **o == small).for_each(|o| *o = to),
+            Some(to) => owner
+                .iter_mut()
+                .filter(|o| **o == small)
+                .for_each(|o| *o = to),
             None => return owner,
         }
     }

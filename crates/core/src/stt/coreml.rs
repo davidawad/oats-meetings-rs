@@ -614,7 +614,11 @@ pub fn clear_speaker_cache() {
 impl SpeakerNet {
     /// Load `entry`'s `fbank` and `embedding` bundles from `dir` on the compute units `provider`
     /// asks for. Cached per directory and compute units.
-    pub fn load(entry: &Entry, dir: &Path, provider: SttProvider) -> Result<Arc<Mutex<SpeakerNet>>> {
+    pub fn load(
+        entry: &Entry,
+        dir: &Path,
+        provider: SttProvider,
+    ) -> Result<Arc<Mutex<SpeakerNet>>> {
         let (units, units_label) = units(provider);
         let mut cache = SPEAKER_CACHE.lock().expect("coreml speaker cache");
         if let Some((d, u, l)) = cache.as_ref() {

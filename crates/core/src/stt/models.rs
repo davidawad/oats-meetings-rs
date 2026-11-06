@@ -310,12 +310,15 @@ pub fn spawn(
 
 /// A speech model of the catalog, or a speaker-embedding model of the diarizer's.
 fn known(model: &str) -> Result<&'static Entry> {
-    catalog::get(model).or_else(|| catalog::speaker(model)).ok_or_else(|| {
-        let ids: Vec<&str> = catalog::all().iter().map(|e| e.id.as_str()).collect();
-        let msg = crate::config::keys::retired_stt_model(model)
-            .unwrap_or_else(|| format!("'{model}' is not a catalog model ({})", ids.join(", ")));
-        ConfigError::new("invalid_value", msg)
-    })
+    catalog::get(model)
+        .or_else(|| catalog::speaker(model))
+        .ok_or_else(|| {
+            let ids: Vec<&str> = catalog::all().iter().map(|e| e.id.as_str()).collect();
+            let msg = crate::config::keys::retired_stt_model(model).unwrap_or_else(|| {
+                format!("'{model}' is not a catalog model ({})", ids.join(", "))
+            });
+            ConfigError::new("invalid_value", msg)
+        })
 }
 
 /// `s` retargeted at another catalog model in the same models directory (`stt-model-fetch model=`).

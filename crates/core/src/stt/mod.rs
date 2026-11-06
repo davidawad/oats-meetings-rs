@@ -1397,7 +1397,9 @@ impl Subsystem for SttSubsystem {
             coreml::clear_cache();
             set_fallback(None);
         }
-        if old.stt.diarization != new.stt.diarization || old.stt.local.models_dir != new.stt.local.models_dir {
+        if old.stt.diarization != new.stt.diarization
+            || old.stt.local.models_dir != new.stt.local.models_dir
+        {
             diarize::clear();
         }
     }
