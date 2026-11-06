@@ -456,7 +456,9 @@ pub struct Stt {
     pub diarization: SttDiarization,
     #[serde(rename = "final")]
     pub final_: SttFinal,
+    pub echo_bleed: u32,
     pub echo_overlap: u32,
+    pub echo_short: u32,
     pub echo_similarity: u32,
     pub echo_window: Dur,
     pub language: String,

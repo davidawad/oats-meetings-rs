@@ -773,6 +773,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "stt.echo_short",
+        kind: Kind::Int { min: 0, max: 20 },
+        default: Def::I(2),
+        doc: "With audio.echo_cancel, a local-speaker utterance of at most this many words that repeats a run of words of a remote utterance starting within stt.echo_window of it ('This' as the speakers say 'This is the remote side...') is dropped as speaker echo in the final pass, common words or not, unless the mic is louder than bleed (stt.echo_bleed). 0 turns this off.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.echo_bleed",
+        kind: Kind::Int { min: 0, max: 1000 },
+        default: Def::I(25),
+        doc: "Percent: a short repeat of remote speech (stt.echo_short) is near-end speech, and kept, when the mic's peak over it is above this much of the remote channel's peak at that moment; at or below, it is the speakers bleeding into the mic.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "stt.echo_similarity",
         kind: Kind::Int { min: 1, max: 100 },
         default: Def::I(75),

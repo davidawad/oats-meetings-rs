@@ -175,7 +175,9 @@
       },
       "threshold": 70
     },
+    "echo_bleed": 25,
     "echo_overlap": 60,
+    "echo_short": 2,
     "echo_similarity": 75,
     "echo_window": "1s",
     "feed": "500ms",

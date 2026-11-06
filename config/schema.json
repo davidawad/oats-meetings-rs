@@ -1411,11 +1411,29 @@
           },
           "type": "object"
         },
+        "echo_bleed": {
+          "default": 25,
+          "description": "Percent: a short repeat of remote speech (stt.echo_short) is near-end speech, and kept, when the mic's peak over it is above this much of the remote channel's peak at that moment; at or below, it is the speakers bleeding into the mic.",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "echo_overlap": {
           "default": 60,
           "description": "Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.",
           "maximum": 100,
           "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_short": {
+          "default": 2,
+          "description": "With audio.echo_cancel, a local-speaker utterance of at most this many words that repeats a run of words of a remote utterance starting within stt.echo_window of it ('This' as the speakers say 'This is the remote side...') is dropped as speaker echo in the final pass, common words or not, unless the mic is louder than bleed (stt.echo_bleed). 0 turns this off.",
+          "maximum": 20,
+          "minimum": 0,
           "type": "integer",
           "x-reload": "live",
           "x-ui": false

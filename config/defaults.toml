@@ -262,8 +262,12 @@ template = "Speaker {n}"
 [stt]
 # Speech-to-text backend: on-device or a cloud adapter.
 backend = "local"
+# Percent: a short repeat of remote speech (stt.echo_short) is near-end speech, and kept, when the mic's peak over it is above this much of the remote channel's peak at that moment; at or below, it is the speakers bleeding into the mic.
+echo_bleed = 25
 # Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.
 echo_overlap = 60
+# With audio.echo_cancel, a local-speaker utterance of at most this many words that repeats a run of words of a remote utterance starting within stt.echo_window of it ('This' as the speakers say 'This is the remote side...') is dropped as speaker echo in the final pass, common words or not, unless the mic is louder than bleed (stt.echo_bleed). 0 turns this off.
+echo_short = 2
 # Percent: a local-speaker word counts as appearing in remote speech (stt.echo_overlap) when its letter edit-distance similarity to a remote word is at least this, so a misheard echo ('Oaks meeting' for 'Oats Meetings') is still dropped. 100 asks for the exact word.
 echo_similarity = 75
 # With audio.echo_cancel, a local-speaker utterance whose words remote speech says, or nearly says (stt.echo_similarity), within this time (plus audio.echo_delay) of each word is dropped as speaker echo; double talk with other words at other moments is kept.

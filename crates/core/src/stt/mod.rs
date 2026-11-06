@@ -109,6 +109,12 @@ pub struct EchoDedupe {
     /// `stt.echo_similarity` as a fraction: the least letter edit-distance similarity at which
     /// two words count as the same.
     pub similarity: f32,
+    /// `stt.echo_short`: a "you" utterance of at most this many words that repeats part of a
+    /// remote utterance starting at the same moment is echo unless the mic is louder than bleed.
+    pub short: usize,
+    /// `stt.echo_bleed` as a fraction: the mic peak, against the remote channel's over the same
+    /// moment, at or below which a short repeat is the speakers heard by the mic.
+    pub bleed: f32,
 }
 
 fn samples_of(d: crate::config::typed::Dur) -> usize {
@@ -127,6 +133,8 @@ impl Tuning {
                 window: (c.echo_window.0 + cfg.audio.echo_delay.0) as f64 / 1000.0,
                 overlap: c.echo_overlap as f32 / 100.0,
                 similarity: c.echo_similarity as f32 / 100.0,
+                short: c.echo_short as usize,
+                bleed: c.echo_bleed as f32 / 100.0,
             }),
         }
     }
@@ -223,26 +231,67 @@ fn matched(w: &[(String, f64)], t: &Utt, d: &EchoDedupe) -> (usize, usize) {
     (content, all)
 }
 
+/// `w` says, word for word or nearly, a run of `t`'s words (its first words, mostly) at the
+/// same moment.
+fn repeats_part_of(w: &[(String, f64)], t: &Utt, d: &EchoDedupe) -> bool {
+    let tw = timed_words(t);
+    let same = |a: &str, b: &str| a == b || similarity(a, b) >= d.similarity;
+    !w.is_empty()
+        && tw.windows(w.len()).any(|run| {
+            (run[0].1 - w[0].1).abs() <= d.window
+                && run.iter().zip(w).all(|((a, _), (b, _))| same(a, b))
+        })
+}
+
+/// The loudest sample of `x` from `from` to `to` seconds.
+fn peak_between(x: &[f32], from: f64, to: f64) -> f32 {
+    let at = |secs: f64| ((secs.max(0.0) * f64::from(SAMPLE_RATE)) as usize).min(x.len());
+    peak(&x[at(from)..at(to).max(at(from))])
+}
+
+/// The mic is louder over `you` than the speakers' bleed of the remote channel at that moment
+/// (`bleed` of its peak, within the window before `you` for the echo's delay): someone near the
+/// mic speaking.
+fn near_end(you: &Utt, heard: &Channels, d: &EchoDedupe) -> bool {
+    let mic = peak_between(&heard.you, you.start, you.end);
+    let far = peak_between(&heard.them, you.start - d.window, you.end);
+    mic > d.bleed * far
+}
+
 /// `you` is speaker echo when one remote utterance overlapping it says most of its words
 /// (`overlap`, nearly the same spelling counting, `similarity`) at the same moment, and most of
 /// its content words: words outside `COMMON`. Echo repeats one remote sentence where it was said.
 /// A bag of every remote word near it also matched double talk that shares common words ("I
 /// think we", "the review") with long remote sentences (dot-4uzgol.93); time overlap plus a few
-/// common words or replies ("yeah", "okay, right") is not echo either (dot-4uzgol.94), so an
-/// utterance of common words alone is always kept.
-pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
+/// common words or replies ("yeah", "okay, right") is not echo either (dot-4uzgol.94).
+///
+/// A short `you` utterance (`short` words or fewer) that repeats a run of words of a remote
+/// utterance starting within the window of it ("This" as the speakers say "This is the
+/// remote side...") is echo too, common words or not, unless the recorded channels (`heard`)
+/// show the mic louder than bleed (`near_end`): a reply at the same moment (dot-4uzgol.95).
+/// Without the audio, an utterance of common words alone is kept.
+pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe, heard: Option<&Channels>) -> bool {
     let w = timed_words(you);
     let content = w.iter().filter(|(x, _)| !common(x)).count();
-    if content == 0 {
-        return false;
-    }
     let most = |hits: usize, of: usize| hits as f32 >= d.overlap * of as f32;
-    them.iter()
+    let near: Vec<&Utt> = them
+        .iter()
         .filter(|t| t.start <= you.end + d.window && t.end >= you.start - d.window)
-        .any(|t| {
+        .collect();
+    if content > 0
+        && near.iter().any(|t| {
             let (c, a) = matched(&w, t, d);
             most(c, content) && most(a, w.len())
         })
+    {
+        return true;
+    }
+    let Some(heard) = heard else { return false };
+    w.len() <= d.short
+        && near
+            .iter()
+            .any(|t| (t.start - you.start).abs() <= d.window && repeats_part_of(&w, t, d))
+        && !near_end(you, heard, d)
 }
 
 /// What became of the mic ("you") channel in one pass (dot-4uzgol.93), to find the stage that
@@ -295,12 +344,18 @@ fn gate_stats(x: &[f32], t: &Tuning) -> (usize, f64) {
     (regions, loud as f64 / 100.0)
 }
 
-/// Drop every `you` utterance that is echo of remote speech (no-op when `d` is `None`).
-fn drop_echoes(utts: Vec<Utt>, you: &str, d: Option<EchoDedupe>) -> Vec<Utt> {
+/// Drop every `you` utterance that is echo of remote speech (no-op when `d` is `None`), with
+/// the recorded channels (`heard`) when there are any.
+fn drop_echoes(
+    utts: Vec<Utt>,
+    you: &str,
+    d: Option<EchoDedupe>,
+    heard: Option<&Channels>,
+) -> Vec<Utt> {
     let Some(d) = d else { return utts };
     let them: Vec<Utt> = utts.iter().filter(|u| u.speaker != you).cloned().collect();
     utts.into_iter()
-        .filter(|u| u.speaker != you || !is_echo(u, &them, &d))
+        .filter(|u| u.speaker != you || !is_echo(u, &them, &d, heard))
         .collect()
 }
 
@@ -982,7 +1037,7 @@ impl Live {
         let n = ready.len();
         let kept: Vec<Utt> = ready
             .into_iter()
-            .filter(|u| !is_echo(u, &self.heard, &d))
+            .filter(|u| !is_echo(u, &self.heard, &d, None))
             .collect();
         self.stages.kept += kept.len();
         self.stages.echo_dropped += n - kept.len();
@@ -1059,7 +1114,7 @@ pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<
         diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
     }
     all.extend(them);
-    let mut all = drop_echoes(all, &s.speaker_you, s.tuning.echo);
+    let mut all = drop_echoes(all, &s.speaker_you, s.tuning.echo, Some(chans));
     let kept = all.iter().filter(|u| u.speaker == s.speaker_you).count();
     if let Some(d) = &s.mic_diarize {
         // After the echo is gone, so remote voices the mic picked up make no room speaker.
@@ -1931,6 +1986,8 @@ mod tests {
                 window: 1.04,
                 overlap: 0.6,
                 similarity: 0.75,
+                short: 2,
+                bleed: 0.25,
             })
         );
         let all = vec![
@@ -1942,7 +1999,7 @@ mod tests {
             // Talking over the remote speaker with other words, kept.
             utt("you", "Not before the review.", 11.0),
         ];
-        let kept = drop_echoes(all.clone(), "you", echo);
+        let kept = drop_echoes(all.clone(), "you", echo, None);
         let texts: Vec<&str> = kept.iter().map(|u| u.text.as_str()).collect();
         assert_eq!(
             texts,
@@ -1952,7 +2009,7 @@ mod tests {
                 "Not before the review."
             ]
         );
-        assert_eq!(drop_echoes(all.clone(), "you", None), all);
+        assert_eq!(drop_echoes(all.clone(), "you", None, None), all);
         let off = tuning_with(&[("audio.echo_cancel", json!(false))]).echo;
         assert_eq!(off, None);
         // stt.echo_overlap 100: every word must be in the remote speech.
@@ -1961,9 +2018,9 @@ mod tests {
             utt("remote_1", "We ship the build on Friday", 0.0),
             utt("you", "we ship the build on monday", 0.0),
         ];
-        assert_eq!(drop_echoes(partial.clone(), "you", strict).len(), 2);
+        assert_eq!(drop_echoes(partial.clone(), "you", strict, None).len(), 2);
         // 5 of 6 words and 2 of 3 content words (not "the", "on") >= 60%
-        assert_eq!(drop_echoes(partial, "you", echo).len(), 1);
+        assert_eq!(drop_echoes(partial, "you", echo, None).len(), 1);
     }
 
     #[test]
@@ -1985,24 +2042,24 @@ mod tests {
             utt("remote_1", "Testing Oats Meetings.", 5.0),
             utt("you", "Testing Oaks meeting.", 5.1),
         ];
-        let kept = drop_echoes(leak.clone(), "you", echo);
+        let kept = drop_echoes(leak.clone(), "you", echo, None);
         assert_eq!(kept, leak[..1]);
         // stt.echo_similarity 100 is the exact-word match that let it through.
         let exact = tuning_with(&[("stt.echo_similarity", json!(100))]).echo;
-        assert_eq!(drop_echoes(leak, "you", exact).len(), 2);
+        assert_eq!(drop_echoes(leak, "you", exact, None).len(), 2);
         // The user talking over the same sentence with their own words, some of which are
         // near the remote ones ("meeting", "test"): true double talk, kept.
         let talk = vec![
             utt("remote_1", "Testing Oats Meetings.", 5.0),
             utt("you", "Yes, I can hear the test meeting fine.", 5.2),
         ];
-        assert_eq!(drop_echoes(talk.clone(), "you", echo), talk);
+        assert_eq!(drop_echoes(talk.clone(), "you", echo, None), talk);
         // The near-duplicate long after the remote speech: the user repeating it, kept.
         let later = vec![
             utt("remote_1", "Testing Oats Meetings.", 5.0),
             utt("you", "Testing Oaks meeting.", 20.0),
         ];
-        assert_eq!(drop_echoes(later.clone(), "you", echo), later);
+        assert_eq!(drop_echoes(later.clone(), "you", echo, None), later);
         // The window takes audio.echo_delay on top of stt.echo_window.
         let wide = tuning_with(&[
             ("stt.echo_window", json!("2s")),
@@ -2041,7 +2098,7 @@ mod tests {
         ];
         let mut all: Vec<Utt> = them.to_vec();
         all.extend(you.iter().cloned());
-        let kept = drop_echoes(all.clone(), "you", echo);
+        let kept = drop_echoes(all.clone(), "you", echo, None);
         assert_eq!(kept, all, "every near-end utterance survives");
         // The bag-of-words rule this replaced: 13 of the first sentence's 20 words are in the
         // remote speech around it, above stt.echo_overlap.
@@ -2064,7 +2121,7 @@ mod tests {
         ];
         let mut all: Vec<Utt> = them.to_vec();
         all.extend(leak.iter().cloned());
-        assert_eq!(drop_echoes(all, "you", echo), them.to_vec());
+        assert_eq!(drop_echoes(all, "you", echo, None), them.to_vec());
     }
 
     /// dot-4uzgol.94: on David's meeting the dedupe still dropped 77 of 103 mic utterances. Near
@@ -2127,7 +2184,7 @@ mod tests {
         let mut all: Vec<Utt> = them.to_vec();
         all.extend(you.iter().cloned());
         assert_eq!(
-            drop_echoes(all.clone(), "you", echo),
+            drop_echoes(all.clone(), "you", echo, None),
             all,
             "every near-end utterance survives"
         );
@@ -2145,12 +2202,84 @@ mod tests {
         let mut all: Vec<Utt> = them.to_vec();
         all.extend(leak.iter().cloned());
         assert_eq!(
-            drop_echoes(all, "you", echo),
+            drop_echoes(all, "you", echo, None),
             them.to_vec(),
             "no echo leaks"
         );
         // The list is searched by bisection.
         assert!(COMMON.windows(2).all(|p| p[0] < p[1]));
+    }
+
+    /// dot-4uzgol.95, PM say check at f312d0d: the speakers said "This is the remote side of a
+    /// short test call about quarterly planning." and the final transcript kept a "you" line
+    /// "This" at the same instant, a common word .94 never counts as echo. The say-voice fixture:
+    /// remote sentences opening on common words, the mic hearing their first word(s) at bleed
+    /// level: 0 leaks; the same words at near-end level (replies over the far end) are kept.
+    #[test]
+    fn a_short_repeat_of_a_remote_sentence_opening_is_echo_unless_the_mic_is_loud() {
+        let far = vec![
+            (
+                0.0,
+                4.0,
+                "This is the remote side of a short test call about quarterly planning.",
+            ),
+            (5.0, 8.0, "So the numbers for the third quarter are in."),
+            (9.0, 12.0, "Yeah, and we can go over them on Friday."),
+        ];
+        let near = vec![
+            (0.1, 0.5, "This"),
+            (5.1, 5.4, "So."),
+            (9.05, 9.6, "Yeah, and"),
+        ];
+        let them: Vec<f32> = tone(12.0).iter().map(|v| v * 2.0).collect();
+        let s = settings(false, true);
+        for (gain, kept) in [(0.3, 0), (1.0, 3)] {
+            let chans = Channels {
+                you: tone(12.0).iter().map(|v| v * gain).collect(),
+                them: them.clone(),
+            };
+            let asr = Scripted {
+                near: near.clone(),
+                far: far.clone(),
+            };
+            let (all, st) = final_utts(&asr, &s, &chans).unwrap();
+            let you: Vec<&str> = all
+                .iter()
+                .filter(|u| u.speaker == "you")
+                .map(|u| u.text.as_str())
+                .collect();
+            assert_eq!(you.len(), kept, "gain {gain}: {you:?}");
+            assert_eq!((st.recognised, st.echo_dropped), (3, 3 - kept));
+        }
+        // Without the audio the short repeat is kept, as .94 keeps common words; stt.echo_short 0
+        // turns the rule off.
+        let d = s.tuning.echo.unwrap();
+        let remote: Vec<Utt> = far
+            .iter()
+            .map(|&(a, b, t)| said("remote_1", t, a, b))
+            .collect();
+        let this = said("you", "This", 0.1, 0.5);
+        let quiet = Channels {
+            you: tone(12.0).iter().map(|v| v * 0.3).collect(),
+            them,
+        };
+        assert!(!is_echo(&this, &remote, &d, None));
+        assert!(is_echo(&this, &remote, &d, Some(&quiet)));
+        let off = EchoDedupe { short: 0, ..d };
+        assert!(!is_echo(&this, &remote, &off, Some(&quiet)));
+        // Not a run of the remote words, or long after the remote sentence starts: kept.
+        assert!(!is_echo(
+            &said("you", "So", 0.1, 0.5),
+            &remote,
+            &d,
+            Some(&quiet)
+        ));
+        assert!(!is_echo(
+            &said("you", "This is", 3.0, 3.4),
+            &remote,
+            &d,
+            Some(&quiet)
+        ));
     }
 
     /// Says the near-end script for quiet audio (the mic), the far-end one for loud (the

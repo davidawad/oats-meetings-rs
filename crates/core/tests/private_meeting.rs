@@ -285,7 +285,7 @@ fn echo_leak_on_the_you_channel() {
             .collect();
         let them: Vec<Utt> = us.iter().filter(|u| u.speaker != "you").cloned().collect();
         let you: Vec<&Utt> = us.iter().filter(|u| u.speaker == "you").collect();
-        let leaked = you.iter().filter(|u| is_echo(u, &them, &d)).count();
+        let leaked = you.iter().filter(|u| is_echo(u, &them, &d, None)).count();
         kv.push((
             if kind == "final" {
                 "final_you"
@@ -556,7 +556,7 @@ fn final_pass_rerun_against_the_openoats_take() {
     let echo = s.tuning.echo.expect("audio.echo_cancel is on by default");
     let leaked = ours
         .iter()
-        .filter(|u| u.speaker == "you" && is_echo(u, &them, &echo))
+        .filter(|u| u.speaker == "you" && is_echo(u, &them, &echo, Some(&chans)))
         .count();
     let st = stages.to_json();
     let mut kv = vec![
