@@ -1300,6 +1300,196 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "keys": {
+          "additionalProperties": false,
+          "properties": {
+            "back": {
+              "default": "escape",
+              "description": "Back out: close the shortcuts overlay, leave Recently deleted, clear the search, then the selection. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "help": {
+              "default": "?",
+              "description": "Show or hide the overlay listing every shortcut. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "privacy-toggle": {
+              "default": "mod-shift-h",
+              "description": "Toggle hiding the window from screen capture. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "quit": {
+              "default": "mod-q",
+              "description": "Quit. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "record-pause": {
+              "default": "mod-shift-p",
+              "description": "Pause or resume the recording. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "record-start": {
+              "default": "mod-shift-r",
+              "description": "Start recording. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "record-stop": {
+              "default": "mod-shift-s, s",
+              "description": "Stop recording (and transcribe). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "record-toggle": {
+              "default": "space",
+              "description": "Start recording when idle, else pause or resume it (never stops). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "search": {
+              "default": "/",
+              "description": "Search sessions (opens Sessions with the search box focused). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "session-list": {
+              "default": "mod-r",
+              "description": "Reload the session list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "sessions-next": {
+              "default": "j, down",
+              "description": "Select the next session in the Sessions list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "sessions-open": {
+              "default": "enter",
+              "description": "Open the selected session's notes. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "sessions-prev": {
+              "default": "k, up",
+              "description": "Select the previous session in the Sessions list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-calendar": {
+              "default": "5",
+              "description": "Go to the Calendar tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-live": {
+              "default": "1",
+              "description": "Go to the Live tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-models": {
+              "default": "6",
+              "description": "Go to the Models tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-notes": {
+              "default": "3",
+              "description": "Go to the Notes tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-sessions": {
+              "default": "2",
+              "description": "Go to the Sessions tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-settings": {
+              "default": "7",
+              "description": "Go to the Settings tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tab-templates": {
+              "default": "4",
+              "description": "Go to the Templates tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "window-hide": {
+              "default": "mod-w",
+              "description": "Hide the window. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "window-show": {
+              "default": "mod-shift-o",
+              "description": "Show the window. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "window-toggle": {
+              "default": "mod-shift-w",
+              "description": "Show or hide the window. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.",
+              "type": "string",
+              "x-kind": "keys",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
         "live_follow": {
           "default": true,
           "description": "The Live view scrolls to the newest line while a recording adds lines.",

@@ -17,7 +17,7 @@ use oats_core::control::engine::Engine;
 use serde_json::json;
 
 use crate::kit::{self, Icon, Kind, Size};
-use crate::state::{fmt_clock, Control, Controls, Dot, Edit, EditKey, Line, Rec, State, Tab};
+use crate::state::{fmt_clock, Control, Controls, Dot, Edit, Line, Rec, State, Tab};
 use crate::theme::{self, Theme, MONO, SANS};
 use crate::views;
 
@@ -62,6 +62,10 @@ pub struct MainWindow {
     /// How many times this view rendered: `ui-state` reports it, so a frozen frame shows up as a
     /// count that stops moving while the state changes (dot-4uzgol.79).
     pub(crate) frames: u64,
+    /// The keyboard: the `?` overlay and a Settings Rebind in progress (`views::shortcuts`).
+    pub(crate) keys: views::shortcuts::Keys,
+    /// Puts the keyboard back on the window when a focused editor goes away, so bare keys work.
+    focus_lost: Option<Subscription>,
 }
 
 impl MainWindow {
@@ -98,6 +102,8 @@ impl MainWindow {
             theme: Theme::DARK,
             appearance: None,
             frames: 0,
+            keys: views::shortcuts::Keys::default(),
+            focus_lost: None,
         }
     }
 
@@ -572,13 +578,21 @@ impl MainWindow {
                     "Empty transcript",
                     "The last recording has no lines. Start recording to try again.".to_string(),
                 ),
-                Rec::Idle => (
-                    "Ready when you are",
-                    "Start recording and the transcript appears here as people speak. Your voice \
-                     shows as you, everyone else as remote_1, remote_2. (Also ctrl+shift+R or \
-                     `ctl record-start`.)"
-                        .to_string(),
-                ),
+                Rec::Idle => {
+                    let map = self.keymap();
+                    let k = |c: &str| crate::shortcuts::shown(map.keys(c));
+                    (
+                        "Ready when you are",
+                        format!(
+                            "Start recording and the transcript appears here as people speak. Your \
+                             voice shows as you, everyone else as remote_1, remote_2. (Also {} or \
+                             {}, or `ctl record-start`; {} lists every shortcut.)",
+                            k("record-toggle"),
+                            k("record-start"),
+                            k("help")
+                        ),
+                    )
+                }
                 _ => (
                     "Listening",
                     "Lines appear here as speech is recognised.".to_string(),
@@ -755,6 +769,19 @@ impl Render for MainWindow {
         }
         let t = self.theme;
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
+        // Keys reach the window's handlers only through a focused element in it: take the keyboard
+        // when nothing has it (a new window, or the focused editor was removed).
+        if self.focus_lost.is_none() {
+            self.focus_lost = Some(cx.on_focus_lost(window, |this, window, cx| {
+                if let Some(f) = &this.focus {
+                    f.focus(window, cx);
+                }
+            }));
+        }
+        if window.focused(cx).is_none() {
+            let f = focus.clone();
+            window.defer(cx, move |window, cx| f.focus(window, cx));
+        }
         // One line per tab; each view lives in its own file under `views/`.
         let body = match self.state.tab {
             Tab::Live => self.live(cx).into_any_element(),
@@ -792,17 +819,20 @@ impl Render for MainWindow {
                 gpui::transparent_black()
             })
             .track_focus(&focus)
+            // After a focused editor (Notes, a template, a calendar field) had the key: a Rebind
+            // listening, the open text box, else a bare shortcut (views::shortcuts).
             .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let command = k.modifiers.control || k.modifiers.alt || k.modifiers.platform;
-                match this.state.edit_key(&k.key, k.key_char.as_deref(), command) {
-                    EditKey::Commit => this.state.commit_edit(&this.engine),
-                    EditKey::Cancel => this.state.cancel_edit(),
-                    EditKey::Handled => {}
-                    EditKey::Ignored => return,
+                if this.key_down(&ev.keystroke, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
                 }
-                cx.stop_propagation();
-                cx.notify();
+            }))
+            // A chord (a GPUI key binding) or a menu item: a window command runs here; an engine
+            // action too, so the buttons show it pending. Anything else goes on to the app.
+            .on_action(cx.listener(|this, a: &crate::host::Do, _, cx| {
+                if !this.command(&a.id, cx) {
+                    cx.propagate();
+                }
             }))
             .child(
                 div().flex().flex_1().min_h_0().child(self.rail(cx)).child(
@@ -818,6 +848,7 @@ impl Render for MainWindow {
                         .child(self.status_bar()),
                 ),
             )
+            .children(self.keys.help.then(|| views::shortcuts::help(self, cx)))
     }
 }
 

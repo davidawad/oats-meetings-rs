@@ -92,6 +92,10 @@ pub fn schema_json() -> String {
             Kind::Str => {
                 leaf.insert("type".into(), json!("string"));
             }
+            Kind::Keys => {
+                leaf.insert("type".into(), json!("string"));
+                leaf.insert("x-kind".into(), json!("keys"));
+            }
             Kind::Enum(vs) => {
                 leaf.insert("type".into(), json!("string"));
                 leaf.insert("enum".into(), json!(vs));

@@ -44,7 +44,7 @@ pub struct Notes {
     pub error: Option<String>,
     /// The session dropdown in the header is open.
     pub picking: bool,
-    focus: Option<FocusHandle>,
+    pub(crate) focus: Option<FocusHandle>,
 }
 
 impl Global for Notes {}

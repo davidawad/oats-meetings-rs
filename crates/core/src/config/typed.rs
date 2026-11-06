@@ -215,6 +215,8 @@ pub struct Ui {
     pub theme: Theme,
     pub tick: Dur,
     pub tz: String,
+    /// `ui.keys.<command>`: the command's shortcuts (`config::shortcut`), empty for none.
+    pub keys: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

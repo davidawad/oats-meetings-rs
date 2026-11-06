@@ -1,7 +1,8 @@
 //! Settings tab: every `ui = true` config key (`crate::settings`), in the design's sections. Each
 //! row is a label and the key's doc on the left and its control on the right: a toggle for a bool,
 //! a dropdown for an enum, a text box (opened on click, Enter saves) for strings, numbers and
-//! durations. Every change goes through `config-set`, the call `ctl config-set` makes.
+//! durations, and for a keyboard shortcut its keys with Rebind (press a key), Reset and Clear
+//! (`views::shortcuts`). Every change goes through `config-set`, the call `ctl config-set` makes.
 
 use gpui::{
     anchored, deferred, div, prelude::*, px, rgb, AnyElement, Context, FontWeight, SharedString,
@@ -10,6 +11,7 @@ use gpui::{
 use serde_json::json;
 
 use crate::kit::{self, Kind, Size};
+use crate::model;
 use crate::settings::{Row, Widget};
 use crate::theme::{self, MONO};
 use crate::view::{edit_text, MainWindow};
@@ -100,12 +102,16 @@ fn setting_row(w: &MainWindow, row: &Row, last: bool, cx: &mut Context<MainWindo
                 .into_any_element()
         }
         Widget::Choice { options, current } => choice(w, path, options, current, cx),
+        Widget::Keys(keys) => match path.strip_prefix("ui.keys.").and_then(model::binding) {
+            Some(b) => crate::views::shortcuts::control(w, b.command, keys, cx),
+            None => div().into_any_element(),
+        },
         Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } => {
             let seed = match &row.widget {
                 Widget::Text(t) => t.clone(),
                 Widget::Number { value, .. } => value.to_string(),
                 Widget::Duration { text, .. } => text.clone(),
-                _ => String::new(),
+                Widget::Toggle(_) | Widget::Choice { .. } | Widget::Keys(_) => String::new(),
             };
             let value = match editing {
                 Some(e) => edit_text(e).into_any_element(),
@@ -185,7 +191,13 @@ fn setting_row(w: &MainWindow, row: &Row, last: bool, cx: &mut Context<MainWindo
                 .whitespace_normal()
                 .child(row.doc),
         );
-    if let Some(err) = editing.and_then(|e| e.error.as_ref()) {
+    let refused = w
+        .keys
+        .note
+        .as_ref()
+        .filter(|(c, _)| path.strip_prefix("ui.keys.") == Some(*c))
+        .map(|(_, why)| why);
+    if let Some(err) = editing.and_then(|e| e.error.as_ref()).or(refused) {
         left = left.child(
             div()
                 .text_size(px(12.))

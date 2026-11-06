@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use oats_core::config::keys::{self, Kind, Reload};
 use oats_core::config::resolve::Flat;
+use oats_core::config::shortcut;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +30,8 @@ pub enum Widget {
         min_ms: u64,
         max_ms: u64,
     },
+    /// A shortcut's keystrokes, canonical (`ui.keys.*`): rebound by pressing a key.
+    Keys(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +79,10 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
             min_ms,
             max_ms,
         },
+        Kind::Keys => Widget::Keys(
+            shortcut::parse_list(value.and_then(Value::as_str).unwrap_or_default())
+                .unwrap_or_default(),
+        ),
     }
 }
 
@@ -97,6 +104,7 @@ pub const SECTIONS: &[(&str, &[&str])] = &[
             "ui.tz",
         ],
     ),
+    ("Keyboard shortcuts", &["ui.keys."]),
     ("Window", &["ui.", "app.", "config."]),
     ("Sessions", &["sessions."]),
     ("Notes and templates", &["notes.", "templates.", "llm."]),
@@ -138,6 +146,12 @@ pub fn section_of(path: &str) -> &'static str {
 /// A row's label: from `LABELS`, else the path after its first segment in sentence case
 /// (`ui.live_follow` is "Live follow", `stt.local.provider` "Local provider").
 pub fn label_of(path: &str) -> String {
+    if let Some(b) = path
+        .strip_prefix("ui.keys.")
+        .and_then(crate::model::binding)
+    {
+        return b.label.to_string();
+    }
     if let Some((_, l)) = LABELS.iter().find(|(p, _)| *p == path) {
         return l.to_string();
     }
@@ -194,7 +208,7 @@ pub fn next_value(row: &Row) -> Option<Value> {
                 .map_or(0, |i| i + 1);
             options.get(i % options.len().max(1)).map(|o| json!(o))
         }
-        Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } => None,
+        Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } | Widget::Keys(_) => None,
     }
 }
 
@@ -224,6 +238,8 @@ mod tests {
         assert_eq!(section_of("ui.theme"), "Appearance");
         assert_eq!(section_of("ui.start_hidden"), "Window");
         assert_eq!(section_of("network.allow"), "Privacy");
+        assert_eq!(section_of("ui.keys.record-toggle"), "Keyboard shortcuts");
+        assert_eq!(label_of("ui.keys.tab-live"), "Live");
         assert_eq!(label_of("audio.mic.device"), "Microphone");
         assert_eq!(label_of("ui.live_follow"), "Live follow");
         assert_eq!(label_of("stt.local.provider"), "Local provider");
@@ -271,7 +287,7 @@ mod tests {
             let values: Vec<Value> = match k.kind {
                 Kind::Bool => vec![json!(true), json!(false)],
                 Kind::Enum(o) => o.iter().map(|s| json!(s)).collect(),
-                Kind::Str => continue,
+                Kind::Str | Kind::Keys => continue,
                 // The bounds are the values a number / duration row must be able to write.
                 Kind::Int { min, max } => vec![json!(min), json!(max)],
                 Kind::Duration { min_ms, max_ms } => {

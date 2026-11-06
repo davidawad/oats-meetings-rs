@@ -72,51 +72,77 @@ pub const MENUS: &[Menu] = &[
     },
 ];
 
-/// Key suffixes; the host prefixes `cmd-` on macOS and `ctrl-` elsewhere.
+/// One window command a keyboard shortcut runs. Its keys are the config key
+/// `ui.keys.<command>` (`crate::shortcuts`), so every binding can be rebound, reset or disabled.
+/// `window: false` commands are `oats_core::action` ids the engine runs; `window: true` ones
+/// act on the window itself (switch tab, move the selection, the help overlay).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Binding {
-    pub keys: &'static str,
-    pub action: &'static str,
+    pub command: &'static str,
+    pub label: &'static str,
+    /// The heading it is listed under in the help overlay.
+    pub group: &'static str,
+    pub window: bool,
 }
 
+const fn action(command: &'static str, label: &'static str, group: &'static str) -> Binding {
+    Binding {
+        command,
+        label,
+        group,
+        window: false,
+    }
+}
+
+const fn window(command: &'static str, label: &'static str, group: &'static str) -> Binding {
+    Binding {
+        command,
+        label,
+        group,
+        window: true,
+    }
+}
+
+/// Every shortcut, in the order the help overlay and the Settings section list them.
 pub const BINDINGS: &[Binding] = &[
-    Binding {
-        keys: "shift-r",
-        action: "record-start",
-    },
-    Binding {
-        keys: "shift-s",
-        action: "record-stop",
-    },
-    Binding {
-        keys: "shift-p",
-        action: "record-pause",
-    },
-    Binding {
-        keys: "shift-h",
-        action: "privacy-toggle",
-    },
-    Binding {
-        keys: "w",
-        action: "window-hide",
-    },
-    Binding {
-        keys: "shift-w",
-        action: "window-toggle",
-    },
-    Binding {
-        keys: "shift-o",
-        action: "window-show",
-    },
-    Binding {
-        keys: "r",
-        action: "session-list",
-    },
-    Binding {
-        keys: "q",
-        action: "quit",
-    },
+    window(
+        "record-toggle",
+        "Start recording, or pause / resume",
+        "Recording",
+    ),
+    action("record-start", "Start recording", "Recording"),
+    action("record-pause", "Pause / resume", "Recording"),
+    action("record-stop", "Stop recording", "Recording"),
+    window("tab-live", "Live", "Tabs"),
+    window("tab-sessions", "Sessions", "Tabs"),
+    window("tab-notes", "Notes", "Tabs"),
+    window("tab-templates", "Templates", "Tabs"),
+    window("tab-calendar", "Calendar", "Tabs"),
+    window("tab-models", "Models", "Tabs"),
+    window("tab-settings", "Settings", "Tabs"),
+    window("sessions-next", "Next session", "Sessions"),
+    window("sessions-prev", "Previous session", "Sessions"),
+    window("sessions-open", "Open the session's notes", "Sessions"),
+    window("search", "Search sessions", "Sessions"),
+    action("session-list", "Reload the session list", "Sessions"),
+    window("back", "Back", "Window"),
+    window("help", "Show / hide this list", "Window"),
+    action("privacy-toggle", "Hide from screen capture", "Window"),
+    action("window-hide", "Hide the window", "Window"),
+    action("window-toggle", "Show / hide the window", "Window"),
+    action("window-show", "Show the window", "Window"),
+    action("quit", "Quit", "Window"),
 ];
+
+/// The binding for a command id.
+pub fn binding(command: &str) -> Option<&'static Binding> {
+    BINDINGS.iter().find(|b| b.command == command)
+}
+
+/// True for a command the window runs itself (never sent to the engine).
+pub fn is_window_command(command: &str) -> bool {
+    binding(command).is_some_and(|b| b.window)
+}
 
 pub const TRAY: &[Entry] = &[
     item("Show / Hide Window", "window-toggle"),
@@ -231,8 +257,9 @@ pub fn menu_ids() -> BTreeSet<String> {
         .filter_map(|e| e.action))
 }
 
+/// Engine actions a shortcut runs (window commands are not actions).
 pub fn binding_ids() -> BTreeSet<String> {
-    ids(BINDINGS.iter().map(|b| b.action))
+    ids(BINDINGS.iter().filter(|b| !b.window).map(|b| b.command))
 }
 
 pub fn tray_ids() -> BTreeSet<String> {
@@ -355,10 +382,20 @@ mod tests {
     }
 
     #[test]
-    fn bindings_do_not_collide() {
-        let mut seen = BTreeSet::new();
+    fn every_binding_is_a_ui_keys_key_and_window_commands_are_not_actions() {
+        use oats_core::config::keys::{Kind, KEYS};
+        let keyed: BTreeSet<&str> = KEYS
+            .iter()
+            .filter(|k| k.kind == Kind::Keys)
+            .map(|k| k.path.strip_prefix("ui.keys.").expect("ui.keys.*"))
+            .collect();
+        let bound: BTreeSet<&str> = BINDINGS.iter().map(|b| b.command).collect();
+        assert_eq!(bound.len(), BINDINGS.len(), "a command listed twice");
+        assert_eq!(keyed, bound);
+        let manifest = manifest_ids();
         for b in BINDINGS {
-            assert!(seen.insert(b.keys), "duplicate key {}", b.keys);
+            assert_eq!(!b.window, manifest.contains(b.command), "{}", b.command);
+            assert!(!b.label.is_empty() && !b.group.is_empty());
         }
     }
 

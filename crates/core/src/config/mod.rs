@@ -8,6 +8,7 @@ pub mod cli;
 pub mod generate;
 pub mod keys;
 pub mod resolve;
+pub mod shortcut;
 pub mod typed;
 
 use std::fmt;

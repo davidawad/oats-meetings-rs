@@ -748,7 +748,9 @@ impl Engine {
                 Err(_) => value.clone(),
             },
             (Kind::Str | Kind::Enum(_), Value::Bool(b)) => Value::String(b.to_string()),
-            (Kind::Str | Kind::Enum(_), Value::Number(n)) => Value::String(n.to_string()),
+            (Kind::Str | Kind::Enum(_) | Kind::Keys, Value::Number(n)) => {
+                Value::String(n.to_string())
+            }
             _ => value.clone(),
         })
     }

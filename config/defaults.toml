@@ -305,3 +305,51 @@ theme = "system"
 tick = "100ms"
 # IANA zone the window shows meeting times in, labelled with its abbreviation; empty is the system zone (TZ, else the OS setting).
 tz = ""
+
+[ui.keys]
+# Back out: close the shortcuts overlay, leave Recently deleted, clear the search, then the selection. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+back = "escape"
+# Show or hide the overlay listing every shortcut. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+help = "?"
+# Toggle hiding the window from screen capture. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+privacy-toggle = "mod-shift-h"
+# Quit. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+quit = "mod-q"
+# Pause or resume the recording. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+record-pause = "mod-shift-p"
+# Start recording. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+record-start = "mod-shift-r"
+# Stop recording (and transcribe). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+record-stop = "mod-shift-s, s"
+# Start recording when idle, else pause or resume it (never stops). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+record-toggle = "space"
+# Search sessions (opens Sessions with the search box focused). Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+search = "/"
+# Reload the session list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+session-list = "mod-r"
+# Select the next session in the Sessions list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+sessions-next = "j, down"
+# Open the selected session's notes. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+sessions-open = "enter"
+# Select the previous session in the Sessions list. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+sessions-prev = "k, up"
+# Go to the Calendar tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-calendar = "5"
+# Go to the Live tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-live = "1"
+# Go to the Models tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-models = "6"
+# Go to the Notes tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-notes = "3"
+# Go to the Sessions tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-sessions = "2"
+# Go to the Settings tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-settings = "7"
+# Go to the Templates tab. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+tab-templates = "4"
+# Hide the window. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+window-hide = "mod-w"
+# Show the window. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+window-show = "mod-shift-o"
+# Show or hide the window. Comma-separated keystrokes, empty for none; mod is cmd on macOS and ctrl elsewhere.
+window-toggle = "mod-shift-w"

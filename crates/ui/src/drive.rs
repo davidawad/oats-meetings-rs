@@ -129,6 +129,18 @@ pub const OPS: &[(&str, &str, &str)] = &[
     ("models.download", "model", "Download a catalog model"),
     ("models.delete", "model", "Delete a downloaded model"),
     ("settings.set", "key, value", "change one setting row"),
+    (
+        "keys.press",
+        "keys",
+        "press one keystroke (space, 1, mod-shift-r) as the keyboard would: bare keys only while nothing is being typed in",
+    ),
+    (
+        "keys.rebind",
+        "command, keys",
+        "Rebind a shortcut (refused with conflict while another command has the keys)",
+    ),
+    ("keys.reset", "command", "Reset a shortcut to its default"),
+    ("keys.clear", "command", "Clear a shortcut (no keys)"),
 ];
 
 fn bad(msg: impl Into<String>) -> ConfigError {
@@ -176,6 +188,10 @@ fn widget_value(w: &Widget) -> Value {
         Widget::Text(t) => json!(t),
         Widget::Number { value, .. } => json!(value),
         Widget::Duration { text, .. } => json!(text),
+        Widget::Keys(keys) => json!(keys
+            .iter()
+            .map(|k| crate::shortcuts::display(k))
+            .collect::<Vec<_>>()),
     }
 }
 
@@ -193,6 +209,14 @@ impl MainWindow {
                 if name == "help" {
                     return Ok(help());
                 }
+                if name == "keys.press" {
+                    let text = need(&req["args"], name, "keys")?.to_string();
+                    let ran = self.press_keys(&text, cx).map_err(bad)?;
+                    cx.notify();
+                    let mut d = self.dump(cx);
+                    d["keys"]["pressed"] = json!({"keys": text, "command": ran});
+                    return Ok(d);
+                }
                 self.invoke(name, &req["args"], cx)?;
             }
             other => return Err(bad(format!("unknown ui request {other:?}"))),
@@ -209,7 +233,7 @@ impl MainWindow {
         if !OPS.iter().any(|o| o.0 == op) {
             return Err(bad(format!("no op '{op}' (ui-invoke op=help lists them)")));
         }
-        if view != "record" {
+        if view != "record" && view != "keys" {
             let t = tab_named(view)?;
             if self.state.tab != t {
                 self.switch_tab(t, cx);
@@ -378,6 +402,17 @@ impl MainWindow {
                     _ => models::Op::Delete,
                 };
                 models::apply(self, o, &model);
+            }
+            "keys.rebind" | "keys.reset" | "keys.clear" => {
+                let command = need(args, op, "command")?.to_string();
+                match op {
+                    "keys.rebind" => {
+                        let keys = need(args, op, "keys")?.to_string();
+                        self.rebind(&command, &keys, cx)?
+                    }
+                    "keys.reset" => self.reset_keys(&command, cx)?,
+                    _ => self.rebind(&command, "", cx)?,
+                }
             }
             "settings.set" => {
                 let key = need(args, op, "key")?.to_string();
@@ -603,6 +638,13 @@ impl MainWindow {
                 "chrome": crate::view::chrome(&st.rec),
             },
             "edit": edit,
+            "keys": {
+                "map": self.keymap().json(),
+                "help": self.keys.help,
+                "listening": self.keys.listening,
+                "note": self.keys.note.as_ref().map(|(c, why)| json!({"command": c, "message": why})),
+                "typing": self.typing(cx),
+            },
             "view": view,
             "frames": self.frames,
         })

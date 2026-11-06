@@ -105,6 +105,14 @@ pub fn validate_layer(flat: &Flat, layer: &str) -> Result<()> {
                     ))
                 }
             },
+            (Kind::Keys, Value::String(s)) => {
+                if let Err(why) = super::shortcut::parse_list(s) {
+                    return Err(ConfigError::new(
+                        "invalid_value",
+                        format!("'{path}' = \"{s}\" in {layer}; {why}"),
+                    ));
+                }
+            }
             (kind, other) => {
                 let want = match kind {
                     Kind::Bool => "boolean",
@@ -228,6 +236,14 @@ impl Resolved {
                     "kb.min_chunk ({}) must not exceed kb.max_chunk ({})",
                     cfg.kb.min_chunk, cfg.kb.max_chunk
                 ),
+            ));
+        }
+        if let Some((k, a, b)) =
+            super::shortcut::clash(cfg.ui.keys.iter().map(|(c, v)| (c.as_str(), v.as_str())))
+        {
+            return Err(ConfigError::new(
+                "invalid_combination",
+                format!("shortcut '{k}' is on both ui.keys.{a} and ui.keys.{b}"),
             ));
         }
         Ok(cfg)

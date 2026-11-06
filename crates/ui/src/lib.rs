@@ -6,6 +6,7 @@ pub mod host;
 pub mod kit;
 pub mod model;
 pub mod settings;
+pub mod shortcuts;
 pub mod state;
 pub mod theme;
 pub mod tray;

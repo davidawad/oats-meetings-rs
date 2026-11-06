@@ -14,8 +14,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Weak};
 
 use gpui::{
-    px, size, App, AppContext as _, AsyncApp, Bounds, KeyBinding, Menu, MenuItem, QuitMode,
-    WindowBounds, WindowHandle, WindowOptions,
+    px, size, App, AppContext as _, AsyncApp, Bounds, Menu, MenuItem, QuitMode, WindowBounds,
+    WindowHandle, WindowOptions,
 };
 use oats_core::config::ConfigError;
 use oats_core::control::engine::Engine;
@@ -25,7 +25,8 @@ use serde_json::{json, Value};
 
 use crate::capture;
 use crate::drive;
-use crate::model::{self, BINDINGS, MENUS};
+use crate::model::{self, MENUS};
+use crate::shortcuts::{self, Keymap};
 use crate::state::State;
 use crate::tray::{self, TrayBackend, TrayState};
 use crate::view::MainWindow;
@@ -35,14 +36,15 @@ use crate::view::MainWindow;
 /// `com.davidawad.oats-meetings-rs` (packaging/macos/Info.plist.in).
 pub const APP_ID: &str = "oats-meetings-rs";
 
-/// One gpui action carries every UI dispatch: the id is an `oats_core::action` wire name.
+/// One gpui action carries every UI dispatch: the id is an `oats_core::action` wire name, or a
+/// window command of `model::BINDINGS` (the main window runs those).
 #[derive(Clone, PartialEq, Debug, gpui::Action)]
 #[action(namespace = oats, no_json)]
 pub struct Do {
     pub id: String,
 }
 
-fn menus(capture_supported: bool) -> Vec<Menu> {
+pub(crate) fn menus(capture_supported: bool) -> Vec<Menu> {
     MENUS
         .iter()
         .map(|m| {
@@ -53,33 +55,6 @@ fn menus(capture_supported: bool) -> Vec<Menu> {
                     Do { id: id.to_string() },
                 ),
             }))
-        })
-        .collect()
-}
-
-fn mod_prefix() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "cmd-"
-    } else {
-        "ctrl-"
-    }
-}
-
-fn bindings(cx: &App) -> Vec<KeyBinding> {
-    BINDINGS
-        .iter()
-        .filter_map(|b| {
-            KeyBinding::load(
-                &format!("{}{}", mod_prefix(), b.keys),
-                Box::new(Do {
-                    id: b.action.to_string(),
-                }),
-                None,
-                false,
-                None,
-                cx,
-            )
-            .ok()
         })
         .collect()
 }
@@ -379,6 +354,13 @@ fn tick(host: &Shared, cx: &mut App) {
             h.nudges += 1;
         }
     }
+    // ui.keys: rebinds the chords when a reload changed them. A closed window cannot be listening
+    // for a Rebind any more.
+    if h.window.is_none() {
+        cx.default_global::<shortcuts::Applied>().listening = false;
+    }
+    let keymap = Keymap::of(&h.engine.snapshot().config);
+    shortcuts::sync(cx, &keymap, h.capture_supported);
     let supported = h.engine.capture_hiding_supported();
     if supported != h.capture_supported {
         // privacy.hide_method changed at runtime: relabel the menus, and re-show the tray.
@@ -455,10 +437,14 @@ pub fn run_with(
         .run(move |cx: &mut App| {
             cx.set_quit_mode(QuitMode::Explicit);
             crate::theme::load_fonts(cx);
-            cx.bind_keys(bindings(cx));
-            cx.set_menus(menus(capture_supported));
             let eng = Arc::clone(&h2.borrow().engine);
+            // The chords from ui.keys, and the menus that show them.
+            shortcuts::sync(cx, &Keymap::of(&eng.snapshot().config), capture_supported);
             cx.on_action(move |a: &Do, cx: &mut App| {
+                // A window command (tab, selection, help) with no window to run it: nothing to do.
+                if model::is_window_command(&a.id) {
+                    return;
+                }
                 // Off the UI thread: a record-start loads the ASR model and must not freeze the window.
                 let (eng, id) = (Arc::clone(&eng), a.id.clone());
                 cx.background_executor()
@@ -933,6 +919,42 @@ mod tests {
         assert!(!ui.start_hidden);
         assert!(ui.activate_on_show);
         assert!(ui.quit_timeout.as_duration() > std::time::Duration::ZERO);
+    }
+
+    /// dot-4uzgol.82: the chords follow ui.keys at the next tick, from `ctl config-set` or a file
+    /// edit, with no restart; a window closed mid-Rebind leaves them bound.
+    #[test]
+    fn a_tick_binds_the_chords_ui_keys_names() {
+        let (engine, _d) = testutil::engine(&[]);
+        let host = plain_host(&engine);
+        let mut cx = TestAppContext::single();
+        let bound = |cx: &mut TestAppContext, k: &'static str| {
+            let ks = gpui::Keystroke::parse(k).expect("a keystroke");
+            cx.update(|cx| cx.all_bindings_for_input(&[ks]).len())
+        };
+        let own = |k: &str| -> &'static str {
+            let m = if shortcuts::MACOS { "cmd" } else { "ctrl" };
+            Box::leak(format!("{m}-{k}").into_boxed_str())
+        };
+        tick_once(&host, &mut cx);
+        assert_eq!(bound(&mut cx, own("shift-r")), 1);
+        assert_eq!(
+            bound(&mut cx, "space"),
+            0,
+            "bare keys are the window's, not GPUI's"
+        );
+        model::dispatch(
+            &engine,
+            "config-set",
+            json!({"key": "ui.keys.record-start", "value": "mod-alt-r"}),
+        )
+        .unwrap();
+        tick_once(&host, &mut cx);
+        assert_eq!(bound(&mut cx, own("shift-r")), 0);
+        assert_eq!(bound(&mut cx, own("alt-r")), 1);
+        cx.update(|cx| cx.default_global::<shortcuts::Applied>().listening = true);
+        tick_once(&host, &mut cx);
+        assert_eq!(bound(&mut cx, own("alt-r")), 1, "no window is listening");
     }
 
     #[test]
