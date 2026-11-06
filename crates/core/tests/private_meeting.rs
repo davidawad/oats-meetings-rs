@@ -157,23 +157,25 @@ fn diarization_speaker_count_and_swaps() {
     let Some(fx) = fixture() else { return };
     let dir = session(&fx, "oats-rs");
     let cfg = config();
-    let d = Diarization::from_config(&cfg).unwrap_or(Diarization {
-        max_speakers: 1,
-        threshold: 0.0,
-        min_new_samples: 0,
-    });
+    // Through Settings, so the speaker models are found where the app looks (stt.local.models_dir).
+    let d = oats_core::stt::Settings::from_config(&cfg, &fx)
+        .expect("stt settings")
+        .diarize
+        .unwrap_or_else(|| Diarization::spectral(1, 0.0, 0));
     let chans = wav::read(&dir.join("audio.wav")).expect("audio.wav does not decode");
     let take: Vec<Value> = jsonl(&dir.join("transcript.final.jsonl"));
     let mut remote: Vec<Utt> = take.iter().filter(|u| !is_you(u)).filter_map(utt).collect();
     remote.sort_by(|a, b| a.start.total_cmp(&b.start));
     let recorded: Vec<String> = remote.iter().map(|u| u.speaker.clone()).collect();
-    diarize::label_final(d, &mut remote, &chans.them, &cfg.stt.speaker_them);
+    let algorithm = diarize::Diarizer::new(d.clone()).algorithm();
+    diarize::label_final(&d, &mut remote, &chans.them, &cfg.stt.speaker_them);
     let hyp: Vec<&str> = remote.iter().map(|u| u.speaker.as_str()).collect();
     let count = |l: &[&str]| l.iter().collect::<BTreeSet<_>>().len();
     let changes = |l: &[&str]| l.windows(2).filter(|w| w[0] != w[1]).count();
     let rec: Vec<&str> = recorded.iter().map(String::as_str).collect();
     let agree = rec.iter().zip(&hyp).filter(|(a, b)| a == b).count();
     let mut kv = vec![
+        ("algorithm", algorithm.as_str().to_string()),
         ("seconds", format!("{:.0}", chans.seconds())),
         ("remote_utts", remote.len().to_string()),
         ("speakers_now", count(&hyp).to_string()),
