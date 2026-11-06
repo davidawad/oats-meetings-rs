@@ -162,7 +162,7 @@ fn similarity(a: &str, b: &str) -> f32 {
 
 /// Enough of `you`'s words are, or nearly are (`similarity`), in the `them` utterances within
 /// the window around it.
-fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
+pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe) -> bool {
     let near: std::collections::HashSet<String> = them
         .iter()
         .filter(|t| t.start <= you.end + d.window && t.end >= you.start - d.window)

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Refuse a commit that tracks anything under tests/fixtures/private/ (dot-4uzgol.84): privileged
+# meeting audio and transcripts live there, local only. `git add -f` bypasses .gitignore, not this.
+# Installed by ci/private-meeting.sh; crates/core/tests/private_meeting.rs checks the same in CI.
+set -euo pipefail
+tracked=$(git ls-files --cached -- tests/fixtures/private | wc -l)
+if [ "$tracked" -ne 0 ]; then
+  echo "pre-commit: $tracked file(s) under tests/fixtures/private/ are staged or tracked; run" >&2
+  echo "  git rm -r --cached tests/fixtures/private" >&2
+  exit 1
+fi

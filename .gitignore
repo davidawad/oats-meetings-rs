@@ -1,2 +1,4 @@
 /target
 /assets/icon/derived
+# Privileged meeting fixtures (dot-4uzgol.84): local only, never tracked. ci/private-meeting.sh fills it.
+/tests/fixtures/private/
