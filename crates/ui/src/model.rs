@@ -245,6 +245,18 @@ pub const EXEMPT: &[(&str, &str)] = &[
         "naming remote_1..N is ctl for now (notes show the name)",
     ),
     ("template-import", "one-shot migration verb (ctl)"),
+    (
+        "template-export",
+        "OpenOats interchange verb, like template-import (ctl)",
+    ),
+    (
+        "session-export",
+        "OpenOats markdown export to a folder (ctl, sessions.export_dir)",
+    ),
+    (
+        "session-export-openoats",
+        "OpenOats interchange verb, like session-import (ctl)",
+    ),
     ("kb-search", "agent query (ctl)"),
     (
         "ui-select",
