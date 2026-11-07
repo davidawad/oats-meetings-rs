@@ -271,6 +271,14 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ),
     ("kb-search", "agent query (ctl)"),
     (
+        "perms-status",
+        "headless provisioning check (ctl); the window shows capture errors as they happen",
+    ),
+    (
+        "perms-ensure",
+        "headless provisioning verb (ctl): starts the audio server, may add a null sink",
+    ),
+    (
         "ui-select",
         "drives the window itself (ctl, headless acceptance)",
     ),
