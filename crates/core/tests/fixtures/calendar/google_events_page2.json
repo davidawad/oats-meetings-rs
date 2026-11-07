@@ -1,0 +1,44 @@
+{
+  "kind": "calendar#events",
+  "etag": "\"p32s8b3rq2a8g0p\"",
+  "summary": "me@davidaw.ad",
+  "timeZone": "Europe/Berlin",
+  "accessRole": "owner",
+  "nextSyncToken": "CPjL5MK0xYkDEPjL5MK0xYkDGAUg",
+  "items": [
+    {
+      "kind": "calendar#event",
+      "id": "7b2nq1alldayc0v",
+      "status": "confirmed",
+      "htmlLink": "https://www.google.com/calendar/event?eid=N2IybnEx",
+      "summary": "Offsite",
+      "start": {"date": "2026-11-10"},
+      "end": {"date": "2026-11-11"},
+      "iCalUID": "7b2nq1alldayc0v@google.com",
+      "eventType": "default"
+    },
+    {
+      "kind": "calendar#event",
+      "id": "9q8declinedx1",
+      "status": "confirmed",
+      "htmlLink": "https://www.google.com/calendar/event?eid=OXE4ZGVj",
+      "summary": "Vendor pitch",
+      "start": {"dateTime": "2026-11-10T09:00:00Z"},
+      "end": {"dateTime": "2026-11-10T10:00:00Z"},
+      "iCalUID": "9q8declinedx1@google.com",
+      "attendees": [
+        {"email": "sales@vendor.example", "organizer": true, "responseStatus": "accepted"},
+        {"email": "me@davidaw.ad", "self": true, "responseStatus": "declined"}
+      ]
+    },
+    {
+      "kind": "calendar#event",
+      "id": "5cancelledz2",
+      "status": "cancelled",
+      "summary": "Old review",
+      "start": {"dateTime": "2026-11-11T12:00:00Z"},
+      "end": {"dateTime": "2026-11-11T13:00:00Z"},
+      "iCalUID": "5cancelledz2@google.com"
+    }
+  ]
+}

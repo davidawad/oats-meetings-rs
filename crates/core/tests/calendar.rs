@@ -22,6 +22,20 @@ fn t(s: &str) -> DateTime<Utc> {
 fn rules() -> Rules {
     let c = oats_core::config::typed::Calendar {
         access_timeout: oats_core::config::typed::Dur(1000),
+        google_api: String::new(),
+        google_auth_url: String::new(),
+        google_client_id: String::new(),
+        google_token_url: String::new(),
+        max_pages: 1,
+        microsoft_api: String::new(),
+        microsoft_client_id: String::new(),
+        microsoft_login: String::new(),
+        microsoft_tenant: String::new(),
+        oauth_timeout: oats_core::config::typed::Dur(1000),
+        page_size: 1,
+        timeout: oats_core::config::typed::Dur(1000),
+        token_file: String::new(),
+        token_skew: oats_core::config::typed::Dur(0),
         ignore_all_day: true,
         ignore_cancelled: true,
         ignore_declined: true,
@@ -376,6 +390,7 @@ fn an_eventkit_source_reads_whole_accounts_and_single_calendars() {
         feeds: vec![],
         accounts: accounts.iter().map(|s| s.to_string()).collect(),
         calendars: calendars.iter().map(|s| s.to_string()).collect(),
+        ..Source::default()
     };
     let work = cal("w1", "Work", "me@davidaw.ad");
     let home = cal("h1", "Home", "iCloud");

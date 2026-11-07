@@ -270,7 +270,7 @@ pub fn calendar_data(xml: &str) -> Vec<String> {
 }
 
 /// Byte offset of the next `<name` or `<prefix:name` start tag.
-fn find_tag(s: &str, name: &str) -> Option<usize> {
+pub(crate) fn find_tag(s: &str, name: &str) -> Option<usize> {
     let mut from = 0;
     while let Some(i) = s[from..].find('<').map(|i| i + from) {
         let tag = &s[i + 1..];
@@ -287,7 +287,7 @@ fn find_tag(s: &str, name: &str) -> Option<usize> {
 }
 
 /// Byte offset of the `</..name>` end tag.
-fn find_close(s: &str, name: &str) -> Option<usize> {
+pub(crate) fn find_close(s: &str, name: &str) -> Option<usize> {
     let mut from = 0;
     while let Some(i) = s[from..].find("</").map(|i| i + from) {
         let tag = &s[i + 2..];
@@ -300,7 +300,7 @@ fn find_close(s: &str, name: &str) -> Option<usize> {
     None
 }
 
-fn xml_text(raw: &str) -> String {
+pub(crate) fn xml_text(raw: &str) -> String {
     let t = raw.trim();
     if let Some(inner) = t
         .strip_prefix("<![CDATA[")

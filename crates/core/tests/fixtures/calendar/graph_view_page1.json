@@ -1,0 +1,41 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('me%40davidaw.ad')/calendars('AAMkAGI2TGuLAAA%3D')/calendarView",
+  "@odata.nextLink": "{base}/me/calendars/AAMkAGI2TGuLAAA%3D/calendarView?startDateTime=2026-11-09T00%3A00%3A00Z&endDateTime=2026-11-12T00%3A00%3A00Z&%24top=2&%24skip=2",
+  "value": [
+    {
+      "@odata.etag": "W/\"ZlnW4RIAV06KYYwlrfNZvQAAKGWwbw==\"",
+      "id": "AAMkAGI2TAAA1",
+      "iCalUId": "040000008200E00074C5B7101A82E00800000000D0F7B5A7E5ADD8010000000000000000100000009A3C5C2F",
+      "subject": "Quarterly planning",
+      "bodyPreview": "Join on Teams",
+      "isAllDay": false,
+      "isCancelled": false,
+      "webLink": "https://outlook.office365.com/owa/?itemid=AAMkAGI2TAAA1&exvsurl=1&path=/calendar/item",
+      "onlineMeeting": {"joinUrl": "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0"},
+      "responseStatus": {"response": "accepted", "time": "2026-11-01T10:00:00Z"},
+      "start": {"dateTime": "2026-11-09T14:00:00.0000000", "timeZone": "UTC"},
+      "end": {"dateTime": "2026-11-09T15:00:00.0000000", "timeZone": "UTC"},
+      "location": {"displayName": "Microsoft Teams Meeting", "locationType": "default"},
+      "attendees": [
+        {"type": "required", "status": {"response": "accepted", "time": "2026-11-01T10:00:00Z"}, "emailAddress": {"name": "Ben Ito", "address": "ben@contoso.example"}},
+        {"type": "resource", "status": {"response": "none", "time": "0001-01-01T00:00:00Z"}, "emailAddress": {"name": "Room 7", "address": "room7@contoso.example"}}
+      ]
+    },
+    {
+      "@odata.etag": "W/\"ZlnW4RIAV06KYYwlrfNZvQAAKGWwcA==\"",
+      "id": "AAMkAGI2TAAA2",
+      "iCalUId": "040000008200E00074C5B7101A82E00800000000AA",
+      "subject": "Company holiday",
+      "bodyPreview": "",
+      "isAllDay": true,
+      "isCancelled": false,
+      "webLink": "https://outlook.office365.com/owa/?itemid=AAMkAGI2TAAA2",
+      "onlineMeeting": null,
+      "responseStatus": {"response": "organizer", "time": "0001-01-01T00:00:00Z"},
+      "start": {"dateTime": "2026-11-11T00:00:00.0000000", "timeZone": "UTC"},
+      "end": {"dateTime": "2026-11-12T00:00:00.0000000", "timeZone": "UTC"},
+      "location": {"displayName": ""},
+      "attendees": []
+    }
+  ]
+}

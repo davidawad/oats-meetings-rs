@@ -176,6 +176,14 @@ fn a_full_graph_is_all_granted_with_no_portal_and_says_how() {
         "{sys}"
     );
     assert_eq!(perm(&s, "screencast_portal")["state"], "not_needed");
+    // The default os-local source reads the desktop's own calendar files: no OS permission.
+    let cal = perm(&s, "calendar");
+    assert_eq!(cal["state"], "granted", "{cal}");
+    assert_eq!(cal["kinds"], json!(["os-local"]));
+    r.engine
+        .set("calendar.sources", &json!("[]"), "test")
+        .unwrap();
+    let s = perms::status_with(&r.engine, &r.host(true));
     assert_eq!(perm(&s, "calendar")["state"], "not_needed");
     // The engine action answers the same shape (the real host: no commands run).
     let v = r.engine.dispatch(&Action::PermsStatus {}).unwrap();
@@ -283,7 +291,7 @@ fn calendar_feeds_need_policy_and_secrets_not_an_os_grant() {
     let s = perms::status_with(&r.engine, &host);
     let cal = perm(&s, "calendar");
     assert_eq!(cal["state"], "blocked", "{cal}");
-    assert_eq!(cal["kinds"], json!(["caldav"]));
+    assert_eq!(cal["kinds"], json!(["caldav", "os-local"]));
     let reasons = cal["problems"].to_string();
     assert!(reasons.contains("network.allow"), "{reasons}");
     assert!(reasons.contains("secret"), "{reasons}");

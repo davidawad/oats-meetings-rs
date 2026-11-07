@@ -44,10 +44,13 @@ impl Person {
 pub struct Event {
     /// The `calendar.sources` entry it came from.
     pub source: String,
-    /// `ics` or `eventkit`.
+    /// The source's kind: `os-local`, `google`, `microsoft`, `caldav`, `ics` or `eventkit`.
     pub kind: String,
     /// Stable per occurrence within its source: the ICS UID or the EventKit event identifier.
     pub id: String,
+    /// The iCalendar UID (Google `iCalUID`, Graph `iCalUId`, EventKit's external identifier);
+    /// the same meeting through two sources shares it. Empty when the source has none.
+    pub uid: String,
     pub title: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,
@@ -71,7 +74,8 @@ pub struct Event {
 impl Event {
     pub fn to_json(&self, rules: &Rules) -> Value {
         json!({
-            "source": self.source, "kind": self.kind, "id": self.id, "title": self.title,
+            "source": self.source, "kind": self.kind, "id": self.id, "uid": self.uid,
+            "title": self.title,
             "start": self.start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             "end": self.end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             "all_day": self.all_day, "calendar": self.calendar, "calendar_id": self.calendar_id,

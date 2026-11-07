@@ -1,10 +1,15 @@
-//! Calendar sources and titling sessions from the overlapping event (dot-4uzgol.88).
+//! Calendar sources and titling sessions from the overlapping event (dot-4uzgol.88,
+//! dot-4uzgol.100).
 //!
-//! `calendar.sources` is a JSON array of sources, each `ics` (the cached `ics.feeds`, all or some
-//! by name) or `eventkit` (the macOS Calendar app: every account and calendar it syncs, chosen by
-//! account title / email and by calendar title or id). `calendar-sources-list` shows each source
-//! with what it can read (the accounts and calendars, ticked or not); `calendar-select` ticks and
-//! unticks them, as the Settings checkboxes do.
+//! `calendar.sources` is a JSON array of sources, each read through one provider (`provider`):
+//! `os-local` (this computer's accounts, the default), `google`, `microsoft`, `caldav`, `ics`
+//! (the cached `ics.feeds`, all or some by name) or `eventkit` (the macOS Calendar app). Every
+//! provider lists accounts and their calendars, chosen by account title / email and by calendar
+//! title or id. `calendar-sources-list` shows each source with what it can read (ticked or not);
+//! `calendar-select` ticks and unticks them, as the Settings checkboxes do; `calendar-connect`
+//! signs a google / microsoft source in. An event seen through two sources (the same iCalUID and
+//! start) is kept once, from the earlier source in the list. Providers that read the network
+//! obey `network.allow`; os-local needs none.
 //!
 //! On `record-start` the event overlapping now (`rules::pick`) names the session through
 //! `calendar.title_template` (else `calendar.title_fallback`), and its id, attendees and
@@ -18,10 +23,21 @@
 //!
 //! Stable error codes: `invalid_value` (a bad `calendar.*` value), `invalid_argument`,
 //! `source_exists`, `source_not_found`, `unsupported` (eventkit off macOS), `calendar_access`
-//! (no grant), `calendar_access_failed`, `calendar_access_timeout`.
+//! (no grant), `calendar_access_failed`, `calendar_access_timeout`, `network_denied`,
+//! `calendar_not_connected` (an OAuth source never signed in), `calendar_auth` (refused or
+//! expired credentials), `calendar_connect_timeout`, `calendar_not_found`, `fetch_failed`,
+//! `fetch_timeout`, `http_status`.
 
+pub mod caldav;
 pub mod eventkit;
+pub mod google;
+pub mod graph;
+pub mod local;
+pub mod oauth;
+pub mod provider;
 pub mod rules;
+#[cfg(windows)]
+pub mod windows;
 
 use std::sync::Mutex;
 
@@ -37,21 +53,54 @@ use crate::control::engine::Engine;
 use crate::control::subsystem::Subsystem;
 
 use eventkit::{Access, EventStore};
+use provider::uses_eventkit;
 use rules::{Event, Rules};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SourceKind {
+    #[default]
+    #[serde(rename = "os-local")]
+    OsLocal,
+    #[serde(rename = "google")]
+    Google,
+    #[serde(rename = "microsoft")]
+    Microsoft,
+    #[serde(rename = "caldav")]
+    Caldav,
+    #[serde(rename = "ics")]
     Ics,
+    #[serde(rename = "eventkit")]
     Eventkit,
 }
 
 impl SourceKind {
+    pub const ALL: [SourceKind; 6] = [
+        SourceKind::OsLocal,
+        SourceKind::Google,
+        SourceKind::Microsoft,
+        SourceKind::Caldav,
+        SourceKind::Ics,
+        SourceKind::Eventkit,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
+            SourceKind::OsLocal => "os-local",
+            SourceKind::Google => "google",
+            SourceKind::Microsoft => "microsoft",
+            SourceKind::Caldav => "caldav",
             SourceKind::Ics => "ics",
             SourceKind::Eventkit => "eventkit",
         }
+    }
+
+    pub fn parse(k: &str) -> Option<SourceKind> {
+        SourceKind::ALL.into_iter().find(|x| x.as_str() == k)
+    }
+
+    /// Signs in with OAuth (`calendar-connect`).
+    pub fn oauth(self) -> bool {
+        matches!(self, SourceKind::Google | SourceKind::Microsoft)
     }
 }
 
@@ -74,7 +123,7 @@ fn one_or_many<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Vec<Strin
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
     pub name: String,
@@ -96,13 +145,32 @@ pub struct Source {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub accounts: Vec<String>,
-    /// eventkit: single calendars, by title or id. Both lists empty is every calendar.
+    /// Single calendars, by title or id. Both lists empty is every calendar.
     #[serde(
         default,
         deserialize_with = "one_or_many",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub calendars: Vec<String>,
+    /// caldav: the server (or principal, or calendar home) discovery starts from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    /// caldav: the user name sent with the password.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub username: String,
+    /// caldav: the (app) password, as a `secret:` reference.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+    /// google / microsoft: the OAuth client id (else `calendar.<kind>_client_id`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_id: String,
+    /// google / microsoft: the OAuth client secret, as a `secret:` reference (Google desktop
+    /// clients have one).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub client_secret: String,
+    /// microsoft: the Entra tenant (else `calendar.microsoft_tenant`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tenant: String,
 }
 
 fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
@@ -129,29 +197,59 @@ pub fn parse_sources(text: &str) -> Result<Vec<Source>> {
                 format!("duplicate source name '{}'", s.name),
             ));
         }
-        match s.kind {
-            SourceKind::Ics if !s.accounts.is_empty() || !s.calendars.is_empty() => {
-                return Err(invalid(
-                    "sources",
-                    format!(
-                        "'{}': accounts and calendars are for eventkit sources (ics takes feeds)",
-                        s.name
-                    ),
-                ))
-            }
-            SourceKind::Eventkit if !s.feeds.is_empty() => {
-                return Err(invalid(
-                    "sources",
-                    format!(
-                        "'{}': feeds are for ics sources (eventkit takes accounts and calendars)",
-                        s.name
-                    ),
-                ))
-            }
-            _ => {}
-        }
+        check_fields(s).map_err(|why| invalid("sources", format!("'{}': {why}", s.name)))?;
     }
     Ok(sources)
+}
+
+/// Each field belongs to the kinds that read it; credentials are `secret:` references.
+fn check_fields(s: &Source) -> std::result::Result<(), String> {
+    use SourceKind::*;
+    let k = s.kind;
+    let only = |field: &str, set: bool, kinds: &[SourceKind]| {
+        if set && !kinds.contains(&k) {
+            let names: Vec<&str> = kinds.iter().map(|x| x.as_str()).collect();
+            Err(format!("{field} is for {} sources", names.join(" / ")))
+        } else {
+            Ok(())
+        }
+    };
+    only("feeds", !s.feeds.is_empty(), &[Ics])?;
+    only(
+        "accounts",
+        !s.accounts.is_empty(),
+        &[OsLocal, Eventkit, Google, Microsoft, Caldav],
+    )?;
+    only(
+        "calendars",
+        !s.calendars.is_empty(),
+        &[OsLocal, Eventkit, Google, Microsoft, Caldav],
+    )?;
+    only("url", !s.url.is_empty(), &[Caldav])?;
+    only("username", !s.username.is_empty(), &[Caldav])?;
+    only("password", !s.password.is_empty(), &[Caldav])?;
+    only("client_id", !s.client_id.is_empty(), &[Google, Microsoft])?;
+    only(
+        "client_secret",
+        !s.client_secret.is_empty(),
+        &[Google, Microsoft],
+    )?;
+    only("tenant", !s.tenant.is_empty(), &[Microsoft])?;
+    if k == Caldav && !crate::http::valid_url(s.url.trim()) {
+        return Err("a caldav source needs url, an http(s) URL of the server".into());
+    }
+    for (field, v) in [
+        ("password", &s.password),
+        ("client_secret", &s.client_secret),
+    ] {
+        if !v.is_empty() && crate::secrets::parse_ref(v).is_none() {
+            return Err(format!(
+                "{field} must be a secret reference like secret:caldav/{}, not the secret itself; store it with `secret-set`",
+                s.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The `calendar.*` strings parse: the source list and both title templates.
@@ -215,8 +313,12 @@ fn on_clock(c: &Config, at: DateTime<Utc>) -> DateTime<FixedOffset> {
     }
 }
 
-/// The eventkit calendar `c` is read by source `s`.
+/// Source `s` reads calendar `c` (one of its provider's): an ics source by feed name, the others
+/// by account and calendar.
 pub fn selected(s: &Source, c: &eventkit::Calendar) -> bool {
+    if s.kind == SourceKind::Ics {
+        return s.feeds.is_empty() || s.feeds.iter().any(|f| f == &c.id);
+    }
     if s.accounts.is_empty() && s.calendars.is_empty() {
         return true;
     }
@@ -229,7 +331,7 @@ pub fn selected(s: &Source, c: &eventkit::Calendar) -> bool {
 
 // ---- events ----------------------------------------------------------------------------------
 
-fn from_ics(source: &str, v: &Value) -> Option<Event> {
+pub(crate) fn from_ics(source: &str, v: &Value) -> Option<Event> {
     let t = |k: &str| {
         v.get(k)
             .and_then(Value::as_str)
@@ -260,6 +362,7 @@ fn from_ics(source: &str, v: &Value) -> Option<Event> {
         source: source.to_string(),
         kind: SourceKind::Ics.as_str().to_string(),
         id: format!("{}@{}", t("uid"), start.timestamp()),
+        uid: t("uid"),
         title: t("summary"),
         end: at("end").unwrap_or(start),
         start,
@@ -280,73 +383,31 @@ fn from_ics(source: &str, v: &Value) -> Option<Event> {
     })
 }
 
-fn ics_events(
+/// One source's events in `[from, to)`: its provider's calendars, the selected ones read.
+fn source_events(
     engine: &Engine,
     s: &Source,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
-) -> Result<(Vec<Event>, Vec<Value>)> {
-    let v = crate::ics::dispatch(
-        engine,
-        &Action::IcsEvents {
-            from: Some(stamp(from)),
-            to: Some(stamp(to)),
-            feed: None,
-        },
-    )?;
-    let wanted = |feed: &str| s.feeds.is_empty() || s.feeds.iter().any(|f| f == feed);
-    let events = v["events"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|e| wanted(e["feed"].as_str().unwrap_or_default()))
-        .filter_map(|e| from_ics(&s.name, e))
-        .collect();
-    let errors = v["errors"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|e| wanted(e["name"].as_str().unwrap_or_default()))
-        .map(|e| json!({"source": s.name, "feed": e["name"], "error": e["error"]}))
-        .collect();
-    Ok((events, errors))
-}
-
-fn no_access(a: Access) -> ConfigError {
-    ConfigError::new(
-        "calendar_access",
-        format!(
-            "Calendars access is {}: enable an eventkit source or run `calendar-access request=true`",
-            a.as_str()
-        ),
-    )
-}
-
-fn ek_events(
-    engine: &Engine,
-    s: &Source,
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
+    errors: &mut Vec<Value>,
 ) -> Result<Vec<Event>> {
-    let store = engine.event_store();
-    if !store.supported() {
-        return Err(store.calendars().unwrap_err());
+    let p = engine.calendar_provider(s.kind);
+    if p.networked() {
+        provider::check_network(engine, s)?;
     }
-    let a = store.authorization();
-    if !a.readable() {
-        return Err(no_access(a));
-    }
-    let ids: Vec<String> = store
-        .calendars()?
+    let chosen: Vec<eventkit::Calendar> = p
+        .calendars(engine, s)?
         .into_iter()
         .filter(|c| selected(s, c))
-        .map(|c| c.id)
         .collect();
+    if chosen.is_empty() {
+        return Ok(vec![]);
+    }
     let cfg = engine.snapshot();
-    let mut out = store.events(from, to, &ids)?;
+    let mut out = p.events(engine, s, &chosen, from, to, errors)?;
     for e in &mut out {
         e.source = s.name.clone();
-        e.kind = SourceKind::Eventkit.as_str().to_string();
+        e.kind = s.kind.as_str().to_string();
         if e.all_day && e.start_date.is_none() {
             e.start_date = Some(
                 on_clock(&cfg.config, e.start)
@@ -358,8 +419,22 @@ fn ek_events(
     Ok(out)
 }
 
+/// The same meeting seen through two sources (an account in both the OS and a google source):
+/// the same iCalUID (case-insensitive) and start. The first one, from the earlier source in
+/// `calendar.sources`, stays.
+pub fn dedupe(events: &mut Vec<Event>) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let before = events.len();
+    events.retain(|e| {
+        let uid = e.uid.trim();
+        uid.is_empty() || seen.insert((uid.to_ascii_lowercase(), e.start))
+    });
+    before - events.len()
+}
+
 /// Every enabled source's events overlapping `[from, to)` (or one source's, enabled or not),
-/// sorted by start, and the per-source errors (a failing source does not hide the others).
+/// deduplicated by iCalUID, sorted by start, and the per-source errors (a failing source does
+/// not hide the others).
 pub fn gather(
     engine: &Engine,
     from: DateTime<Utc>,
@@ -377,18 +452,20 @@ pub fn gather(
     let mut events = Vec::new();
     let mut errors = Vec::new();
     for s in &sources {
-        let got = match s.kind {
-            SourceKind::Ics => ics_events(engine, s, from, to),
-            SourceKind::Eventkit => ek_events(engine, s, from, to).map(|e| (e, vec![])),
-        };
-        match got {
-            Ok((mut e, mut errs)) => {
-                events.append(&mut e);
-                errors.append(&mut errs);
-            }
+        let mut errs = Vec::new();
+        match source_events(engine, s, from, to, &mut errs) {
+            Ok(mut e) => events.append(&mut e),
             Err(e) => errors.push(json!({"source": s.name, "error": err_json(&e)})),
         }
+        for e in errs {
+            let mut e = e;
+            if e.get("source").is_none() {
+                e["source"] = json!(s.name);
+            }
+            errors.push(e);
+        }
     }
+    dedupe(&mut events);
     events.sort_by(|a, b| {
         a.start
             .cmp(&b.start)
@@ -410,17 +487,39 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             feeds,
             accounts,
             calendars,
-        } => source_add(
-            engine,
-            name,
-            kind,
-            enabled.unwrap_or(true),
-            [
-                strings("feeds", feeds.as_ref())?,
-                strings("accounts", accounts.as_ref())?,
-                strings("calendars", calendars.as_ref())?,
-            ],
-        ),
+            url,
+            username,
+            password,
+            client_id,
+            client_secret,
+            tenant,
+        } => {
+            let kind = SourceKind::parse(kind).ok_or_else(|| {
+                let all: Vec<&str> = SourceKind::ALL.iter().map(|k| k.as_str()).collect();
+                ConfigError::new(
+                    "invalid_argument",
+                    format!("kind '{kind}' is not one of {}", all.join(", ")),
+                )
+            })?;
+            let text = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
+            source_add(
+                engine,
+                Source {
+                    name: name.clone(),
+                    kind,
+                    enabled: enabled.unwrap_or(true),
+                    feeds: strings("feeds", feeds.as_ref())?,
+                    accounts: strings("accounts", accounts.as_ref())?,
+                    calendars: strings("calendars", calendars.as_ref())?,
+                    url: text(url),
+                    username: text(username),
+                    password: text(password),
+                    client_id: text(client_id),
+                    client_secret: text(client_secret),
+                    tenant: text(tenant),
+                },
+            )
+        }
         Action::CalendarSourceRemove { name } => source_remove(engine, name),
         Action::CalendarSourceEnable { name, enabled } => {
             source_enable(engine, name, enabled.unwrap_or(true))
@@ -442,6 +541,8 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             events(engine, from.as_deref(), to.as_deref(), source.as_deref())
         }
         Action::CalendarMatch { at, to } => match_now(engine, at.as_deref(), to.as_deref()),
+        Action::CalendarConnect { source, open } => connect(engine, source, open.unwrap_or(false)),
+        Action::CalendarDisconnect { source } => disconnect(engine, source),
         _ => Err(ConfigError::new("bad_request", "not a calendar action")),
     }
 }
@@ -507,31 +608,8 @@ fn source_json(s: &Source) -> Value {
     serde_json::to_value(s).expect("source serializes")
 }
 
-fn source_add(
-    engine: &Engine,
-    name: &str,
-    kind: &str,
-    enabled: bool,
-    [feeds, accounts, calendars]: [Vec<String>; 3],
-) -> Result<Value> {
-    let kind = match kind {
-        "ics" => SourceKind::Ics,
-        "eventkit" => SourceKind::Eventkit,
-        k => {
-            return Err(ConfigError::new(
-                "invalid_argument",
-                format!("kind '{k}' is not ics or eventkit"),
-            ))
-        }
-    };
-    let src = Source {
-        name: name.to_string(),
-        kind,
-        enabled,
-        feeds,
-        accounts,
-        calendars,
-    };
+fn source_add(engine: &Engine, src: Source) -> Result<Value> {
+    let (name, kind, enabled) = (src.name.clone(), src.kind, src.enabled);
     let _g = SOURCE_LIST_LOCK.lock().expect("source list lock");
     let mut sources = load(engine)?;
     if sources.iter().any(|s| s.name == name) {
@@ -546,8 +624,11 @@ fn source_add(
         .map_err(|e| ConfigError::new("invalid_argument", e.message))?;
     save(engine, &sources, "calendar-source-add")?;
     let mut out = json!({"source": source_json(&src), "sources": sources.len()});
-    if kind == SourceKind::Eventkit && enabled {
+    if uses_eventkit(kind) && enabled {
         out["access"] = ensure_access(engine);
+    }
+    if kind.oauth() {
+        out["next"] = json!(format!("calendar-connect source={name}"));
     }
     Ok(out)
 }
@@ -569,14 +650,14 @@ fn source_enable(engine: &Engine, name: &str, enabled: bool) -> Result<Value> {
     let src = s.clone();
     save(engine, &sources, "calendar-source-enable")?;
     let mut out = json!({"source": source_json(&src)});
-    if src.kind == SourceKind::Eventkit && enabled {
+    if uses_eventkit(src.kind) && enabled {
         out["access"] = ensure_access(engine);
     }
     Ok(out)
 }
 
-/// Tick (or untick) one calendar, or every calendar of one account, in an eventkit source, as a
-/// Settings checkbox does. The selection is rewritten in its shortest form: whole accounts by
+/// Tick (or untick) one calendar, or every calendar of one account, in a source, as a Settings
+/// checkbox does. The selection is rewritten in its shortest form: whole accounts by
 /// title, the rest by calendar id, and both lists empty when everything is ticked. Unticking the
 /// last calendar disables the source; ticking one in a disabled source enables it with just that.
 fn select(
@@ -595,24 +676,17 @@ fn select(
     let _g = SOURCE_LIST_LOCK.lock().expect("source list lock");
     let mut sources = load(engine)?;
     let s = find_mut(&mut sources, source)?;
-    if s.kind != SourceKind::Eventkit {
+    if s.kind == SourceKind::Ics {
         return Err(ConfigError::new(
             "invalid_argument",
-            format!(
-                "'{source}' is an {} source; select its feeds with `feeds`",
-                s.kind.as_str()
-            ),
+            format!("'{source}' is an ics source; select its feeds with `feeds`"),
         ));
     }
-    let store = engine.event_store();
-    if !store.supported() {
-        return Err(store.calendars().unwrap_err());
+    let p = engine.calendar_provider(s.kind);
+    if p.networked() {
+        provider::check_network(engine, s)?;
     }
-    let a = store.authorization();
-    if !a.readable() {
-        return Err(no_access(a));
-    }
-    let all = store.calendars()?;
+    let all = p.calendars(engine, s)?;
     let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
     let in_account =
         |c: &eventkit::Calendar| account.is_none_or(|x| same(x, &c.account) || x == c.account_id);
@@ -673,7 +747,7 @@ fn select(
     save(engine, &sources, "calendar-select")?;
     let mut out =
         json!({"source": source_json(&src), "selected": set.len(), "calendars": all.len()});
-    if src.enabled && !was_enabled {
+    if src.enabled && !was_enabled && uses_eventkit(src.kind) {
         out["access"] = ensure_access(engine);
     }
     Ok(out)
@@ -683,15 +757,6 @@ fn sources_list(engine: &Engine) -> Result<Value> {
     let sources = load(engine)?;
     let store = engine.event_store();
     let access = store.authorization();
-    let wants_ek = sources.iter().any(|s| s.kind == SourceKind::Eventkit);
-    let (cals, ek_error) = if wants_ek && access.readable() {
-        match store.calendars() {
-            Ok(c) => (c, None),
-            Err(e) => (vec![], Some(err_json(&e))),
-        }
-    } else {
-        (vec![], None)
-    };
     let feeds = crate::ics::dispatch(engine, &Action::IcsList {})
         .ok()
         .and_then(|v| v["feeds"].as_array().cloned())
@@ -701,28 +766,37 @@ fn sources_list(engine: &Engine) -> Result<Value> {
         .map(|s| {
             let mut v = source_json(s);
             v["enabled"] = json!(s.enabled);
-            match s.kind {
-                SourceKind::Ics => {
-                    v["available"] = json!(feeds
-                        .iter()
-                        .map(|f| {
-                            let n = f["name"].as_str().unwrap_or_default();
-                            let on = f["enabled"].as_bool().unwrap_or(true)
-                                && (s.feeds.is_empty() || s.feeds.iter().any(|x| x == n));
-                            json!({"name": n, "enabled": f["enabled"], "selected": on})
-                        })
-                        .collect::<Vec<_>>());
-                }
-                SourceKind::Eventkit => {
-                    v["authorization"] = json!(access.as_str());
-                    v["accounts"] = accounts_json(s, &cals);
-                    if let Some(e) = &ek_error {
-                        v["error"] = e.clone();
-                    } else if !store.supported() {
-                        v["error"] = json!({"code": "unsupported", "message": "eventkit calendars are macOS only"});
-                    } else if !access.readable() {
-                        v["error"] = err_json(&no_access(access));
-                    }
+            if s.kind == SourceKind::Ics {
+                v["available"] = json!(feeds
+                    .iter()
+                    .map(|f| {
+                        let n = f["name"].as_str().unwrap_or_default();
+                        let on = f["enabled"].as_bool().unwrap_or(true)
+                            && (s.feeds.is_empty() || s.feeds.iter().any(|x| x == n));
+                        json!({"name": n, "enabled": f["enabled"], "selected": on})
+                    })
+                    .collect::<Vec<_>>());
+                return v;
+            }
+            if uses_eventkit(s.kind) {
+                v["authorization"] = json!(access.as_str());
+            }
+            if s.kind.oauth() {
+                let t = oauth::load(engine, s).ok().flatten();
+                v["connected"] = json!(t.as_ref().is_some_and(|t| !t.refresh_token.is_empty()));
+                v["account"] = json!(t.map(|t| t.account).unwrap_or_default());
+            }
+            let p = engine.calendar_provider(s.kind);
+            let got = if p.networked() {
+                provider::check_network(engine, s).and_then(|_| p.calendars(engine, s))
+            } else {
+                p.calendars(engine, s)
+            };
+            match got {
+                Ok(cals) => v["accounts"] = accounts_json(s, &cals),
+                Err(e) => {
+                    v["accounts"] = json!([]);
+                    v["error"] = err_json(&e);
                 }
             }
             v
@@ -730,8 +804,56 @@ fn sources_list(engine: &Engine) -> Result<Value> {
         .collect();
     Ok(json!({
         "sources": rows,
+        "kinds": SourceKind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
         "eventkit": {"supported": store.supported(), "authorization": access.as_str()},
     }))
+}
+
+/// `calendar-connect`: sign an OAuth source in; discover a caldav server's calendars; ask for the
+/// Calendars grant of an os-local / eventkit source on a Mac.
+fn connect(engine: &Engine, name: &str, open: bool) -> Result<Value> {
+    let sources = load(engine)?;
+    let s = sources.iter().find(|s| s.name == name).ok_or_else(|| {
+        ConfigError::new(
+            "source_not_found",
+            format!("no calendar source named '{name}'"),
+        )
+    })?;
+    if s.kind.oauth() {
+        return oauth::connect(engine, s, open);
+    }
+    let mut out = json!({"source": s.name, "kind": s.kind.as_str()});
+    if uses_eventkit(s.kind) {
+        out["access"] = ensure_access(engine);
+    }
+    let p = engine.calendar_provider(s.kind);
+    if p.networked() {
+        provider::check_network(engine, s)?;
+    }
+    let cals = p.calendars(engine, s)?;
+    out["accounts"] = accounts_json(s, &cals);
+    out["calendars"] = json!(cals.len());
+    Ok(out)
+}
+
+fn disconnect(engine: &Engine, name: &str) -> Result<Value> {
+    let sources = load(engine)?;
+    let s = sources.iter().find(|s| s.name == name).ok_or_else(|| {
+        ConfigError::new(
+            "source_not_found",
+            format!("no calendar source named '{name}'"),
+        )
+    })?;
+    if !s.kind.oauth() {
+        return Err(ConfigError::new(
+            "invalid_argument",
+            format!(
+                "'{name}' is a {} source; only google and microsoft sources sign in",
+                s.kind.as_str()
+            ),
+        ));
+    }
+    Ok(json!({"source": name, "forgotten": oauth::forget(engine, s)?}))
 }
 
 /// The calendars grouped by account, each ticked when source `s` reads it.

@@ -209,6 +209,8 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "calendar-source-enable",
     "calendar-source-add",
     "calendar-access",
+    "calendar-connect",
+    "calendar-disconnect",
     "devices-list",
     "notes-get",
     "notes-set",

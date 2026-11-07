@@ -321,6 +321,10 @@ mod mac {
                 out.push(Event {
                     // One id per occurrence: a recurring event shares its identifier.
                     id: format!("{id}@{}", start.timestamp()),
+                    // The iCalendar UID, shared with the same meeting read through another source.
+                    uid: unsafe { e.calendarItemExternalIdentifier() }
+                        .map(|s| text(&s))
+                        .unwrap_or_default(),
                     title: text(&*unsafe { e.title() }),
                     start,
                     end: instant(&*unsafe { e.endDate() }),

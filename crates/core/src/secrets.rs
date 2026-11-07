@@ -239,6 +239,89 @@ impl SecretStore for Chain {
     }
 }
 
+/// A JSON object in one file the app owns (mode 0600 on unix), written atomically: the app's own
+/// secret store, for the OAuth tokens it mints itself (`calendar.token_file`). Never the OS
+/// keychain.
+pub struct FileStore {
+    path: std::path::PathBuf,
+    lock: std::sync::Mutex<()>,
+}
+
+impl FileStore {
+    pub fn new(path: impl Into<std::path::PathBuf>) -> FileStore {
+        FileStore {
+            path: path.into(),
+            lock: std::sync::Mutex::new(()),
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    fn read(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(t) if t.trim().is_empty() => Ok(Default::default()),
+            Ok(t) => serde_json::from_str(&t)
+                .map_err(|e| unavailable(format!("{}: {e}", self.path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+            Err(e) => Err(unavailable(format!("{}: {e}", self.path.display()))),
+        }
+    }
+
+    fn write(&self, m: &std::collections::BTreeMap<String, String>) -> Result<()> {
+        let io = |e: std::io::Error| unavailable(format!("{}: {e}", self.path.display()));
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(io)?;
+        }
+        let tmp = self
+            .path
+            .with_extension(format!("tmp{}", std::process::id()));
+        let text = serde_json::to_vec_pretty(m).expect("secrets serialize");
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        {
+            use std::io::Write;
+            let mut f = o.open(&tmp).map_err(io)?;
+            f.write_all(&text).map_err(io)?;
+        }
+        std::fs::rename(&tmp, &self.path).map_err(io)
+    }
+}
+
+impl SecretStore for FileStore {
+    fn name(&self) -> &'static str {
+        "file"
+    }
+    fn get(&self, key: &str) -> Result<Option<String>> {
+        check_key(key)?;
+        let _g = self.lock.lock().expect("file store");
+        Ok(self.read()?.get(key).cloned())
+    }
+    fn set(&self, key: &str, value: &str) -> Result<()> {
+        check_key(key)?;
+        let _g = self.lock.lock().expect("file store");
+        let mut m = self.read()?;
+        m.insert(key.to_string(), value.to_string());
+        self.write(&m)
+    }
+    fn delete(&self, key: &str) -> Result<bool> {
+        check_key(key)?;
+        let _g = self.lock.lock().expect("file store");
+        let mut m = self.read()?;
+        let had = m.remove(key).is_some();
+        if had {
+            self.write(&m)?;
+        }
+        Ok(had)
+    }
+}
+
 /// In memory; for tests of anything that takes a `SecretStore`.
 #[derive(Default)]
 pub struct MemStore(std::sync::Mutex<std::collections::BTreeMap<String, String>>);
@@ -352,6 +435,28 @@ mod tests {
             resolve(&e, "tok", 128).unwrap_err().code,
             "secret_plaintext"
         );
+    }
+
+    #[test]
+    fn file_store_round_trip_is_private() {
+        let d = tempfile::tempdir().unwrap();
+        let f = FileStore::new(d.path().join("sub/tokens.json"));
+        assert_eq!(f.get("calendar/g").unwrap(), None);
+        f.set("calendar/g", "{\"refresh_token\":\"r\"}").unwrap();
+        f.set("calendar/m", "x").unwrap();
+        let again = FileStore::new(f.path());
+        assert_eq!(
+            again.get("calendar/g").unwrap().unwrap(),
+            "{\"refresh_token\":\"r\"}"
+        );
+        assert!(again.delete("calendar/m").unwrap());
+        assert!(!again.delete("calendar/m").unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(f.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
     }
 
     #[test]

@@ -4,7 +4,8 @@
 # Pinned nixpkgs (nixos-unstable on 2026-10-27) for reproducible system libs.
 NIXPKGS=github:NixOS/nixpkgs/3ec636362e1816bc2f0888fa0fa2c69f1bc9e504
 nixf=(--extra-experimental-features "nix-command flakes")
-pkgs=(llvmPackages.llvm libxkbcommon wayland libxcb libx11 fontconfig freetype vulkan-loader alsa-lib openssl zstd pkg-config cmake zlib bzip2 libpng brotli expat libxau libxdmcp xorgproto libxkbcommon libxcb xorg.xorgserver)
+# radicale: the local CalDAV server crates/core/tests/calendar_providers.rs runs against (dot-4uzgol.100).
+pkgs=(llvmPackages.llvm libxkbcommon wayland libxcb libx11 fontconfig freetype vulkan-loader alsa-lib openssl zstd pkg-config cmake zlib bzip2 libpng brotli expat libxau libxdmcp xorgproto libxkbcommon libxcb xorg.xorgserver radicale)
 paths=""
 # Bare nix images (nixos/nix) have no Rust or C toolchain: provide them. Pods already have both.
 if ! command -v cc > /dev/null; then

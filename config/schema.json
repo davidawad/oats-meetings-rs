@@ -403,6 +403,34 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "google_api": {
+          "default": "https://www.googleapis.com/calendar/v3",
+          "description": "Base URL of the Google Calendar API v3.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "google_auth_url": {
+          "default": "https://accounts.google.com/o/oauth2/v2/auth",
+          "description": "Google's OAuth authorization endpoint.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "google_client_id": {
+          "default": "",
+          "description": "OAuth client id (a Desktop app client from Google Cloud Console) used by google sources that set none of their own.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "google_token_url": {
+          "default": "https://oauth2.googleapis.com/token",
+          "description": "Google's OAuth token endpoint.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "ignore_all_day": {
           "default": true,
           "description": "All-day events never title a session.",
@@ -438,12 +466,72 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "max_pages": {
+          "default": 20,
+          "description": "Most pages read from one Google / Graph listing (calendars or one calendar's events) before the rest is dropped.",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "me": {
           "default": "",
           "description": "Comma-separated email addresses that are you, for ICS attendees (declined events; you are left out of participants).",
           "type": "string",
           "x-reload": "live",
           "x-ui": true
+        },
+        "microsoft_api": {
+          "default": "https://graph.microsoft.com/v1.0",
+          "description": "Base URL of Microsoft Graph.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "microsoft_client_id": {
+          "default": "",
+          "description": "OAuth client id (an Entra app registration with a mobile/desktop http://localhost redirect) used by microsoft sources that set none of their own.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "microsoft_login": {
+          "default": "https://login.microsoftonline.com",
+          "description": "Microsoft identity platform base URL (the tenant and /oauth2/v2.0/... are appended).",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "microsoft_tenant": {
+          "default": "common",
+          "description": "Entra tenant microsoft sources sign in through by default: common, organizations, consumers or a tenant id.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "oauth_timeout": {
+          "default": "5m",
+          "description": "How long calendar-connect waits for the browser to come back to its loopback address with the sign-in code.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "30m",
+          "x-max-ms": 1800000,
+          "x-min": "10s",
+          "x-min-ms": 10000,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "page_size": {
+          "default": 250,
+          "description": "Events asked for per page from Google Calendar (maxResults) and Microsoft Graph ($top).",
+          "maximum": 2500,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
         },
         "prefer_attendees": {
           "default": true,
@@ -467,11 +555,25 @@
           "x-ui": true
         },
         "sources": {
-          "default": "[{\"name\":\"ics\",\"kind\":\"ics\"}]",
-          "description": "JSON array of calendar sources: {name, kind (ics | eventkit), enabled, feeds (ics: feed names, empty = every enabled feed), accounts / account and calendars (eventkit: account title or email, calendar title or id; both empty = every calendar)}. eventkit is the macOS Calendar app (macOS only). Edit with calendar-source-add / -remove / -enable and calendar-select.",
+          "default": "[{\"name\":\"local\",\"kind\":\"os-local\"},{\"name\":\"ics\",\"kind\":\"ics\"}]",
+          "description": "JSON array of calendar sources: {name, kind, enabled, ...}. kind os-local (this computer's calendar accounts: macOS Calendar / EventKit, Linux Evolution Data Server and KDE Akonadi, Windows Appointments; no network), google (Google Calendar API, OAuth; client_id, client_secret secret: ref), microsoft (Microsoft Graph, OAuth; client_id, tenant), caldav (url discovered through .well-known/caldav, username, password secret: ref), ics (feeds: names in ics.feeds, empty = every enabled feed) or eventkit (the macOS Calendar app, as os-local on a Mac). accounts / account and calendars pick what is read (account title or email, calendar title or id; both empty = every calendar). An event seen through two sources is kept once (same iCalUID and start; the earlier source wins). Edit with calendar-source-add / -remove / -enable, calendar-select and calendar-connect.",
           "type": "string",
           "x-reload": "live",
           "x-ui": true
+        },
+        "timeout": {
+          "default": "30s",
+          "description": "Whole-request limit for one Google Calendar, Microsoft Graph, CalDAV or OAuth token call.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "5m",
+          "x-max-ms": 300000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
+          "x-reload": "live",
+          "x-ui": false
         },
         "title_fallback": {
           "default": "",
@@ -493,6 +595,27 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": true
+        },
+        "token_file": {
+          "default": "",
+          "description": "File holding the Google / Microsoft OAuth tokens: the app's own secret store (mode 0600), never the OS keychain. Empty means calendar-tokens.json beside the user config.",
+          "type": "string",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "token_skew": {
+          "default": "2m",
+          "description": "An OAuth access token this close to its expiry is refreshed before use.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "0s",
+          "x-min-ms": 0,
+          "x-reload": "live",
+          "x-ui": false
         },
         "video_hosts": {
           "default": "zoom.us,meet.google.com,teams.microsoft.com,teams.live.com,webex.com,whereby.com,around.co,facetime.apple.com,chime.aws",

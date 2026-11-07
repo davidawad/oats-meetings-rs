@@ -1,0 +1,17 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#users('me%40davidaw.ad')/calendars(id,name,owner)",
+  "value": [
+    {
+      "@odata.etag": "W/\"DwAAABYAAAAQ\"",
+      "id": "AAMkAGI2TGuLAAA=",
+      "name": "Calendar",
+      "owner": {"name": "David", "address": "me@davidaw.ad"}
+    },
+    {
+      "@odata.etag": "W/\"DwAAABYAAAAR\"",
+      "id": "AAMkAGI2TGuLAAB=",
+      "name": "Birthdays",
+      "owner": {"name": "David", "address": "me@davidaw.ad"}
+    }
+  ]
+}

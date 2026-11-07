@@ -330,7 +330,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a calendar source: kind ics (feeds: feed names, default every enabled feed) or eventkit (macOS Calendar; accounts: account titles or emails, calendars: calendar titles or ids, default every calendar). Each list takes one string or an array. Enabling an eventkit source asks macOS for Calendars access the first time.",
+      "doc": "Add a calendar source. kind: os-local (this computer's accounts: macOS Calendar, Linux Evolution / GNOME Online Accounts and KDE Akonadi, Windows Appointments), google (client_id, optional client_secret secret: ref; then calendar-connect), microsoft (client_id, tenant; then calendar-connect), caldav (url: the server, discovered through .well-known/caldav; username; password: a secret: ref), ics (feeds: feed names, default every enabled feed) or eventkit (macOS Calendar). accounts (titles or emails) and calendars (titles or ids) pick what is read, default everything; each list takes one string or an array. Enabling a source that reads the macOS Calendars store asks for access the first time.",
       "effect": "write",
       "name": "calendar-source-add",
       "params": [
@@ -363,6 +363,36 @@
           "name": "calendars",
           "required": false,
           "type": "Option<Value>"
+        },
+        {
+          "name": "url",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "username",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "password",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "client_id",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "client_secret",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "tenant",
+          "required": false,
+          "type": "Option<String>"
         }
       ],
       "status": "implemented"
@@ -476,6 +506,37 @@
           "name": "to",
           "required": false,
           "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Sign a google or microsoft calendar source in: returns the authorization URL (open=true opens it in the browser) and waits in the background on a loopback redirect (OAuth installed-app flow with PKCE); the tokens go to the app's own secret store, never the keychain. Events calendar-connected / calendar-connect-failed follow. For a caldav source it runs discovery and lists the calendars; for an os-local / eventkit source it asks for the Calendars grant where there is one.",
+      "effect": "control",
+      "name": "calendar-connect",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "open",
+          "required": false,
+          "type": "Option<bool>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Forget a google or microsoft calendar source's stored tokens (sign out).",
+      "effect": "write",
+      "name": "calendar-disconnect",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "type": "String"
         }
       ],
       "status": "implemented"

@@ -1,9 +1,12 @@
-//! The Calendar sources panel under the Settings tab's Calendar section (dot-4uzgol.88): every
-//! `calendar.sources` entry with its on/off toggle and, for an eventkit (macOS Calendar) source,
-//! its accounts and calendars as checkboxes. A click runs the same action as `ctl` (`calendar-select`,
-//! `calendar-source-enable`, `calendar-source-add`, `calendar-access`) off the UI thread, since an
-//! eventkit source being turned on may wait on the one macOS Calendars prompt; the panel then
-//! re-reads `calendar-sources-list`. Nothing here asks for access unless one of those is clicked.
+//! The Calendar sources panel under the Settings tab's Calendar section (dot-4uzgol.88,
+//! dot-4uzgol.100): every `calendar.sources` entry with its on/off toggle and its provider's
+//! accounts and calendars as checkboxes (this computer's accounts, Google, Microsoft 365, CalDAV,
+//! the macOS Calendar app), plus Connect / Sign out for the OAuth providers and buttons that add
+//! one. A click runs the same action as `ctl` (`calendar-select`, `calendar-source-enable`,
+//! `calendar-source-add`, `calendar-access`, `calendar-connect`, `calendar-disconnect`) off the UI
+//! thread, since a source being turned on may wait on the one macOS Calendars prompt or the
+//! network; the panel then re-reads `calendar-sources-list`. Connect opens the provider's sign-in
+//! page in the browser. Nothing here asks for access unless one of those is clicked.
 //! The panel re-reads at most once per `ics.poll_interval`, plus after each action.
 
 use std::time::Instant;
@@ -88,6 +91,11 @@ pub(crate) fn act(
                 Ok(v) => summary(id, v),
                 Err(e) => e.to_string(),
             };
+            if let (Ok(v), "calendar-connect") = (&res, id) {
+                if let Some(url) = v["url"].as_str() {
+                    cx.open_url(url);
+                }
+            }
             let s = cx.default_global::<Sources>();
             s.busy = None;
             s.load(w);
@@ -113,6 +121,18 @@ fn summary(id: &str, v: &Value) -> String {
             v["source"]["name"].as_str().unwrap_or_default()
         ),
         "calendar-access" => "Calendars access checked.".to_string(),
+        "calendar-connect" if v["url"].is_string() => format!(
+            "Sign in to {} in the browser that just opened.",
+            v["source"].as_str().unwrap_or_default()
+        ),
+        "calendar-connect" => format!(
+            "Calendar source {}: {} calendars found.",
+            v["source"].as_str().unwrap_or_default(),
+            v["calendars"]
+        ),
+        "calendar-disconnect" => {
+            format!("Signed {} out.", v["source"].as_str().unwrap_or_default())
+        }
         _ => format!(
             "Calendar source {} is {}.",
             v["source"]["name"].as_str().unwrap_or_default(),
@@ -189,6 +209,18 @@ fn check_row(
         )
 }
 
+/// What the panel calls a source kind.
+pub(crate) fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "os-local" => "This computer",
+        "google" => "Google",
+        "microsoft" => "Microsoft 365",
+        "caldav" => "CalDAV",
+        "eventkit" => "macOS Calendar",
+        _ => "ICS feeds",
+    }
+}
+
 fn source_row(src: &Value, busy: bool, last: bool, cx: &mut Context<MainWindow>) -> AnyElement {
     let t = theme::current();
     let name = src["name"].as_str().unwrap_or_default().to_string();
@@ -206,11 +238,7 @@ fn source_row(src: &Value, busy: bool, last: bool, cx: &mut Context<MainWindow>)
             );
         }));
     }
-    let label = if kind == "eventkit" {
-        "macOS Calendar"
-    } else {
-        "ICS feeds"
-    };
+    let label = kind_label(&kind);
     let mut col = div()
         .id(SharedString::from(format!("calsrc-{name}")))
         .flex()
@@ -234,6 +262,56 @@ fn source_row(src: &Value, busy: bool, last: bool, cx: &mut Context<MainWindow>)
                 .child(div().flex_1())
                 .child(toggle),
         );
+    if kind == "google" || kind == "microsoft" {
+        let connected = src["connected"] == true;
+        let account = src["account"].as_str().unwrap_or_default().to_string();
+        let mut line = div().flex().items_center().gap(px(8.)).child(
+            div().text_size(px(12.)).text_color(rgb(t.dim)).child(
+                if connected && !account.is_empty() {
+                    format!("Signed in as {account}")
+                } else if connected {
+                    "Signed in".to_string()
+                } else {
+                    "Not signed in".to_string()
+                },
+            ),
+        );
+        if !busy {
+            let n = name.clone();
+            line = line.child(
+                kit::button(
+                    format!("calsrc-connect-{name}"),
+                    if connected { "Reconnect" } else { "Connect" },
+                    if connected {
+                        Kind::Secondary
+                    } else {
+                        Kind::Primary
+                    },
+                    Size::Sm,
+                    true,
+                )
+                .on_click(cx.listener(move |w, _, _, cx| {
+                    act(w, "calendar-connect", json!({"source": n}), cx);
+                })),
+            );
+            if connected {
+                let n = name.clone();
+                line = line.child(
+                    kit::button(
+                        format!("calsrc-signout-{name}"),
+                        "Sign out",
+                        Kind::Secondary,
+                        Size::Sm,
+                        true,
+                    )
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        act(w, "calendar-disconnect", json!({"source": n}), cx);
+                    })),
+                );
+            }
+        }
+        col = col.child(line);
+    }
     if let Some(e) = src["error"]["message"].as_str() {
         col = col.child(
             div()
@@ -305,8 +383,28 @@ fn source_row(src: &Value, busy: bool, last: bool, cx: &mut Context<MainWindow>)
     col.into_any_element()
 }
 
-/// The panel: one row per source, and "Use macOS Calendar" where EventKit exists but no eventkit
-/// source does.
+/// A header button that adds a source of `kind` named `name`.
+fn add_button(
+    id: &'static str,
+    label: &'static str,
+    name: &'static str,
+    kind: &'static str,
+    cx: &mut Context<MainWindow>,
+) -> gpui::Stateful<gpui::Div> {
+    kit::button(id, label, Kind::Secondary, Size::Sm, true).on_click(cx.listener(
+        move |w, _, _, cx| {
+            act(
+                w,
+                "calendar-source-add",
+                json!({"name": name, "kind": kind}),
+                cx,
+            );
+        },
+    ))
+}
+
+/// The panel: one row per source, and buttons that add this computer's accounts (or the macOS
+/// Calendar app), Google and Microsoft 365 where no such source is listed yet.
 pub(crate) fn panel(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let t = theme::current();
     let s = cx.default_global::<Sources>();
@@ -314,8 +412,9 @@ pub(crate) fn panel(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement 
         s.load(w);
     }
     let (rows, error, busy) = (s.rows(), s.error.clone(), s.busy.clone());
-    let supported = s.list["eventkit"]["supported"] == true;
-    let has_ek = rows.iter().any(|r| r["kind"] == "eventkit");
+    let has = |k: &str| rows.iter().any(|r| r["kind"] == k);
+    let has_local = has("os-local") || has("eventkit");
+    let (has_google, has_ms) = (has("google"), has("microsoft"));
     let n = rows.len();
     let mut panel = kit::panel();
     if rows.is_empty() {
@@ -355,24 +454,32 @@ pub(crate) fn panel(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement 
                             .child("Working..."),
                     )
                 })
-                .when(supported && !has_ek && busy.is_none(), |d| {
-                    d.child(
-                        kit::button(
-                            "calsrc-use-mac",
-                            "Use macOS Calendar",
-                            Kind::Secondary,
-                            Size::Sm,
-                            true,
-                        )
-                        .on_click(cx.listener(|w, _, _, cx| {
-                            act(
-                                w,
-                                "calendar-source-add",
-                                json!({"name": "mac", "kind": "eventkit"}),
-                                cx,
-                            );
-                        })),
-                    )
+                .when(!has_local && busy.is_none(), |d| {
+                    d.child(add_button(
+                        "calsrc-use-local",
+                        "Use this computer's calendars",
+                        "local",
+                        "os-local",
+                        cx,
+                    ))
+                })
+                .when(!has_google && busy.is_none(), |d| {
+                    d.child(add_button(
+                        "calsrc-add-google",
+                        "Add Google",
+                        "google",
+                        "google",
+                        cx,
+                    ))
+                })
+                .when(!has_ms && busy.is_none(), |d| {
+                    d.child(add_button(
+                        "calsrc-add-microsoft",
+                        "Add Microsoft 365",
+                        "microsoft",
+                        "microsoft",
+                        cx,
+                    ))
                 }),
         );
     if let Some(e) = error {
@@ -457,7 +564,11 @@ mod tests {
         view.update(cx, |v, cx| {
             let d = v.dump(cx);
             assert_eq!(d["view"]["calendar_sources"]["eventkit"]["supported"], true);
-            assert_eq!(d["view"]["calendar_sources"]["sources"][0]["name"], "ics");
+            assert_eq!(
+                d["view"]["calendar_sources"]["sources"][0]["kind"],
+                "os-local"
+            );
+            assert_eq!(d["view"]["calendar_sources"]["sources"][1]["name"], "ics");
         });
         assert_eq!(kit.asked.load(Ordering::SeqCst), 0);
         // "Use macOS Calendar", as ui-invoke clicks it.
@@ -472,7 +583,7 @@ mod tests {
         assert_eq!(kit.asked.load(Ordering::SeqCst), 1);
         view.update(cx, |v, cx| {
             let d = v.dump(cx);
-            let mac = &d["view"]["calendar_sources"]["sources"][1];
+            let mac = &d["view"]["calendar_sources"]["sources"][2];
             assert_eq!(mac["name"], "mac");
             assert_eq!(mac["accounts"].as_array().unwrap().len(), 2);
             assert_eq!(mac["accounts"][0]["calendars"][0]["selected"], true);
@@ -499,7 +610,7 @@ mod tests {
                 v.state.status
             );
             let s = cx.global::<Sources>();
-            let home = s.list["sources"][1]["accounts"]
+            let home = s.list["sources"][2]["accounts"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -528,5 +639,53 @@ mod tests {
         cx.run_until_parked();
         assert!(sources(&engine).contains(r#""enabled":false"#));
         assert_eq!(kit.asked.load(Ordering::SeqCst), 1, "asked once in all");
+    }
+
+    #[test]
+    fn add_google_then_connect_opens_the_sign_in_page() {
+        let (engine, _d) = testutil::engine(&[]);
+        engine.set("network.allow", &json!(true), "test").unwrap();
+        engine
+            .set("calendar.google_client_id", &json!("cid.apps"), "test")
+            .unwrap();
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Settings;
+            v.drive(
+                &json!({"op": "invoke", "name": "settings.calendar_add", "args": {"kind": "google"}}),
+                cx,
+            )
+            .unwrap();
+        });
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            let d = v.dump(cx);
+            let g = d["view"]["calendar_sources"]["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["kind"] == "google")
+                .unwrap()
+                .clone();
+            assert_eq!(g["name"], "google");
+            assert_eq!(g["connected"], false);
+            assert_eq!(g["error"]["code"], "calendar_not_connected");
+            v.drive(
+                &json!({"op": "invoke", "name": "settings.calendar_connect", "args": {"source": "google"}}),
+                cx,
+            )
+            .unwrap();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |v, _| {
+            assert!(
+                v.state.status.contains("Sign in to google"),
+                "{}",
+                v.state.status
+            );
+        });
+        assert_eq!(kind_label("os-local"), "This computer");
+        assert_eq!(kind_label("microsoft"), "Microsoft 365");
     }
 }

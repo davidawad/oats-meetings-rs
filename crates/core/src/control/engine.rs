@@ -134,6 +134,8 @@ pub struct Engine {
     transcribe_lock: Mutex<()>,
     ui: RwLock<Option<Arc<dyn UiPort>>>,
     event_store: crate::calendar::StoreSlot,
+    /// The calendar providers, one per source kind (tests inject fakes).
+    calendar_providers: crate::calendar::provider::ProviderSlot,
     /// The hook runs so far (`hook-list`).
     pub(crate) hooks: crate::hooks::Runner,
 }
@@ -291,6 +293,7 @@ impl Engine {
             transcribe_lock: Mutex::new(()),
             ui: RwLock::new(None),
             event_store: crate::calendar::StoreSlot::default(),
+            calendar_providers: Default::default(),
             hooks: crate::hooks::Runner::default(),
         });
         // Hooks follow the published events; the tap only starts threads, so it never blocks.
@@ -597,6 +600,53 @@ impl Engine {
 
     pub fn set_event_store(&self, store: Arc<dyn crate::calendar::eventkit::EventStore>) {
         *self.event_store.0.lock().expect("event store") = store;
+    }
+
+    /// The provider calendar sources of `kind` read through.
+    pub fn calendar_provider(
+        &self,
+        kind: crate::calendar::SourceKind,
+    ) -> Arc<dyn crate::calendar::provider::Provider> {
+        self.calendar_providers.get(kind)
+    }
+
+    pub fn set_calendar_provider(
+        &self,
+        kind: crate::calendar::SourceKind,
+        p: Arc<dyn crate::calendar::provider::Provider>,
+    ) {
+        self.calendar_providers.set(kind, p);
+    }
+
+    /// The app's own secret store for the tokens it mints (calendar OAuth): `calendar.token_file`,
+    /// else `calendar-tokens.json` beside the user config; the `secrets` override in tests.
+    pub fn token_store(&self) -> Arc<dyn SecretStore> {
+        if let Some(s) = &self.opts.secrets {
+            return Arc::clone(s);
+        }
+        let file = self
+            .snapshot()
+            .config
+            .calendar
+            .token_file
+            .trim()
+            .to_string();
+        let path = if file.is_empty() {
+            self.user_config()
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("calendar-tokens.json")
+        } else {
+            PathBuf::from(file)
+        };
+        Arc::new(secrets::FileStore::new(path))
+    }
+
+    /// This engine as an `Arc`, for work that outlives the call (a background sign-in).
+    pub fn arc(&self) -> Arc<Engine> {
+        self.me
+            .upgrade()
+            .expect("the engine is alive while it runs a call")
     }
 
     pub fn set_ui(&self, port: Option<Arc<dyn UiPort>>) {
@@ -1299,7 +1349,9 @@ impl Engine {
             | Action::CalendarSelect { .. }
             | Action::CalendarAccess { .. }
             | Action::CalendarEvents { .. }
-            | Action::CalendarMatch { .. } => crate::calendar::dispatch(self, a),
+            | Action::CalendarMatch { .. }
+            | Action::CalendarConnect { .. }
+            | Action::CalendarDisconnect { .. } => crate::calendar::dispatch(self, a),
             // Every action is implemented today; a new "planned" one lands here until its handler.
             #[allow(unreachable_patterns)]
             other => {

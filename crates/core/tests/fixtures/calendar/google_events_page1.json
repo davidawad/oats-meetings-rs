@@ -1,0 +1,47 @@
+{
+  "kind": "calendar#events",
+  "etag": "\"p32s8b3rq2a8g0o\"",
+  "summary": "me@davidaw.ad",
+  "updated": "2026-11-06T09:12:44.311Z",
+  "timeZone": "Europe/Berlin",
+  "accessRole": "owner",
+  "nextPageToken": "CigKGjBzNXNkNnVvN2k3",
+  "items": [
+    {
+      "kind": "calendar#event",
+      "etag": "\"3460000000000000\"",
+      "id": "0s5sd6uo7i7mbq2j7rdq6h3tq8_20261109T150000Z",
+      "status": "confirmed",
+      "htmlLink": "https://www.google.com/calendar/event?eid=MHM1c2Q2dW83",
+      "created": "2026-10-01T08:00:00.000Z",
+      "updated": "2026-11-01T08:00:00.000Z",
+      "summary": "Weekly sync",
+      "description": "Agenda in the doc",
+      "location": "Room 4",
+      "creator": {"email": "me@davidaw.ad", "self": true},
+      "organizer": {"email": "me@davidaw.ad", "self": true},
+      "start": {"dateTime": "2026-11-09T16:00:00+01:00", "timeZone": "Europe/Berlin"},
+      "end": {"dateTime": "2026-11-09T16:30:00+01:00", "timeZone": "Europe/Berlin"},
+      "recurringEventId": "0s5sd6uo7i7mbq2j7rdq6h3tq8",
+      "originalStartTime": {"dateTime": "2026-11-09T16:00:00+01:00", "timeZone": "Europe/Berlin"},
+      "iCalUID": "0s5sd6uo7i7mbq2j7rdq6h3tq8@google.com",
+      "sequence": 0,
+      "attendees": [
+        {"email": "me@davidaw.ad", "organizer": true, "self": true, "responseStatus": "accepted"},
+        {"email": "ana@example.com", "displayName": "Ana Lopez", "responseStatus": "needsAction"},
+        {"email": "c_room4@resource.calendar.google.com", "displayName": "Room 4", "resource": true, "responseStatus": "accepted"}
+      ],
+      "hangoutLink": "https://meet.google.com/abc-defg-hij",
+      "conferenceData": {
+        "entryPoints": [
+          {"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij", "label": "meet.google.com/abc-defg-hij"},
+          {"entryPointType": "phone", "uri": "tel:+49-30-1234567", "pin": "123456"}
+        ],
+        "conferenceSolution": {"key": {"type": "hangoutsMeet"}, "name": "Google Meet"},
+        "conferenceId": "abc-defg-hij"
+      },
+      "reminders": {"useDefault": true},
+      "eventType": "default"
+    }
+  ]
+}

@@ -23,6 +23,9 @@ hound.workspace = true
 sha2.workspace = true
 # The system zone for export timestamps (ui.tz empty), as OpenOats uses the system zone.
 iana-time-zone = "0.1"
+# Calendar providers (dot-4uzgol.100): PKCE / HTTP Basic encodings and the PKCE verifier's randomness.
+base64 = "0.22"
+getrandom = "0.3"
 whisper-rs = { workspace = true, optional = true }
 
 [features]
@@ -61,6 +64,15 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 objc2-event-kit = { version = "0.3", default-features = false, features = ["std", "block2", "EKCalendar", "EKCalendarItem", "EKEvent", "EKEventStore", "EKObject", "EKParticipant", "EKSource", "EKTypes"] }
 block2 = "0.6"
 objc2-core-ml = { version = "0.3", default-features = false, features = ["std", "MLDictionaryFeatureProvider", "MLFeatureDescription", "MLFeatureProvider", "MLFeatureValue", "MLModel", "MLModelConfiguration", "MLModelDescription", "MLMultiArray", "MLMultiArrayConstraint", "MLPredictionOptions"] }
+
+# os-local calendars on Linux (dot-4uzgol.100): Evolution Data Server's offline caches are SQLite.
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+# os-local calendars on Windows (dot-4uzgol.100): Windows.ApplicationModel.Appointments.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = ["std", "ApplicationModel_Appointments", "Foundation", "Foundation_Collections"]
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 sherpa-onnx = { workspace = true, optional = true, features = ["static"] }

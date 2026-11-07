@@ -1,0 +1,41 @@
+{
+  "kind": "calendar#calendarList",
+  "etag": "\"p33k9xr6vqkg8g0o\"",
+  "nextSyncToken": "CKDw2vG0xYkDEhFtZUBkYXZpZGF3LmFk",
+  "items": [
+    {
+      "kind": "calendar#calendarListEntry",
+      "etag": "\"1730900000000000\"",
+      "id": "me@davidaw.ad",
+      "summary": "me@davidaw.ad",
+      "timeZone": "Europe/Berlin",
+      "colorId": "14",
+      "backgroundColor": "#9fe1e7",
+      "foregroundColor": "#000000",
+      "selected": true,
+      "accessRole": "owner",
+      "defaultReminders": [{"method": "popup", "minutes": 10}],
+      "primary": true
+    },
+    {
+      "kind": "calendar#calendarListEntry",
+      "etag": "\"1730900000000001\"",
+      "id": "en.german#holiday@group.v.calendar.google.com",
+      "summary": "Holidays in Germany",
+      "description": "Holidays and Observances in Germany",
+      "timeZone": "Europe/Berlin",
+      "accessRole": "reader",
+      "defaultReminders": []
+    },
+    {
+      "kind": "calendar#calendarListEntry",
+      "etag": "\"1730900000000002\"",
+      "id": "c_team42@group.calendar.google.com",
+      "summary": "Team",
+      "summaryOverride": "Team (shared)",
+      "timeZone": "Europe/Berlin",
+      "accessRole": "reader",
+      "defaultReminders": []
+    }
+  ]
+}

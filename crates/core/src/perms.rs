@@ -297,7 +297,9 @@ fn portal_row() -> Value {
 }
 
 /// The calendar row: every enabled feed readable under the policy keys and its secret present,
-/// plus the macOS Calendars grant when an eventkit source is on.
+/// every enabled google / microsoft / caldav source allowed on the network and signed in (or its
+/// password secret present), plus the macOS Calendars grant when an eventkit / os-local source is
+/// on there.
 pub fn calendar_row(engine: &Engine, cfg: &Config, sandbox: &Sandbox) -> Value {
     let feeds =
         crate::ics::parse_feeds(&cfg.ics.feeds, cfg.ics.max_name_len as usize).unwrap_or_default();
@@ -305,7 +307,11 @@ pub fn calendar_row(engine: &Engine, cfg: &Config, sandbox: &Sandbox) -> Value {
     let sources = crate::calendar::parse_sources(&cfg.calendar.sources).unwrap_or_default();
     let eventkit = sources
         .iter()
-        .any(|s| s.enabled && s.kind == crate::calendar::SourceKind::Eventkit);
+        .any(|s| s.enabled && crate::calendar::provider::uses_eventkit(s.kind));
+    let others: Vec<_> = sources
+        .iter()
+        .filter(|s| s.enabled && s.kind != crate::calendar::SourceKind::Ics)
+        .collect();
     let store = engine.secret_store(cfg);
     let mut problems = vec![];
     let mut kinds = std::collections::BTreeSet::new();
@@ -353,18 +359,51 @@ pub fn calendar_row(engine: &Engine, cfg: &Config, sandbox: &Sandbox) -> Value {
             }
         }
     }
+    for s in &others {
+        use crate::calendar::SourceKind;
+        kinds.insert(s.kind.as_str());
+        if !matches!(
+            s.kind,
+            SourceKind::Google | SourceKind::Microsoft | SourceKind::Caldav
+        ) {
+            continue;
+        }
+        if !cfg.network.allow {
+            problems.push(json!({"source": s.name, "reason": "network.allow is off",
+                                 "fix": "ctl config-set network.allow true"}));
+        } else if !net_shared {
+            problems.push(json!({"source": s.name, "reason": "the Flatpak sandbox has no network (--share=network)"}));
+        }
+        if s.kind.oauth() {
+            let signed_in = crate::calendar::oauth::load(engine, s)
+                .ok()
+                .flatten()
+                .is_some_and(|t| !t.refresh_token.is_empty());
+            if !signed_in {
+                problems.push(json!({"source": s.name, "reason": "not signed in",
+                                     "fix": format!("ctl calendar-connect source={} open=true", s.name)}));
+            }
+        } else if !s.password.is_empty() {
+            if let Err(e) =
+                crate::secrets::resolve(&*store, &s.password, cfg.secrets.max_key_len as usize)
+            {
+                problems.push(json!({"source": s.name, "reason": e.message,
+                                     "fix": "ctl secret-set <key> <app password>"}));
+            }
+        }
+    }
     let mut v = if !problems.is_empty() {
         let mut r = row(
             "calendar",
             "blocked",
-            "ics/CalDAV feeds need no OS permission; a policy key or secret stops these",
+            "calendar feeds and accounts need no OS permission; a policy key, sign-in or secret stops these",
         );
         r["problems"] = json!(problems);
         r
-    } else if enabled.is_empty() && !eventkit {
+    } else if enabled.is_empty() && others.is_empty() {
         row("calendar", "not_needed", "no calendar feed or source is enabled; ics and CalDAV feeds need no OS permission (ics-add)")
     } else {
-        row("calendar", "granted", "ics/CalDAV feeds are plain file and HTTP reads: no OS permission and no prompt, only network.allow, ics.allow_file and the feed secrets")
+        row("calendar", "granted", "ics/CalDAV feeds, CalDAV / Google / Microsoft accounts and the desktop's own calendars (Evolution, Akonadi) are plain file and HTTP reads: no OS permission and no prompt, only network.allow, ics.allow_file, the sign-ins and the secrets")
     };
     v["feeds"] = json!(enabled.len());
     v["kinds"] = json!(kinds);
@@ -380,7 +419,7 @@ pub fn calendar_row(engine: &Engine, cfg: &Config, sandbox: &Sandbox) -> Value {
                     "denied"
                 }
             );
-            v["how"] = json!("an eventkit source needs the macOS Calendars grant");
+            v["how"] = json!("an eventkit / os-local source needs the macOS Calendars grant");
             v["fix"] = json!("ctl calendar-access request=true asks once; or System Settings > Privacy & Security > Calendars");
         }
     }

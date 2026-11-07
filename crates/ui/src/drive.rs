@@ -175,6 +175,21 @@ pub const OPS: &[(&str, &str, &str)] = &[
         "Allow Calendars access (the one macOS prompt, only while undetermined)",
     ),
     (
+        "settings.calendar_add",
+        "kind, name?, url?, username?, password?, client_id?, client_secret?, tenant?",
+        "add a calendar source of a kind (os-local, google, microsoft, caldav, ics, eventkit), as the Add buttons do",
+    ),
+    (
+        "settings.calendar_connect",
+        "source",
+        "Connect: sign a google / microsoft source in (opens the browser); discover a caldav source's calendars",
+    ),
+    (
+        "settings.calendar_disconnect",
+        "source",
+        "Sign out: forget a google / microsoft source's tokens",
+    ),
+    (
         "settings.hook_add",
         "name, event, command, shell?, timeout?, cwd?",
         "Hooks: Add hook, fill the form (command: program and arguments, or with shell the script), Save",
@@ -524,6 +539,38 @@ impl MainWindow {
             ),
             "settings.calendar_access" => {
                 calendar_sources::act(self, "calendar-access", json!({"request": true}), cx)
+            }
+            "settings.calendar_add" => {
+                let kind = need(args, op, "kind")?;
+                let name = arg(args, "name").map(str::to_string).unwrap_or_else(|| {
+                    if kind == "os-local" {
+                        "local".into()
+                    } else {
+                        kind.to_string()
+                    }
+                });
+                let mut params = json!({"name": name, "kind": kind});
+                for k in [
+                    "url",
+                    "username",
+                    "password",
+                    "client_id",
+                    "client_secret",
+                    "tenant",
+                ] {
+                    if let Some(v) = arg(args, k) {
+                        params[k] = json!(v);
+                    }
+                }
+                calendar_sources::act(self, "calendar-source-add", params, cx);
+            }
+            "settings.calendar_connect" => {
+                let source = need(args, op, "source")?;
+                calendar_sources::act(self, "calendar-connect", json!({"source": source}), cx);
+            }
+            "settings.calendar_disconnect" => {
+                let source = need(args, op, "source")?;
+                calendar_sources::act(self, "calendar-disconnect", json!({"source": source}), cx);
             }
             "settings.search" => {
                 let q = arg(args, "query").unwrap_or_default().to_string();

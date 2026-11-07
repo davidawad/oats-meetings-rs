@@ -149,7 +149,8 @@ fn headless_perms_status_then_ensure_grants_everything_without_a_prompt() {
     assert_eq!(state(&s, "microphone"), "granted", "{s}");
     assert_eq!(state(&s, "system_audio"), "missing", "{s}");
     assert_eq!(state(&s, "screencast_portal"), "not_needed");
-    assert_eq!(state(&s, "calendar"), "not_needed");
+    // The default os-local source: the desktop's own calendar files, no OS permission.
+    assert_eq!(state(&s, "calendar"), "granted");
     assert_eq!(s["all_granted"], false);
 
     let v = e.json(&["perms", "ensure"]);
