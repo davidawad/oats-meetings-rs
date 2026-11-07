@@ -377,7 +377,7 @@ fn tick(host: &Shared, cx: &mut App) {
         oats_core::elog!("oats-meetings-rs: app.menubar is on but {why}");
     }
     for id in h.tray.take_clicks() {
-        let _ = model::dispatch(&h.engine, &id, json!({}));
+        let _ = model::dispatch_from(&h.engine, &id, "tray");
     }
 }
 
@@ -449,7 +449,7 @@ pub fn run_with(
                 let (eng, id) = (Arc::clone(&eng), a.id.clone());
                 cx.background_executor()
                     .spawn(async move {
-                        if let Err(e) = model::dispatch(&eng, &id, json!({})) {
+                        if let Err(e) = model::dispatch_from(&eng, &id, "menu") {
                             if e.code != "not_implemented" {
                                 oats_core::elog!("oats-meetings-rs: {id}: {e}");
                             }

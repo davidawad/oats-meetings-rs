@@ -45,7 +45,7 @@ mod imp {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{FromSample, Sample, SampleFormat, SizedSample, StreamConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Arc};
+    use std::sync::{mpsc, Arc, Mutex};
     use std::thread::JoinHandle;
 
     use super::Slot;
@@ -127,12 +127,22 @@ mod imp {
         Ok(v)
     }
 
+    /// Why the stream ended on its own, set from its error callback.
+    type Lost = Arc<Mutex<Option<String>>>;
+
     struct CpalCapture {
         stop: Arc<AtomicBool>,
         th: Option<JoinHandle<()>>,
+        lost: Lost,
     }
 
     impl Capture for CpalCapture {
+        /// The device went away under the stream (unplugged, or the system dropped it): the
+        /// recorder opens it again (dot-4uzgol.99).
+        fn lost(&mut self) -> Option<String> {
+            self.lost.lock().ok()?.clone()
+        }
+
         fn stop(&mut self) {
             self.stop.store(true, Ordering::SeqCst);
             if let Some(t) = self.th.take() {
@@ -151,6 +161,7 @@ mod imp {
         device: &cpal::Device,
         cfg: &StreamConfig,
         on_samples: Arc<Slot>,
+        lost: Lost,
     ) -> std::result::Result<cpal::Stream, cpal::BuildStreamError>
     where
         T: SizedSample,
@@ -172,9 +183,14 @@ mod imp {
                     on_samples.call(&out);
                 }
             },
-            |e| {
+            move |e| {
                 use std::io::Write;
                 let _ = writeln!(std::io::stderr(), "oats-audio: cpal stream error: {e}");
+                if matches!(e, cpal::StreamError::DeviceNotAvailable) {
+                    if let Ok(mut l) = lost.lock() {
+                        *l = Some(format!("cpal stream error: {e}"));
+                    }
+                }
             },
             None,
         )
@@ -237,6 +253,8 @@ mod imp {
             let (tx, rx) = mpsc::channel::<Result<()>>();
             let cb = Arc::new(Slot::new(on_samples));
             let slot = Arc::clone(&cb);
+            let lost: Lost = Arc::default();
+            let lost_cb = Arc::clone(&lost);
             let th = std::thread::spawn(move || {
                 let started = (|| -> Result<cpal::Stream> {
                     let host = cpal::default_host();
@@ -278,10 +296,10 @@ mod imp {
                     let fmt = supported.sample_format();
                     let cfg: StreamConfig = supported.into();
                     let stream = match fmt {
-                        SampleFormat::F32 => build::<f32>(&dev, &cfg, cb),
-                        SampleFormat::I16 => build::<i16>(&dev, &cfg, cb),
-                        SampleFormat::U16 => build::<u16>(&dev, &cfg, cb),
-                        SampleFormat::I32 => build::<i32>(&dev, &cfg, cb),
+                        SampleFormat::F32 => build::<f32>(&dev, &cfg, cb, lost_cb),
+                        SampleFormat::I16 => build::<i16>(&dev, &cfg, cb, lost_cb),
+                        SampleFormat::U16 => build::<u16>(&dev, &cfg, cb, lost_cb),
+                        SampleFormat::I32 => build::<i32>(&dev, &cfg, cb, lost_cb),
                         other => {
                             return Err(AudioError::new(
                                 "capture_failed",
@@ -315,7 +333,11 @@ mod imp {
                 slot.release();
             });
             match rx.recv_timeout(timing.open_timeout) {
-                Ok(Ok(())) => Ok(Box::new(CpalCapture { stop, th: Some(th) })),
+                Ok(Ok(())) => Ok(Box::new(CpalCapture {
+                    stop,
+                    th: Some(th),
+                    lost,
+                })),
                 Ok(Err(e)) => {
                     let _ = th.join();
                     Err(e)

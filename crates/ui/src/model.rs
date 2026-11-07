@@ -344,6 +344,18 @@ pub fn dispatch(engine: &Engine, id: &str, params: Value) -> Result<Value> {
     engine.dispatch(&a)
 }
 
+/// `dispatch` from one of the window's surfaces (`window`, `menu`, `tray`): a `record-stop` or
+/// `quit` says it came from there, so the log and the events name who stopped a recording or
+/// quit the app (dot-4uzgol.99).
+pub fn dispatch_from(engine: &Engine, id: &str, by: &str) -> Result<Value> {
+    let params = if matches!(id, "record-stop" | "quit") {
+        json!({ "by": by })
+    } else {
+        json!({})
+    };
+    dispatch(engine, id, params)
+}
+
 pub fn manifest_ids() -> BTreeSet<String> {
     ids(action::SPECS.iter().map(|s| s.0))
 }

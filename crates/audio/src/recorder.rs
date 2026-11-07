@@ -3,18 +3,24 @@
 //! Each source pushes mono samples into its own queue from its capture thread. A writer thread
 //! drains both in lock step (frames are written only when every enabled source has them, so the
 //! channels stay aligned) and pads the shorter queue with silence on stop.
+//!
+//! A capture that stops on its own (`Capture::lost`: the macOS tap when another app starts an
+//! output stream, a device that goes away) never ends the recording (dot-4uzgol.99): a watch
+//! thread reopens it every `Timing::restart` until it is back, the writer fills the source with
+//! silence meanwhile, and the outage is kept as a `Gap`. Only `stop` (a user, ctl or hook action)
+//! ends a recording; the one failure it cannot ride out, the WAV write failing, is `fault`.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
 use crate::aec::EchoCanceller;
-use crate::backend::{Capture, CaptureBackend, DeviceKind};
+use crate::backend::{Capture, CaptureBackend, DeviceKind, OnSamples};
 
 /// Which input a sample came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +62,73 @@ struct Shared {
     system_heard: AtomicBool,
     /// The reference-to-mic lag the echo canceller measured, milliseconds.
     echo_lag_ms: Mutex<Option<i64>>,
+    /// A source whose capture is lost and not yet reopened: the writer fills it with silence.
+    system_down: AtomicBool,
+    mic_down: AtomicBool,
+    /// Outages that are over, oldest first.
+    gaps: Mutex<Vec<Gap>>,
+    /// Why the writer stopped writing (the WAV write failed): the recording cannot go on.
+    fault: Mutex<Option<String>>,
 }
+
+impl Shared {
+    fn down(&self, is_sys: bool) -> &AtomicBool {
+        if is_sys {
+            &self.system_down
+        } else {
+            &self.mic_down
+        }
+    }
+}
+
+/// A stretch in which one source's capture was lost and the recording had silence for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Gap {
+    /// `system` or `mic`.
+    pub source: &'static str,
+    /// Where in the recording it began.
+    pub at_ms: u64,
+    /// How long the source was gone (so far, for one still open).
+    pub ms: u64,
+    /// Why the capture stopped (`Capture::lost`).
+    pub reason: String,
+    /// The last error reopening it, if a try failed.
+    pub error: Option<String>,
+    /// False while the source is still being reopened.
+    pub restored: bool,
+}
+
+/// One source of the recording: how to open it again, and its capture while it runs.
+struct Slot {
+    kind: DeviceKind,
+    device: String,
+    is_sys: bool,
+    capture: Option<Box<dyn Capture>>,
+    down: Option<Down>,
+}
+
+struct Down {
+    at_ms: u64,
+    since: Instant,
+    reason: String,
+    error: Option<String>,
+    next_try: Instant,
+}
+
+impl Slot {
+    fn gap(&self, d: &Down, restored: bool) -> Gap {
+        Gap {
+            source: if self.is_sys { "system" } else { "mic" },
+            at_ms: d.at_ms,
+            ms: d.since.elapsed().as_millis() as u64,
+            reason: d.reason.clone(),
+            error: d.error.clone(),
+            restored,
+        }
+    }
+}
+
+type Slots = Arc<Mutex<Vec<Slot>>>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Summary {
@@ -75,11 +147,14 @@ pub struct Summary {
     pub echo_lag_ms: Option<i64>,
     /// Why the system channel may be empty (`Recording::warning`), as it stood at the end.
     pub warning: Option<String>,
+    /// Every outage of a source (a lost capture the recording rode out), oldest first.
+    pub gaps: Vec<Gap>,
 }
 
 pub struct Recording {
     shared: Arc<Shared>,
-    captures: Vec<Box<dyn Capture>>,
+    slots: Slots,
+    watch: Option<JoinHandle<()>>,
     writer: Option<JoinHandle<Result<Summary>>>,
     path: PathBuf,
     layout: Layout,
@@ -93,7 +168,8 @@ fn ms(frames: u64) -> u64 {
 }
 
 /// Pop the frames ready to write: every enabled source's samples in lock step (all of both,
-/// padded with silence, when `flush_all`); a disabled source is silence.
+/// padded with silence, when `flush_all`, which is also how a source that is down is filled); a
+/// disabled source is silence.
 fn take(q: &mut Queues, sys: bool, mic: bool, flush_all: bool) -> (Vec<f32>, Vec<f32>) {
     let n = match (sys, mic) {
         (true, true) if flush_all => q.system.len().max(q.mic.len()),
@@ -135,13 +211,130 @@ fn write_frames(w: &mut WavWriter, m: &[f32], s: &[f32], layout: Layout) -> Resu
     }
 }
 
+fn elog(msg: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "oats-audio: {msg}");
+}
+
 pub(crate) fn rms(x: &[f32]) -> f32 {
     (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
 }
 
+/// The capture callback of one source: queue its samples while the recording is live. Weak: a
+/// backend that never frees its callback (cpal's macOS stream, dot-4uzgol.80) must not keep the
+/// queues alive, or fill them, after the recording is gone.
+fn feeder(weak: Weak<Shared>, is_sys: bool) -> OnSamples {
+    Box::new(move |samples: &[f32]| {
+        let Some(sh) = weak.upgrade() else { return };
+        if sh.paused.load(Ordering::SeqCst) || !sh.live.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut q = sh.q.lock().expect("queues");
+        if is_sys {
+            if !sh.system_heard.load(Ordering::Relaxed) && samples.iter().any(|v| *v != 0.0) {
+                sh.system_heard.store(true, Ordering::SeqCst);
+            }
+            q.system.extend(samples);
+            sh.system_in
+                .fetch_add(samples.len() as u64, Ordering::SeqCst);
+        } else {
+            q.mic.extend(samples);
+            sh.mic_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
+        }
+    })
+}
+
+/// The watch thread: every `poll`, ask each running capture whether it is lost; take a lost one
+/// down (the writer fills it with silence) and reopen it every `restart` until it is back. Runs
+/// until the recording stops (`live` cleared); never holds the slots over an open.
+fn watch(
+    weak: Weak<Shared>,
+    slots: Slots,
+    backend: Arc<dyn CaptureBackend>,
+    poll: Duration,
+    restart: Duration,
+) {
+    loop {
+        let Some(sh) = weak.upgrade() else { return };
+        if !sh.live.load(Ordering::SeqCst) {
+            return;
+        }
+        let n = slots.lock().expect("slots").len();
+        for i in 0..n {
+            let now = Instant::now();
+            let (lost, reopen) = {
+                let mut g = slots.lock().expect("slots");
+                let s = &mut g[i];
+                let mut lost = None;
+                if s.down.is_none() {
+                    if let Some(why) = s.capture.as_mut().and_then(|c| c.lost()) {
+                        sh.down(s.is_sys).store(true, Ordering::SeqCst);
+                        elog(&format!(
+                            "{} capture lost ({why}); reopening, the recording goes on",
+                            if s.is_sys {
+                                "system audio"
+                            } else {
+                                "microphone"
+                            }
+                        ));
+                        s.down = Some(Down {
+                            at_ms: ms(sh.frames.load(Ordering::SeqCst)),
+                            since: now,
+                            reason: why,
+                            error: None,
+                            next_try: now + restart,
+                        });
+                        lost = s.capture.take();
+                    }
+                }
+                let due = s.down.as_ref().is_some_and(|d| now >= d.next_try);
+                (lost, due.then(|| (s.kind, s.device.clone(), s.is_sys)))
+            };
+            if let Some(mut c) = lost {
+                c.stop();
+            }
+            let Some((kind, device, is_sys)) = reopen else {
+                continue;
+            };
+            let opened = backend.open(kind, &device, feeder(Weak::clone(&weak), is_sys));
+            let mut g = slots.lock().expect("slots");
+            let s = &mut g[i];
+            if !sh.live.load(Ordering::SeqCst) {
+                // Stopped while it opened: `stop_captures` has run, so this one is stopped here.
+                if let Ok(mut c) = opened {
+                    c.stop();
+                }
+                return;
+            }
+            match opened {
+                Ok(c) => {
+                    if let Some(d) = s.down.take() {
+                        let gap = s.gap(&d, true);
+                        elog(&format!(
+                            "{} capture reopened after {} ms",
+                            gap.source, gap.ms
+                        ));
+                        sh.gaps.lock().expect("gaps").push(gap);
+                    }
+                    s.capture = Some(c);
+                    sh.down(is_sys).store(false, Ordering::SeqCst);
+                }
+                Err(e) => {
+                    if let Some(d) = s.down.as_mut() {
+                        d.error = Some(e.to_string());
+                        d.next_try = Instant::now() + restart;
+                    }
+                }
+            }
+        }
+        drop(sh);
+        std::thread::sleep(poll);
+    }
+}
+
 /// Start capturing per `settings` into a WAV at `path` (parent dirs are created).
 pub fn start(
-    backend: &dyn CaptureBackend,
+    backend: Arc<dyn CaptureBackend>,
     settings: &AudioSettings,
     path: &Path,
     tap: Option<TapFactory>,
@@ -173,59 +366,49 @@ pub fn start(
         system_level: AtomicU32::new(0),
         system_heard: AtomicBool::new(false),
         echo_lag_ms: Mutex::new(None),
+        system_down: AtomicBool::new(false),
+        mic_down: AtomicBool::new(false),
+        gaps: Mutex::new(vec![]),
+        fault: Mutex::new(None),
     });
-    let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Box<dyn Capture>> {
-        // Weak: a backend that never frees its callback (cpal's macOS stream, dot-4uzgol.80)
-        // must not keep the queues alive, or fill them, after the recording is gone.
-        let weak: Weak<Shared> = Arc::downgrade(&shared);
-        backend.open(
+    let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Slot> {
+        let c = backend.open(kind, device, feeder(Arc::downgrade(&shared), is_sys))?;
+        Ok(Slot {
             kind,
-            device,
-            Box::new(move |samples: &[f32]| {
-                let Some(sh) = weak.upgrade() else { return };
-                if sh.paused.load(Ordering::SeqCst) || !sh.live.load(Ordering::SeqCst) {
-                    return;
-                }
-                let mut q = sh.q.lock().expect("queues");
-                if is_sys {
-                    if !sh.system_heard.load(Ordering::Relaxed) && samples.iter().any(|v| *v != 0.0)
-                    {
-                        sh.system_heard.store(true, Ordering::SeqCst);
-                    }
-                    q.system.extend(samples);
-                    sh.system_in
-                        .fetch_add(samples.len() as u64, Ordering::SeqCst);
-                } else {
-                    q.mic.extend(samples);
-                    sh.mic_in.fetch_add(samples.len() as u64, Ordering::SeqCst);
-                }
-            }),
-        )
+            device: device.to_string(),
+            is_sys,
+            capture: Some(c),
+            down: None,
+        })
     };
-    let mut captures: Vec<Box<dyn Capture>> = vec![];
+    let mut slots: Vec<Slot> = vec![];
     if sys {
-        captures.push(
+        slots.push(
             open(DeviceKind::Loopback, &settings.system_device, true)
                 .map_err(|e| AudioError::new(e.code, format!("system audio: {}", e.message)))?,
         );
     }
     if mic {
-        // An early return drops `captures`, which stops the system capture already running.
-        captures.push(
+        // An early return drops `slots`, which stops the system capture already running.
+        slots.push(
             open(DeviceKind::Mic, &settings.mic_device, false)
                 .map_err(|e| AudioError::new(e.code, format!("microphone: {}", e.message)))?,
         );
     }
-    let system_source = captures.first().filter(|_| sys).and_then(|c| c.source());
-    let silence_hint = captures
+    let first = slots
         .first()
-        .filter(|_| sys && !settings.silence_warning.is_zero())
+        .filter(|_| sys)
+        .and_then(|s| s.capture.as_ref());
+    let system_source = first.and_then(|c| c.source());
+    let silence_hint = first
+        .filter(|_| !settings.silence_warning.is_zero())
         .and_then(|c| c.silence_hint())
         .map(|h| (h, settings.silence_warning));
+    let slots: Slots = Arc::new(Mutex::new(slots));
     let mut w = match WavWriter::create(path, layout.channels(), SAMPLE_RATE) {
         Ok(w) => w,
         Err(e) => {
-            stop_captures(&shared, &mut captures);
+            stop_captures(&shared, &slots);
             return Err(e);
         }
     };
@@ -241,41 +424,20 @@ pub fn start(
     let mut tap_sys = tap.filter(|_| sys).map(|f| f(Source::System));
     let mut tap_mic = tap.filter(|_| mic).map(|f| f(Source::Mic));
     let writer = std::thread::spawn(move || -> Result<Summary> {
-        loop {
-            let stopping = sh.stop.load(Ordering::SeqCst);
-            let (mut m, mut s) = take(&mut sh.q.lock().expect("queues"), sys, mic, stopping);
-            if let Some(c) = aec.as_mut() {
-                let (mut mo, mut so) = (Vec::with_capacity(m.len()), Vec::with_capacity(s.len()));
-                c.process(&m, &s, &mut mo, &mut so);
-                if stopping {
-                    c.flush(&mut mo, &mut so);
-                }
-                (m, s) = (mo, so);
-                if let Some(l) = c.lag_ms() {
-                    *sh.echo_lag_ms.lock().expect("lag") = Some(l);
-                }
-            }
-            write_frames(&mut w, &m, &s, layout)?;
-            if sh.paused.load(Ordering::SeqCst) {
-                sh.mic_level.store(0, Ordering::SeqCst);
-                sh.system_level.store(0, Ordering::SeqCst);
-            } else {
-                for (level, x) in [(&sh.mic_level, &m), (&sh.system_level, &s)] {
-                    if !x.is_empty() {
-                        level.store(rms(x).to_bits(), Ordering::SeqCst);
-                    }
-                }
-            }
-            for (t, x) in [(tap_sys.as_mut(), &s), (tap_mic.as_mut(), &m)] {
-                if let (Some(t), false) = (t, x.is_empty()) {
-                    t(x);
-                }
-            }
-            sh.frames.store(w.frames(), Ordering::SeqCst);
-            if stopping {
-                break;
-            }
-            std::thread::sleep(poll);
+        let wrote = write_loop(
+            &sh,
+            &mut w,
+            layout,
+            poll,
+            sys,
+            mic,
+            &mut aec,
+            &mut tap_sys,
+            &mut tap_mic,
+        );
+        if let Err(e) = wrote {
+            *sh.fault.lock().expect("fault") = Some(e.message.clone());
+            return Err(e);
         }
         let frames = w.finish()?;
         let echo_lag_ms = *sh.echo_lag_ms.lock().expect("lag");
@@ -290,11 +452,20 @@ pub fn start(
             system_source,
             echo_lag_ms,
             warning: None,
+            gaps: vec![],
         })
     });
+    let watch = {
+        let (weak, slots, timing) = (Arc::downgrade(&shared), Arc::clone(&slots), settings.timing);
+        std::thread::Builder::new()
+            .name("oats-rec-watch".into())
+            .spawn(move || watch(weak, slots, backend, timing.poll, timing.restart))
+            .ok()
+    };
     Ok(Recording {
         shared,
-        captures,
+        slots,
+        watch,
         writer: Some(writer),
         path: path.to_path_buf(),
         layout,
@@ -303,14 +474,80 @@ pub fn start(
     })
 }
 
-/// Close the queues to the callbacks, then stop (and drop) every capture: nothing queues after
-/// this, and no capture keeps a device open.
-fn stop_captures(shared: &Shared, captures: &mut Vec<Box<dyn Capture>>) {
-    shared.live.store(false, Ordering::SeqCst);
-    for c in captures.iter_mut() {
-        c.stop();
+type Tap = Option<Box<dyn FnMut(&[f32]) + Send>>;
+
+/// The writer's loop: drain the queues in lock step (a source that is down, like a stopping
+/// recording, is padded with silence) until `stop`, then flush.
+#[allow(clippy::too_many_arguments)]
+fn write_loop(
+    sh: &Shared,
+    w: &mut WavWriter,
+    layout: Layout,
+    poll: Duration,
+    sys: bool,
+    mic: bool,
+    aec: &mut Option<EchoCanceller>,
+    tap_sys: &mut Tap,
+    tap_mic: &mut Tap,
+) -> Result<()> {
+    loop {
+        let stopping = sh.stop.load(Ordering::SeqCst);
+        let down = sh.system_down.load(Ordering::SeqCst) || sh.mic_down.load(Ordering::SeqCst);
+        let (mut m, mut s) = take(
+            &mut sh.q.lock().expect("queues"),
+            sys,
+            mic,
+            stopping || down,
+        );
+        if let Some(c) = aec.as_mut() {
+            let (mut mo, mut so) = (Vec::with_capacity(m.len()), Vec::with_capacity(s.len()));
+            c.process(&m, &s, &mut mo, &mut so);
+            if stopping {
+                c.flush(&mut mo, &mut so);
+            }
+            (m, s) = (mo, so);
+            if let Some(l) = c.lag_ms() {
+                *sh.echo_lag_ms.lock().expect("lag") = Some(l);
+            }
+        }
+        write_frames(w, &m, &s, layout)?;
+        if sh.paused.load(Ordering::SeqCst) {
+            sh.mic_level.store(0, Ordering::SeqCst);
+            sh.system_level.store(0, Ordering::SeqCst);
+        } else {
+            for (level, x) in [(&sh.mic_level, &m), (&sh.system_level, &s)] {
+                if !x.is_empty() {
+                    level.store(rms(x).to_bits(), Ordering::SeqCst);
+                }
+            }
+        }
+        for (t, x) in [(tap_sys.as_mut(), &s), (tap_mic.as_mut(), &m)] {
+            if let (Some(t), false) = (t, x.is_empty()) {
+                t(x);
+            }
+        }
+        sh.frames.store(w.frames(), Ordering::SeqCst);
+        if stopping {
+            return Ok(());
+        }
+        std::thread::sleep(poll);
     }
-    captures.clear();
+}
+
+/// Close the queues to the callbacks, then stop (and drop) every capture: nothing queues after
+/// this, and no capture keeps a device open. Outages still open are closed as gaps.
+fn stop_captures(shared: &Shared, slots: &Mutex<Vec<Slot>>) {
+    shared.live.store(false, Ordering::SeqCst);
+    let mut g = slots.lock().expect("slots");
+    for s in g.iter_mut() {
+        if let Some(mut c) = s.capture.take() {
+            c.stop();
+        }
+        if let Some(d) = s.down.take() {
+            shared.gaps.lock().expect("gaps").push(s.gap(&d, false));
+        }
+    }
+    g.clear();
 }
 
 impl Recording {
@@ -348,10 +585,46 @@ impl Recording {
         *self.shared.echo_lag_ms.lock().expect("lag")
     }
 
+    /// Every outage so far, oldest first; one still open has `restored: false`.
+    pub fn gaps(&self) -> Vec<Gap> {
+        let mut v = self.shared.gaps.lock().expect("gaps").clone();
+        v.extend(
+            self.slots
+                .lock()
+                .expect("slots")
+                .iter()
+                .filter_map(|s| s.down.as_ref().map(|d| s.gap(d, false))),
+        );
+        v
+    }
+
+    /// Why the recording can no longer write audio (the WAV write failed), once it cannot.
+    pub fn fault(&self) -> Option<String> {
+        self.shared.fault.lock().expect("fault").clone()
+    }
+
+    /// Why the window shows a banner over the recording: a source that is down and being
+    /// reopened (dot-4uzgol.99), else the silence hint below.
+    pub fn warning(&self) -> Option<String> {
+        let down = self.gaps().into_iter().find(|g| !g.restored);
+        if let Some(g) = down {
+            let what = if g.source == "system" {
+                "system audio"
+            } else {
+                "the microphone"
+            };
+            return Some(format!(
+                "{what} stopped ({}) and is being reopened: the recording goes on, with silence for it until it is back",
+                g.error.unwrap_or(g.reason)
+            ));
+        }
+        self.silence_warning()
+    }
+
     /// Set while the system source has delivered `audio.silence_warning` of nothing but digital
     /// silence and its capture says why that may be (`Capture::silence_hint`: the macOS tap
     /// before System Audio Recording is allowed, dot-4uzgol.98). Clears at its first sound.
-    pub fn warning(&self) -> Option<String> {
+    fn silence_warning(&self) -> Option<String> {
         let (hint, after) = self.silence_hint.as_ref()?;
         let silent = self.shared.system_in.load(Ordering::SeqCst);
         let after = after.as_millis() as u64 * u64::from(SAMPLE_RATE) / 1000;
@@ -362,10 +635,20 @@ impl Recording {
         self.shared.paused.store(paused, Ordering::SeqCst);
     }
 
+    /// Stop the watch thread and every capture: nothing reopens or queues after this.
+    fn close(&mut self) {
+        self.shared.live.store(false, Ordering::SeqCst);
+        if let Some(w) = self.watch.take() {
+            let _ = w.join();
+        }
+        stop_captures(&self.shared, &self.slots);
+    }
+
     pub fn stop(mut self) -> Result<Summary> {
-        stop_captures(&self.shared, &mut self.captures);
+        let warning = self.silence_warning();
+        self.close();
         self.shared.stop.store(true, Ordering::SeqCst);
-        let warning = self.warning();
+        let gaps = self.shared.gaps.lock().expect("gaps").clone();
         let mut s = self
             .writer
             .take()
@@ -373,6 +656,7 @@ impl Recording {
             .join()
             .map_err(|_| AudioError::new("internal", "writer thread panicked"))??;
         s.warning = warning;
+        s.gaps = gaps;
         Ok(s)
     }
 }
@@ -380,7 +664,7 @@ impl Recording {
 impl Drop for Recording {
     fn drop(&mut self) {
         // Dropped without `stop` (engine shutdown): finish the file so it stays a valid WAV.
-        stop_captures(&self.shared, &mut self.captures);
+        self.close();
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(w) = self.writer.take() {
             let _ = w.join();
@@ -406,7 +690,7 @@ mod tests {
     ) -> (Summary, wav::WavData) {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("nested/a.wav");
-        let r = start(backend, settings, &p, None).unwrap();
+        let r = start(Arc::new(backend.clone()), settings, &p, None).unwrap();
         // Wait for the audio itself (not wall time): poll until `secs` have been written.
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while r.duration_ms() < (secs * 1000.0) as u64 {
@@ -496,7 +780,13 @@ mod tests {
             ..crate::settings::test_settings()
         };
         let d = tempfile::tempdir().unwrap();
-        let r = start(&silent_tap, &st, &d.path().join("a.wav"), None).unwrap();
+        let r = start(
+            Arc::new(silent_tap.clone()),
+            &st,
+            &d.path().join("a.wav"),
+            None,
+        )
+        .unwrap();
         assert_eq!(r.system_source(), Some("tap"));
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while r.warning().is_none() {
@@ -523,13 +813,104 @@ mod tests {
             ..st.clone()
         };
         for (b, st) in [(&sounding, &st), (&silent, &st), (&silent_tap, &off)] {
-            let r = start(b, st, &d.path().join("b.wav"), None).unwrap();
+            let r = start(Arc::new(b.clone()), st, &d.path().join("b.wav"), None).unwrap();
             while r.duration_ms() < 600 {
                 std::thread::sleep(Duration::from_millis(10));
             }
             assert_eq!(r.warning(), None);
             assert_eq!(r.stop().unwrap().warning, None);
         }
+    }
+
+    fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !ok() {
+            assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_lost_capture_is_reopened_and_the_same_recording_goes_on() {
+        // dot-4uzgol.99: the macOS tap's IO stopped when another app started an output stream,
+        // and the recording ended. Now the source is reopened, with silence for the gap.
+        let b = FakeBackend::default();
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.wav");
+        let r = start(
+            Arc::new(b.clone()),
+            &crate::settings::test_settings(),
+            &p,
+            None,
+        )
+        .unwrap();
+        wait_for("first audio", || r.duration_ms() >= 300);
+        // Reopening fails twice (the device is still settling), then works.
+        b.faults.fail_opens.store(2, Ordering::SeqCst);
+        b.faults.lose(DeviceKind::Loopback);
+        wait_for("the banner", || r.warning().is_some());
+        let w = r.warning().unwrap();
+        assert!(w.starts_with("system audio stopped"), "{w}");
+        // The mic keeps the recording going while the system source is down.
+        let at = r.duration_ms();
+        wait_for("audio during the outage", || r.duration_ms() >= at + 100);
+        wait_for("the source back", || {
+            r.gaps().first().is_some_and(|g| g.restored)
+        });
+        assert_eq!(r.warning(), None, "the banner goes with the outage");
+        let back = r.duration_ms();
+        wait_for("audio after", || r.duration_ms() >= back + 600);
+        let s = r.stop().unwrap();
+        assert_eq!(s.gaps.len(), 1, "{:?}", s.gaps);
+        let g = &s.gaps[0];
+        assert_eq!(
+            (g.source, g.reason.as_str(), g.restored),
+            ("system", crate::fake::LOST, true)
+        );
+        assert!(
+            g.error
+                .as_deref()
+                .is_some_and(|e| e.contains("open failed")),
+            "{g:?}"
+        );
+        assert!(g.at_ms >= 300 && g.ms > 0, "{g:?}");
+        assert_eq!(b.faults.opened(DeviceKind::Loopback), 2);
+        assert_eq!(b.faults.opened(DeviceKind::Mic), 1);
+        // One file: the system tone is back in its last half second, the mic never left.
+        let data = wav::read(&p).unwrap();
+        assert_eq!(data.samples[0].len() as u64, s.frames);
+        let tail = |ch: usize| {
+            let x = &data.samples[ch];
+            rms(&x[x.len() - SAMPLE_RATE as usize / 2..])
+        };
+        assert!(tail(1) > 0.3 && tail(0) > 0.1, "{} {}", tail(1), tail(0));
+    }
+
+    #[test]
+    fn a_lost_mic_is_reopened_too_and_a_stop_while_down_closes_the_gap() {
+        let b = FakeBackend::default();
+        let d = tempfile::tempdir().unwrap();
+        let r = start(
+            Arc::new(b.clone()),
+            &crate::settings::test_settings(),
+            &d.path().join("a.wav"),
+            None,
+        )
+        .unwrap();
+        wait_for("first audio", || r.duration_ms() >= 200);
+        b.faults.lose(DeviceKind::Mic);
+        wait_for("mic back", || r.gaps().first().is_some_and(|g| g.restored));
+        assert_eq!(r.gaps()[0].source, "mic");
+        // Now every reopen fails: the outage is still open when the user stops.
+        b.faults.fail_opens.store(usize::MAX, Ordering::SeqCst);
+        b.faults.lose(DeviceKind::Loopback);
+        wait_for("system down", || r.gaps().len() == 2);
+        let at = r.duration_ms();
+        wait_for("audio while down", || r.duration_ms() >= at + 200);
+        let s = r.stop().unwrap();
+        assert_eq!(s.gaps.len(), 2);
+        assert!(s.gaps[0].restored && !s.gaps[1].restored, "{:?}", s.gaps);
+        assert_eq!(s.gaps[1].source, "system");
     }
 
     #[test]
@@ -572,7 +953,7 @@ mod tests {
             ..crate::settings::test_settings()
         };
         assert_eq!(
-            start(&FakeBackend::default(), &st, &p, None)
+            start(Arc::new(FakeBackend::default()), &st, &p, None)
                 .err()
                 .unwrap()
                 .code,
@@ -582,14 +963,16 @@ mod tests {
             mic_device: "nope".into(),
             ..crate::settings::test_settings()
         };
-        let e = start(&FakeBackend::default(), &st, &p, None).err().unwrap();
+        let e = start(Arc::new(FakeBackend::default()), &st, &p, None)
+            .err()
+            .unwrap();
         assert_eq!(e.code, "device_not_found");
         assert!(e.message.starts_with("microphone:"));
     }
 
     /// A backend whose streams are never freed (cpal's macOS stream, dot-4uzgol.80): it keeps
     /// every callback forever, and the test plays audio through them after stop.
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     struct Leaky {
         kept: Arc<Mutex<Vec<crate::backend::OnSamples>>>,
         opened: Arc<std::sync::atomic::AtomicUsize>,
@@ -660,7 +1043,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
         let b = Leaky::default();
-        let r = start(&b, &crate::settings::test_settings(), &p, None).unwrap();
+        let r = start(
+            Arc::new(b.clone()),
+            &crate::settings::test_settings(),
+            &p,
+            None,
+        )
+        .unwrap();
         b.play();
         between(&r, &b);
         let shared = Arc::downgrade(&r.shared);
@@ -698,7 +1087,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let b = Leaky::default();
         let r = start(
-            &b,
+            Arc::new(b.clone()),
             &crate::settings::test_settings(),
             &d.path().join("a.wav"),
             None,
@@ -717,13 +1106,19 @@ mod tests {
             mic_device: "nope".into(),
             ..crate::settings::test_settings()
         };
-        assert!(start(&b, &st, &d.path().join("a.wav"), None).is_err());
+        assert!(start(Arc::new(b.clone()), &st, &d.path().join("a.wav"), None).is_err());
         assert_eq!(b.opened.load(Ordering::SeqCst), 1, "system opened first");
         assert!(b.all_released());
         b.play();
         // The WAV cannot be created (its path is a directory): both opened captures are stopped.
         let b = Leaky::default();
-        assert!(start(&b, &crate::settings::test_settings(), d.path(), None).is_err());
+        assert!(start(
+            Arc::new(b.clone()),
+            &crate::settings::test_settings(),
+            d.path(),
+            None
+        )
+        .is_err());
         assert_eq!(b.opened.load(Ordering::SeqCst), 2);
         assert!(b.all_released());
         b.play();
@@ -734,7 +1129,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.wav");
         let r = start(
-            &FakeBackend::default(),
+            Arc::new(FakeBackend::default()),
             &crate::settings::test_settings(),
             &p,
             None,

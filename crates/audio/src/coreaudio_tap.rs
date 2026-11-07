@@ -155,7 +155,9 @@ pub use native::{open, os_version};
 mod native {
     use std::ffi::{c_char, c_void};
     use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{mpsc, Mutex};
+    use std::time::{Duration, Instant};
 
     use objc2::rc::{autoreleasepool, Allocated, Retained};
     use objc2::runtime::{AnyClass, AnyObject};
@@ -236,6 +238,28 @@ mod native {
     const PID_TO_PROCESS: &[u8; 4] = b"id2p";
     /// `kAudioTapPropertyFormat`.
     const TAP_FORMAT: &[u8; 4] = b"tfmt";
+    /// `kAudioHardwarePropertyDefaultOutputDevice`.
+    const DEFAULT_OUTPUT: &[u8; 4] = b"dOut";
+    /// `kAudioDevicePropertyDeviceIsAlive`.
+    const IS_ALIVE: &[u8; 4] = b"livn";
+
+    /// The current default output device, which the global tap mixes down.
+    fn default_output() -> Option<u32> {
+        read_global::<u32, u8>(SYSTEM_OBJECT, DEFAULT_OUTPUT, None)
+    }
+
+    /// The tap's format as a comparable key: rate bits, format id, flags, bits, channels.
+    fn format_key(tap: u32) -> Option<(u64, u32, u32, u32, u32)> {
+        read_global::<Asbd, u8>(tap, TAP_FORMAT, None).map(|a| {
+            (
+                a.sample_rate.to_bits(),
+                a.format_id,
+                a.format_flags,
+                a.bits_per_channel,
+                a.channels_per_frame,
+            )
+        })
+    }
 
     /// The installed macOS version, from `NSProcessInfo`.
     pub fn os_version() -> Option<OsVersion> {
@@ -269,6 +293,8 @@ mod native {
         fmt: PcmFormat,
         rate: u32,
         out: Mutex<SystemOut>,
+        /// IOProc calls so far: the heartbeat `TapCapture::lost` watches.
+        beats: AtomicU64,
     }
 
     unsafe extern "C" fn io_proc(
@@ -280,11 +306,15 @@ mod native {
         _output_time: *const c_void,
         client: *mut c_void,
     ) -> i32 {
-        if input.is_null() || client.is_null() {
+        if client.is_null() {
             return 0;
         }
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let feed = unsafe { &*client.cast::<Feed>() };
+            feed.beats.fetch_add(1, Ordering::Relaxed);
+            if input.is_null() {
+                return;
+            }
             let count = unsafe { (*input).count } as usize;
             let first = unsafe { std::ptr::addr_of!((*input).buffers) }.cast::<AudioBuffer>();
             let bufs: Vec<(u32, &[u8])> = (0..count)
@@ -315,6 +345,9 @@ mod native {
         io: *mut c_void,
         feed: *mut Feed,
         running: bool,
+        /// The default output device and the tap format it was built for.
+        output: Option<u32>,
+        format: Option<(u64, u32, u32, u32, u32)>,
     }
 
     // The ids are plain integers; `feed` is only touched by the IOProc until `drop` stops it.
@@ -342,11 +375,48 @@ mod native {
         }
     }
 
-    struct TapCapture(Option<Tap>);
+    struct TapCapture {
+        tap: Option<Tap>,
+        /// IO silence that counts as stopped (`audio.restart_wait`).
+        stall: Duration,
+        /// The heartbeat as last seen, and when it last moved.
+        beats: u64,
+        beat_at: Instant,
+    }
 
     impl Capture for TapCapture {
         fn stop(&mut self) {
-            self.0.take();
+            self.tap.take();
+        }
+
+        /// The tap stops, or goes on with the wrong format or device, when another app starts an
+        /// output stream or the default output moves (dot-4uzgol.99): the IOProc no longer runs,
+        /// the aggregate dies, or the output and format it was built for are gone. The recorder
+        /// then builds a new tap.
+        fn lost(&mut self) -> Option<String> {
+            let tap = self.tap.as_ref()?;
+            let beats = unsafe { &*tap.feed }.beats.load(Ordering::Relaxed);
+            if beats != self.beats {
+                self.beats = beats;
+                self.beat_at = Instant::now();
+            } else if self.beat_at.elapsed() >= self.stall {
+                return Some(format!(
+                    "Core Audio tap IO stopped: no callback for {:?}",
+                    self.stall
+                ));
+            }
+            if read_global::<u32, u8>(tap.agg, IS_ALIVE, None) == Some(0) {
+                return Some("the Core Audio tap's aggregate device died".into());
+            }
+            if default_output() != tap.output {
+                return Some("the default output device changed".into());
+            }
+            match format_key(tap.tap) {
+                Some(f) if Some(f) != tap.format => {
+                    Some("the Core Audio tap format changed".into())
+                }
+                _ => None,
+            }
         }
     }
 
@@ -358,7 +428,12 @@ mod native {
             let _ = tx.send(autoreleasepool(|_| start(on_samples)));
         });
         match rx.recv_timeout(timing.open_timeout) {
-            Ok(Ok(tap)) => Ok(Box::new(TapCapture(Some(tap)))),
+            Ok(Ok(tap)) => Ok(Box::new(TapCapture {
+                tap: Some(tap),
+                stall: timing.restart,
+                beats: 0,
+                beat_at: Instant::now(),
+            })),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(AudioError::new(
                 "capture_failed",
@@ -446,6 +521,8 @@ mod native {
             io: std::ptr::null_mut(),
             feed: std::ptr::null_mut(),
             running: false,
+            output: default_output(),
+            format: None,
         };
         let st = unsafe { create_tap(Retained::as_ptr(&desc), &mut tap.tap) };
         if st != 0 {
@@ -475,6 +552,7 @@ mod native {
         if rate == 0 {
             return Err(fail(TapStage::ReadFormat, 0));
         }
+        tap.format = format_key(tap.tap);
 
         let agg_uid = format!("oats-meetings-rs.system-tap.{tap_uid}");
         let dict = ns_dict(&aggregate_description(&tap_uid, &agg_uid));
@@ -489,6 +567,7 @@ mod native {
             fmt,
             rate,
             out: Mutex::new(SystemOut::new(on_samples)),
+            beats: AtomicU64::new(0),
         }));
         let st =
             unsafe { AudioDeviceCreateIOProcID(tap.agg, io_proc, tap.feed.cast(), &mut tap.io) };

@@ -15,6 +15,7 @@ fn timing() -> oats_audio::Timing {
     oats_audio::Timing {
         open_timeout: Duration::from_secs(15),
         poll: Duration::from_millis(25),
+        restart: Duration::from_secs(2),
     }
 }
 
@@ -77,7 +78,13 @@ fn five_second_wasapi_loopback_is_non_silent() {
         mic_enabled: false,
         ..AudioSettings::new(timing())
     };
-    let rec = recorder::start(&CpalBackend::new(timing()), &st, &path, None).unwrap();
+    let rec = recorder::start(
+        std::sync::Arc::new(CpalBackend::new(timing())),
+        &st,
+        &path,
+        None,
+    )
+    .unwrap();
     std::thread::sleep(Duration::from_secs(5));
     let s = rec.stop().unwrap();
     drop(stream);

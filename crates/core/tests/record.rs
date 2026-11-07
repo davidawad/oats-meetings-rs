@@ -89,7 +89,7 @@ fn start(r: &Rig, id: &str) -> Value {
 }
 
 fn stop(r: &Rig) -> Value {
-    r.engine.dispatch(&Action::RecordStop {}).unwrap()
+    r.engine.dispatch(&Action::RecordStop { by: None }).unwrap()
 }
 
 /// A backend that never answers its device probe (dot-4uzgol.57): devices-list fails with
@@ -268,7 +268,7 @@ fn record_start_stop_session_get_roundtrip() {
 #[test]
 fn state_errors_are_structured() {
     let r = rig();
-    for a in [Action::RecordStop {}, Action::RecordPause {}] {
+    for a in [Action::RecordStop { by: None }, Action::RecordPause {}] {
         assert_eq!(r.engine.dispatch(&a).unwrap_err().code, "not_recording");
     }
     start(&r, "s1");
@@ -946,4 +946,124 @@ fn record_start_names_the_tap_and_a_silent_tap_warns() {
     );
     let v = stop(&r);
     assert_eq!(v["warning"], Value::Null);
+}
+
+/// Every event of `topic` that arrives on `rx` within `wait` of the last one.
+fn events(rx: &std::sync::mpsc::Receiver<String>, topic: &str, wait: Duration) -> Vec<Value> {
+    std::iter::from_fn(|| rx.recv_timeout(wait).ok())
+        .map(|l| serde_json::from_str::<Value>(&l).unwrap())
+        .filter(|v| v["event"] == topic)
+        .map(|v| v["data"].clone())
+        .collect()
+}
+
+/// dot-4uzgol.99: on macOS the tap's IO stopped when another app started an output stream, and
+/// the recording ended by itself with no reason. A lost capture is reopened and the same session
+/// goes on (with a banner while it is down, and the gap in record-stop); only record-stop ends it.
+#[test]
+fn a_lost_capture_never_stops_the_recording() {
+    let r = rig();
+    r.engine
+        .set("audio.restart_wait", &json!("100ms"), "test")
+        .unwrap();
+    let b = FakeBackend::default();
+    let faults = Arc::clone(&b.faults);
+    r.engine
+        .set_audio_factory(Box::new(move |_| Ok(Box::new(b.clone()))));
+    let rx = r.engine.bus.subscribe(vec![]);
+    start(&r, "lost");
+    let written = |r: &Rig| {
+        r.engine
+            .dispatch(&Action::SessionGet {
+                session: "lost".into(),
+            })
+            .unwrap()
+    };
+    wait_until("first audio", || {
+        written(&r)["duration_ms"].as_u64().unwrap() >= 300
+    });
+    // Reopening fails once (the output is still settling), then works.
+    faults
+        .fail_opens
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    faults.lose(oats_audio::DeviceKind::Loopback);
+    wait_until("the banner", || r.engine.recording_warning().is_some());
+    let w = r.engine.recording_warning().unwrap();
+    assert!(w.starts_with("system audio stopped"), "{w}");
+    wait_until("the source back", || {
+        written(&r)["gaps"][0]["restored"] == true
+    });
+    assert_eq!(r.engine.recording_warning(), None);
+    // A second loss (another stream starting) is ridden out the same way.
+    faults.lose(oats_audio::DeviceKind::Loopback);
+    wait_until("the second gap", || {
+        written(&r)["gaps"][1]["restored"] == true
+    });
+    let now = written(&r);
+    assert_eq!(now["state"], "recording", "{now}");
+    let at = now["duration_ms"].as_u64().unwrap();
+    wait_until("audio after", || {
+        written(&r)["duration_ms"].as_u64().unwrap() >= at + 300
+    });
+    assert!(
+        matches!(r.engine.recording(), Some(Some((ref id, _, _))) if id == "lost"),
+        "still recording"
+    );
+    let v = stop(&r);
+    assert_eq!(
+        (&v["by"], &v["forced"], &v["reason"]),
+        (&json!("api"), &json!(false), &Value::Null)
+    );
+    let gaps = v["gaps"].as_array().unwrap();
+    assert_eq!(gaps.len(), 2, "{v}");
+    assert!(gaps
+        .iter()
+        .all(|g| g["source"] == "system" && g["restored"] == true));
+    assert_eq!(gaps[0]["reason"], oats_audio::fake::LOST);
+    assert!(
+        gaps[0]["error"].as_str().unwrap().contains("open failed"),
+        "{v}"
+    );
+    assert_eq!(faults.opened(oats_audio::DeviceKind::Loopback), 3);
+    // Exactly one recording-stopped: the one record-stop asked for.
+    let stopped = events(&rx, "recording-stopped", Duration::from_millis(300));
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    assert_eq!(stopped[0]["by"], "api");
+}
+
+/// The one stop nobody asks for, a recording that can no longer write its audio, is announced
+/// with `forced` and its reason (the window's banner), not left running or ended silently.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_recording_that_cannot_write_is_stopped_with_a_reason() {
+    use std::os::fd::AsRawFd;
+    let r = rig();
+    r.engine
+        .set("audio.restart_wait", &json!("100ms"), "test")
+        .unwrap();
+    let rx = r.engine.bus.subscribe(vec!["recording-stopped".into()]);
+    let v = start(&r, "full");
+    let wav = std::path::PathBuf::from(v["path"].as_str().unwrap());
+    // The disk fills up under the recording: its WAV's descriptor now writes to /dev/full.
+    let fd = std::fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .find(|e| std::fs::read_link(e.path()).is_ok_and(|t| t == wav))
+        .and_then(|e| e.file_name().to_str()?.parse::<i32>().ok())
+        .expect("the WAV's descriptor");
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    assert!(unsafe { libc::dup2(full.as_raw_fd(), fd) } >= 0);
+    let got = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("recording-stopped");
+    let d = &serde_json::from_str::<Value>(&got).unwrap()["data"];
+    assert_eq!(
+        (&d["session"], &d["by"], &d["forced"]),
+        (&json!("full"), &json!("engine"), &json!(true))
+    );
+    assert!(d["reason"].as_str().is_some_and(|w| !w.is_empty()), "{d}");
+    wait_until("idle", || r.engine.recording() == Some(None));
 }

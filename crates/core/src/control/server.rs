@@ -518,6 +518,10 @@ fn process(engine: &Arc<Engine>, conn: &Arc<Conn>, line: &str) -> Option<Value> 
             &format!("unknown action '{name}'"),
         ));
     }
+    // A stop or quit over the socket says it came from ctl unless the caller said who it is.
+    if matches!(name.as_str(), "record-stop" | "quit") {
+        obj.entry("by").or_insert_with(|| Value::from("ctl"));
+    }
     let act: Action = match serde_json::from_value(Value::Object(obj)) {
         Ok(a) => a,
         Err(e) => return Some(err_envelope(&id, "bad_params", &e.to_string())),

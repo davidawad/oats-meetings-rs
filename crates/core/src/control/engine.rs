@@ -115,6 +115,10 @@ struct State {
     bad: Option<u64>,
 }
 
+/// Who a `record-stop` or `quit` without `by` came from: a caller of the engine API itself
+/// (ctl fills in `ctl`, the GUI its surface).
+const DEFAULT_BY: &str = "api";
+
 pub struct Engine {
     opts: EngineOpts,
     /// The user file: `opts.user_config` until `config-convert` moves it to another format.
@@ -675,8 +679,13 @@ impl Engine {
         self.shutdown.load(Ordering::SeqCst)
     }
 
+    /// Logs the caller the first time: an app that quits must say what asked (dot-4uzgol.99).
+    #[track_caller]
     pub fn request_shutdown(&self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+        if !self.shutdown.swap(true, Ordering::SeqCst) {
+            let at = std::panic::Location::caller();
+            crate::elog!("oats-meetings-rs: shutdown requested at {at}");
+        }
     }
 
     /// The recording in progress as `(session, paused, audio duration ms)`, `Some(None)` when idle;
@@ -925,6 +934,84 @@ impl Engine {
             .ok_or_else(|| crate::config::resolve::unknown_key(&format!("'{key}'"), key))
     }
 
+    /// Stop the recording and save it. `by` is who asked (a `record-stop` caller, or `engine`);
+    /// `forced` is `(session, reason)` only on a forced stop, the one stop nobody asked for: the
+    /// recording could no longer write its audio. Both are logged and in the `recording-stopped` event, whose
+    /// `forced` the window shows as a banner (dot-4uzgol.99).
+    fn stop_recording(&self, by: &str, forced: Option<(&str, &str)>) -> Result<Value> {
+        let reason = forced.map(|(_, why)| why);
+        let mut v = match self.recorder.stop() {
+            Ok(v) => v,
+            Err(e) => {
+                // A forced stop is announced even when its audio could not be saved: never silent.
+                if let Some((id, why)) = forced {
+                    crate::elog!("oats-meetings-rs: recording {id} stopped by {by}: {why} ({e})");
+                    self.bus.publish(
+                        "recording-stopped",
+                        json!({"session": id, "by": by, "forced": true, "reason": why,
+                               "error": e.to_string()}),
+                    );
+                    self.session_saved(&json!(id));
+                }
+                return Err(e);
+            }
+        };
+        let id = v["session"].as_str().unwrap_or_default().to_string();
+        match reason {
+            Some(why) => crate::elog!("oats-meetings-rs: recording {id} stopped by {by}: {why}"),
+            None => crate::elog!("oats-meetings-rs: recording {id} stopped by {by}"),
+        }
+        v["by"] = json!(by);
+        v["forced"] = json!(reason.is_some());
+        v["reason"] = json!(reason);
+        if let Some(c) = crate::calendar::on_saved(self, &id) {
+            v["calendar"] = c;
+        }
+        self.bus.publish("recording-stopped", v.clone());
+        self.session_saved(&v["session"]);
+        // The model may have arrived while this pending recording was running.
+        if self.store().pending().contains(&id) {
+            self.model_arrived();
+        }
+        Ok(v)
+    }
+
+    /// Watch the recording `id` until it ends: a lost capture is the recorder's to reopen (the
+    /// recording goes on), but one that can no longer write its audio is stopped here, with its
+    /// reason, rather than left running without a sound (dot-4uzgol.99).
+    fn guard_recording(&self, id: &str) {
+        let me = Weak::clone(&self.me);
+        let watched = id.to_string();
+        let spawned = std::thread::Builder::new()
+            .name("oats-rec-guard".into())
+            .spawn(move || loop {
+                let id = &watched;
+                let Some(e) = me.upgrade() else { return };
+                if e.is_shutdown() {
+                    return;
+                }
+                match e.recorder.active_state() {
+                    // A start or stop holds the recorder: look again next round.
+                    None => {}
+                    Some(Some((cur, _, _))) if cur == *id => {
+                        if let Some((cur, why)) = e.recorder.fault() {
+                            if cur == *id {
+                                let _ = e.stop_recording("engine", Some((id, &why)));
+                                return;
+                            }
+                        }
+                    }
+                    Some(_) => return,
+                }
+                let every = e.snapshot().config.audio.restart_wait.as_duration();
+                drop(e);
+                std::thread::sleep(every);
+            });
+        if let Err(err) = spawned {
+            crate::elog!("oats-meetings-rs: cannot watch recording {id}: {err}");
+        }
+    }
+
     fn session_saved(&self, id: &Value) {
         self.bus
             .publish("session-saved", json!({"id": id, "change": "record"}));
@@ -985,8 +1072,11 @@ impl Engine {
                 "bad_request",
                 "subscribe is only valid on a live connection",
             )),
-            Action::Quit {} => {
-                self.bus.publish("quit", json!({}));
+            Action::Quit { by } => {
+                // Who quit is logged: an app that quit on its own must say who asked (dot-4uzgol.99).
+                let by = by.as_deref().unwrap_or(DEFAULT_BY);
+                crate::elog!("oats-meetings-rs: quit requested by {by}");
+                self.bus.publish("quit", json!({"by": by}));
                 self.request_shutdown();
                 Ok(json!({"stopping": true}))
             }
@@ -1060,25 +1150,14 @@ impl Engine {
                 }
                 v["title"] = json!(cal.title.unwrap_or_default());
                 v["calendar"] = cal.report;
+                if let Some(id) = v["session"].as_str() {
+                    self.guard_recording(id);
+                }
                 self.bus.publish("recording-started", v.clone());
                 Ok(v)
             }
-            Action::RecordStop {} => {
-                let mut v = self.recorder.stop()?;
-                if let Some(c) = v["session"]
-                    .as_str()
-                    .and_then(|id| crate::calendar::on_saved(self, id))
-                {
-                    v["calendar"] = c;
-                }
-                self.bus.publish("recording-stopped", v.clone());
-                self.session_saved(&v["session"]);
-                // The model may have arrived while this pending recording was running.
-                let id = v["session"].as_str().unwrap_or_default();
-                if self.store().pending().iter().any(|p| p == id) {
-                    self.model_arrived();
-                }
-                Ok(v)
+            Action::RecordStop { by } => {
+                self.stop_recording(by.as_deref().unwrap_or(DEFAULT_BY), None)
             }
             Action::RecordPause {} => {
                 let v = self.recorder.pause()?;

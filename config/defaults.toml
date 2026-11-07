@@ -58,6 +58,8 @@ layout = "split"
 open_timeout = "15s"
 # Pause of the recorder writer and of capture readiness polling.
 poll_interval = "25ms"
+# A capture that stops on its own during a recording (the macOS Core Audio tap when another app starts an output stream or the default output changes, a device that goes away) is reopened after this wait, and again after each failed try; the recording goes on, with silence and a gap in record-stop for the missing source. Also how long the tap may go without an IO callback before it counts as stopped.
+restart_wait = "2s"
 # A recording whose system audio comes from a source that macOS silences rather than fails without its grant (the Core Audio tap while System Audio Recording is pending or denied) warns, in record-stop, session-get and a window banner naming the System Settings pane, after this much of nothing but digital silence. 0s never warns.
 silence_warning = "5s"
 # macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.

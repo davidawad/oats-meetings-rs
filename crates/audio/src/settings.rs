@@ -101,6 +101,9 @@ pub struct Timing {
     pub open_timeout: Duration,
     /// Pause of every polling loop (writer, readiness waits, stop flags).
     pub poll: Duration,
+    /// How long a capture may go without IO before it counts as lost, and the wait before each
+    /// try to reopen a lost one (`audio.restart_wait`).
+    pub restart: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +164,7 @@ pub(crate) fn test_settings() -> AudioSettings {
         ..AudioSettings::new(Timing {
             open_timeout: Duration::from_secs(15),
             poll: Duration::from_millis(25),
+            restart: Duration::from_millis(100),
         })
     }
 }

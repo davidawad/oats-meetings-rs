@@ -1,14 +1,15 @@
 //! A deterministic in-memory backend for tests of the recorder and of the engine actions:
 //! one loopback device playing a tone and one mic playing another, delivered in real time.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::backend::{Capture, CaptureBackend, DeviceInfo, DeviceKind, OnSamples};
 use crate::error::{AudioError, Result};
 use crate::SAMPLE_RATE;
 
+#[derive(Clone)]
 pub struct FakeBackend {
     pub loopback_hz: f32,
     pub mic_hz: f32,
@@ -18,6 +19,46 @@ pub struct FakeBackend {
     /// The loopback stands in for the macOS Core Audio tap: its capture names itself `tap` and
     /// has a silence hint (a `loopback_hz` of 0 is the zeros of a tap without its grant).
     pub loopback_tap: bool,
+    /// Faults a test injects into the captures it opens.
+    pub faults: Arc<Faults>,
+}
+
+/// Faults injected into a `FakeBackend` (dot-4uzgol.99): a capture whose IO stops on its own (the
+/// macOS tap when another app starts an output stream), and opens that fail.
+#[derive(Default)]
+pub struct Faults {
+    /// Kinds whose running capture stops delivering and reports itself lost (once per entry).
+    lose: Mutex<Vec<DeviceKind>>,
+    /// This many opens fail (`capture_failed`) before opens work again.
+    pub fail_opens: AtomicUsize,
+    /// Captures opened, by kind: loopback, mic.
+    pub opened: [AtomicUsize; 2],
+}
+
+/// Why a capture the test made lose its IO says it stopped.
+pub const LOST: &str = "fake: IO stopped";
+
+impl Faults {
+    /// Stop the running capture of `kind`, as a device change would.
+    pub fn lose(&self, kind: DeviceKind) {
+        self.lose.lock().expect("faults").push(kind);
+    }
+
+    pub fn opened(&self, kind: DeviceKind) -> usize {
+        self.opened[usize::from(kind == DeviceKind::Mic)].load(Ordering::SeqCst)
+    }
+
+    /// True once (per `lose` call) for `kind`.
+    fn take(&self, kind: DeviceKind) -> bool {
+        let mut l = self.lose.lock().expect("faults");
+        match l.iter().position(|k| *k == kind) {
+            Some(i) => {
+                l.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 impl Default for FakeBackend {
@@ -28,12 +69,15 @@ impl Default for FakeBackend {
             mic2_hz: 1320.0,
             amplitude: 0.5,
             loopback_tap: false,
+            faults: Arc::default(),
         }
     }
 }
 
 struct FakeCapture {
     stop: Arc<AtomicBool>,
+    /// Set by the capture thread when a test made it lose its IO.
+    dead: Arc<AtomicBool>,
     th: Option<std::thread::JoinHandle<()>>,
     tap: bool,
 }
@@ -55,6 +99,10 @@ impl Capture for FakeCapture {
 
     fn silence_hint(&self) -> Option<String> {
         self.tap.then(|| TAP_HINT.to_string())
+    }
+
+    fn lost(&mut self) -> Option<String> {
+        self.dead.load(Ordering::SeqCst).then(|| LOST.to_string())
     }
 }
 
@@ -103,16 +151,32 @@ impl CaptureBackend for FakeBackend {
                 ))
             }
         };
+        let faults = Arc::clone(&self.faults);
+        let fail = faults
+            .fail_opens
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        if fail.is_ok() {
+            return Err(AudioError::new("capture_failed", "fake: open failed"));
+        }
+        faults.opened[usize::from(kind == DeviceKind::Mic)].fetch_add(1, Ordering::SeqCst);
         let amp = self.amplitude;
         let tap = self.loopback_tap && kind == DeviceKind::Loopback;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
+        let dead = Arc::new(AtomicBool::new(false));
+        let died = Arc::clone(&dead);
         let th = std::thread::spawn(move || {
             let chunk = SAMPLE_RATE as usize / 100; // 10 ms of audio per delivery
             let pace = Duration::from_secs_f64(chunk as f64 / f64::from(SAMPLE_RATE));
             let t0 = std::time::Instant::now();
             let mut n: u64 = 0;
             while !flag.load(Ordering::SeqCst) {
+                if died.load(Ordering::SeqCst) || faults.take(kind) {
+                    // IO stopped: the thread stays until `stop`, delivering nothing.
+                    died.store(true, Ordering::SeqCst);
+                    std::thread::sleep(pace);
+                    continue;
+                }
                 // Deliver by media time, not by loop count: a thread starved by CPU load
                 // catches up with the audio it owes instead of dropping it (a slept-through
                 // 10 ms chunk is delivered late, never lost).
@@ -133,6 +197,7 @@ impl CaptureBackend for FakeBackend {
         });
         Ok(Box::new(FakeCapture {
             stop,
+            dead,
             th: Some(th),
             tap,
         }))

@@ -44,7 +44,7 @@ actions! {
     Version, "version", "App, protocol and schema versions.", "implemented", "read", {};
     ListActions, "list-actions", "The action manifest.", "implemented", "read", {};
     Subscribe, "subscribe", "Stream events on this connection; optional topic filter.", "implemented", "read", { topics: Option<Vec<String>> };
-    Quit, "quit", "Stop the engine.", "implemented", "control", {};
+    Quit, "quit", "Stop the engine. by: who asks (the GUI sends window, menu or tray; ctl sends ctl), logged and in the quit event.", "implemented", "control", { by: Option<String> };
     ConfigGet, "config-get", "Resolved value of one key.", "implemented", "read", { key: String };
     ConfigSet, "config-set", "Persist a key in the user config file.", "implemented", "write", { key: String, value: Value };
     ConfigReload, "config-reload", "Re-read the user config file.", "implemented", "write", {};
@@ -57,7 +57,7 @@ actions! {
     PrivacyToggle, "privacy-toggle", "Toggle hiding the window from screen capture.", "implemented", "write", {};
     DevicesList, "devices-list", "List audio capture devices (loopback and mic) for the selected backend.", "implemented", "read", {};
     RecordStart, "record-start", "Start recording a session (system loopback + mic to one WAV).", "implemented", "control", { session: Option<String>, title: Option<String> };
-    RecordStop, "record-stop", "Stop recording and save the session.", "implemented", "control", {};
+    RecordStop, "record-stop", "Stop recording and save the session. by: who asks (the GUI sends window, menu or tray; ctl sends ctl), logged and in the recording-stopped event.", "implemented", "control", { by: Option<String> };
     RecordPause, "record-pause", "Pause or resume recording.", "implemented", "control", {};
     SessionImport, "session-import", "Import sessions from an OpenOats sessions root or one session dir.", "implemented", "write", { from: String, overwrite: Option<bool> };
     SessionExport, "session-export", "Write a session's OpenOats markdown export (openoats/v1: frontmatter, notes, [hh:mm:ss] **Speaker:** lines) into dir (default sessions.export_dir); re-exporting replaces that session's file.", "implemented", "write", { session: String, dir: Option<String> };

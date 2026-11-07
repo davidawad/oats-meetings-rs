@@ -32,6 +32,7 @@
     },
     "open_timeout": "15s",
     "poll_interval": "25ms",
+    "restart_wait": "2s",
     "silence_warning": "5s",
     "system": {
       "device": "",

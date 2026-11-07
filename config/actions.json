@@ -36,10 +36,16 @@
       "status": "implemented"
     },
     {
-      "doc": "Stop the engine.",
+      "doc": "Stop the engine. by: who asks (the GUI sends window, menu or tray; ctl sends ctl), logged and in the quit event.",
       "effect": "control",
       "name": "quit",
-      "params": [],
+      "params": [
+        {
+          "name": "by",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
       "status": "implemented"
     },
     {
@@ -161,10 +167,16 @@
       "status": "implemented"
     },
     {
-      "doc": "Stop recording and save the session.",
+      "doc": "Stop recording and save the session. by: who asks (the GUI sends window, menu or tray; ctl sends ctl), logged and in the recording-stopped event.",
       "effect": "control",
       "name": "record-stop",
-      "params": [],
+      "params": [
+        {
+          "name": "by",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
       "status": "implemented"
     },
     {

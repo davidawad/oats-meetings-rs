@@ -344,7 +344,7 @@ impl MainWindow {
             let eng = Arc::clone(&engine);
             let res = cx
                 .background_executor()
-                .spawn(async move { crate::model::dispatch(&eng, c.action(), json!({})) })
+                .spawn(async move { crate::model::dispatch_from(&eng, c.action(), "window") })
                 .await;
             let _ = this.update(cx, |v, cx| {
                 v.state.pending = None;
@@ -722,11 +722,19 @@ impl MainWindow {
         }))
     }
 
-    /// The banners: system audio silent while recording (the macOS tap without its grant),
+    /// The banners: a recording the engine had to stop (why), system audio silent or being
+    /// reopened while recording (the macOS tap without its grant, a lost capture),
     /// transcription unavailable (with a button when an action fixes it), and the last failed
     /// hook run (dismissable; its output is in Settings > Hooks).
     pub(crate) fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let mut rows = vec![];
+        if let Some(n) = self.state.stop_notice.as_ref() {
+            let (lead, rest) = match n.split_once(": ") {
+                Some((a, b)) => (format!("{a}."), b.to_string()),
+                None => (n.clone(), String::new()),
+            };
+            rows.push(kit::banner(true, lead, rest));
+        }
         if let Some(w) = self.rec_warning.as_ref() {
             let (lead, rest) = match w.split_once(": ") {
                 Some((a, b)) => (format!("{}.", capitalised(a)), b.to_string()),

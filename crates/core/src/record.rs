@@ -268,6 +268,7 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
         timing: oats_audio::Timing {
             open_timeout: dur("audio.open_timeout")?,
             poll: dur("audio.poll_interval")?,
+            restart: dur("audio.restart_wait")?,
         },
         echo,
         silence_warning: dur("audio.silence_warning")?,
@@ -301,6 +302,7 @@ pub fn settings_of(c: &Config) -> AudioSettings {
         timing: oats_audio::Timing {
             open_timeout: c.audio.open_timeout.as_duration(),
             poll: c.audio.poll_interval.as_duration(),
+            restart: c.audio.restart_wait.as_duration(),
         },
         echo: c.audio.echo_cancel.then(|| oats_audio::aec::EchoSettings {
             tail: c.audio.echo_tail.as_duration(),
@@ -594,6 +596,14 @@ impl Recorder {
         g.as_ref().and_then(|a| a.rec.warning())
     }
 
+    /// The recording in progress as `(session, why)` once it can no longer write audio
+    /// (`Recording::fault`); None otherwise, and while a start or stop holds the recorder.
+    pub fn fault(&self) -> Option<(String, String)> {
+        let g = self.active.try_lock().ok()?;
+        g.as_ref()
+            .and_then(|a| a.rec.fault().map(|f| (a.id.clone(), f)))
+    }
+
     /// The `(mic, system)` RMS levels of the recording in progress; None when idle or while a
     /// start or stop holds the recorder (never blocks).
     pub fn levels(&self) -> Option<(f32, f32)> {
@@ -647,7 +657,7 @@ impl Recorder {
         plan: Option<Plan>,
         no_trans: Value,
     ) -> Result<Value> {
-        let be = self.backend(st)?;
+        let be: Arc<dyn CaptureBackend> = Arc::from(self.backend(st)?);
         let plan = plan.filter(|p| p.settings.live_enabled || p.settings.final_enabled);
         let label = plan
             .as_ref()
@@ -676,7 +686,7 @@ impl Recorder {
             };
             let tap: Option<oats_audio::recorder::TapFactory> =
                 if trans.is_some() { Some(&tapf) } else { None };
-            oats_audio::recorder::start(be.as_ref(), st, &wav, tap)
+            oats_audio::recorder::start(Arc::clone(&be), st, &wav, tap)
         };
         let rec = match rec {
             Ok(r) => r,
@@ -751,7 +761,7 @@ impl Recorder {
             "frames": summary.frames, "rate": summary.rate, "channels": summary.channels,
             "system_samples": summary.system_samples, "mic_samples": summary.mic_samples,
             "system_backend": summary.system_source, "echo_lag_ms": summary.echo_lag_ms,
-            "warning": summary.warning, "transcription": transcription}),
+            "warning": summary.warning, "gaps": summary.gaps, "transcription": transcription}),
         )
     }
 
@@ -781,6 +791,7 @@ impl Recorder {
             v["system_backend"] = json!(a.rec.system_source());
             v["echo_lag_ms"] = json!(a.rec.echo_lag_ms());
             v["warning"] = json!(a.rec.warning());
+            v["gaps"] = json!(a.rec.gaps());
             return;
         }
         v["state"] = json!("saved");

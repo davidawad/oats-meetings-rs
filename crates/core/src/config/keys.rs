@@ -309,6 +309,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "audio.restart_wait",
+        kind: Kind::Duration { min_ms: 100 * MS, max_ms: MIN },
+        default: Def::D(2 * SEC),
+        doc: "A capture that stops on its own during a recording (the macOS Core Audio tap when another app starts an output stream or the default output changes, a device that goes away) is reopened after this wait, and again after each failed try; the recording goes on, with silence and a gap in record-stop for the missing source. Also how long the tap may go without an IO callback before it counts as stopped.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "audio.echo_tail",
         kind: Kind::Duration { min_ms: 10 * MS, max_ms: SEC },
         default: Def::D(200 * MS),

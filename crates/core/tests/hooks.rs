@@ -129,7 +129,7 @@ fn record(r: &Rig, id: &str, title: &str) -> Value {
     e.dispatch(&Action::RecordPause {}).unwrap();
     e.dispatch(&Action::RecordPause {}).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
-    e.dispatch(&Action::RecordStop {}).unwrap()
+    e.dispatch(&Action::RecordStop { by: None }).unwrap()
 }
 
 #[test]
@@ -353,7 +353,7 @@ fn failing_missing_and_slow_hooks_never_touch_the_session() {
         .unwrap();
     std::thread::sleep(Duration::from_millis(1200));
     let t = Instant::now();
-    let stop = r.engine.dispatch(&Action::RecordStop {}).unwrap();
+    let stop = r.engine.dispatch(&Action::RecordStop { by: None }).unwrap();
     // The 5 s hook runs in the background: stop does not wait for it.
     assert!(t.elapsed() < Duration::from_secs(4), "{:?}", t.elapsed());
     assert_eq!(stop["session"], "safe");
@@ -389,7 +389,7 @@ fn failing_missing_and_slow_hooks_never_touch_the_session() {
             title: None,
         })
         .unwrap();
-    r.engine.dispatch(&Action::RecordStop {}).unwrap();
+    r.engine.dispatch(&Action::RecordStop { by: None }).unwrap();
 }
 
 #[test]

@@ -299,7 +299,7 @@ fn a_recording_takes_the_devices_over_and_the_monitor_comes_back_after_stop() {
     show(&r, true);
     std::thread::sleep(Duration::from_millis(100));
     assert!(!monitor_open(&r) && r.counts.open_now() == 2);
-    r.engine.dispatch(&Action::RecordStop {}).unwrap();
+    r.engine.dispatch(&Action::RecordStop { by: None }).unwrap();
     meters_move(&r);
     assert_eq!(r.counts.open_now(), 2, "monitor only");
 }

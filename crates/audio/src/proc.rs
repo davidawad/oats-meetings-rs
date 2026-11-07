@@ -9,6 +9,7 @@ use crate::backend::{Capture, OnSamples};
 use crate::error::{io_err, AudioError, Result};
 
 pub struct ProcCapture {
+    name: String,
     child: Child,
     reader: Option<JoinHandle<()>>,
 }
@@ -90,12 +91,19 @@ pub fn spawn(
         }
     }
     Ok(Box::new(ProcCapture {
+        name,
         child,
         reader: Some(reader),
     }))
 }
 
 impl Capture for ProcCapture {
+    /// The tool exited on its own (its server restarted, its device went away).
+    fn lost(&mut self) -> Option<String> {
+        let status = self.child.try_wait().ok().flatten()?;
+        Some(format!("{} exited ({status})", self.name))
+    }
+
     fn stop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -152,6 +160,7 @@ mod tests {
         crate::settings::Timing {
             open_timeout: std::time::Duration::from_millis(open_ms),
             poll: std::time::Duration::from_millis(poll_ms),
+            restart: std::time::Duration::from_millis(poll_ms),
         }
     }
 

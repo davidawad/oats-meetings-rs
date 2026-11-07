@@ -43,6 +43,14 @@ pub trait Capture: Send {
     fn silence_hint(&self) -> Option<String> {
         None
     }
+
+    /// Why this capture stopped delivering on its own, if it has: its device went away, its IO
+    /// stopped, or the output it follows changed (the macOS tap when another app starts a stream
+    /// or the default output moves, dot-4uzgol.99). The recorder polls it and reopens the source;
+    /// the recording itself never stops for it.
+    fn lost(&mut self) -> Option<String> {
+        None
+    }
 }
 
 pub trait CaptureBackend: Send + Sync {
@@ -154,6 +162,7 @@ mod tests {
         Timing {
             open_timeout: std::time::Duration::from_secs(1),
             poll: std::time::Duration::from_millis(5),
+            restart: std::time::Duration::from_millis(50),
         }
     }
 

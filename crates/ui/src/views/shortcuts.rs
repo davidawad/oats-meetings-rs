@@ -180,7 +180,7 @@ impl MainWindow {
         cx.spawn(async move |this, cx| {
             let res = cx
                 .background_executor()
-                .spawn(async move { model::dispatch(&eng, &id, json!({})) })
+                .spawn(async move { model::dispatch_from(&eng, &id, "window") })
                 .await;
             let _ = this.update(cx, |v, cx| {
                 if let Err(e) = res {

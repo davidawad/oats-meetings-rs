@@ -325,6 +325,20 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "restart_wait": {
+          "default": "2s",
+          "description": "A capture that stops on its own during a recording (the macOS Core Audio tap when another app starts an output stream or the default output changes, a device that goes away) is reopened after this wait, and again after each failed try; the recording goes on, with silence and a gap in record-stop for the missing source. Also how long the tap may go without an IO callback before it counts as stopped.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "silence_warning": {
           "default": "5s",
           "description": "A recording whose system audio comes from a source that macOS silences rather than fails without its grant (the Core Audio tap while System Audio Recording is pending or denied) warns, in record-stop, session-get and a window banner naming the System Settings pane, after this much of nothing but digital silence. 0s never warns.",

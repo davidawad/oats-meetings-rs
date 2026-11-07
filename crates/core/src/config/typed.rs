@@ -133,6 +133,7 @@ pub struct Audio {
     pub mic: AudioEndpoint,
     pub open_timeout: Dur,
     pub poll_interval: Dur,
+    pub restart_wait: Dur,
     pub silence_warning: Dur,
     pub system: AudioEndpoint,
     pub system_backend: AudioSystemBackend,

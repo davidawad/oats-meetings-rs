@@ -340,6 +340,9 @@ pub struct State {
     pub hooks_ui: crate::views::hooks::Ui,
     /// The last failed hook run, as the banner says it, until dismissed.
     pub hook_failure: Option<String>,
+    /// Why the engine stopped the last recording itself (a forced `recording-stopped`), as the
+    /// banner says it, until the next recording starts (dot-4uzgol.99).
+    pub stop_notice: Option<String>,
     /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
     /// status line.
     pub model: Option<(String, String)>,
@@ -582,6 +585,7 @@ impl State {
         let dur = d["duration_ms"].as_u64().unwrap_or(0);
         match v["event"].as_str() {
             Some("recording-started") => {
+                self.stop_notice = None;
                 self.live.clear();
                 self.live_names.clear();
                 self.live_session = Some(session.clone());
@@ -608,6 +612,14 @@ impl State {
             }
             Some("recording-stopped") => {
                 self.rec = Rec::Idle;
+                if d["forced"] == true {
+                    self.stop_notice = Some(format!(
+                        "Recording {session} was stopped: {}",
+                        d["reason"]
+                            .as_str()
+                            .unwrap_or("the audio could not be recorded")
+                    ));
+                }
                 // The saved transcript (final, else live) replaces the live fragments in one step.
                 if let Some((lines, names)) = self.saved_lines(engine, &session) {
                     self.live = lines;
@@ -1072,6 +1084,36 @@ mod tests {
         st.on_event(&engine, &seg("b", "live", "you", "two", 0.0));
         assert_eq!(st.live.len(), 1);
         assert_eq!(st.live_session.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_forced_stop_shows_its_reason_until_the_next_recording() {
+        // dot-4uzgol.99: a recording the engine stops itself says why; one the user stops does not.
+        let (engine, _d) = testutil::engine(&[]);
+        let mut st = State::default();
+        st.on_event(&engine, &ev("recording-started", json!({"session": "a"})));
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-stopped",
+                json!({"session": "a", "by": "window", "forced": false}),
+            ),
+        );
+        assert_eq!(st.stop_notice, None);
+        st.on_event(&engine, &ev("recording-started", json!({"session": "b"})));
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-stopped",
+                json!({"session": "b", "by": "engine", "forced": true, "reason": "disk full"}),
+            ),
+        );
+        assert_eq!(
+            st.stop_notice.as_deref(),
+            Some("Recording b was stopped: disk full")
+        );
+        st.on_event(&engine, &ev("recording-started", json!({"session": "c"})));
+        assert_eq!(st.stop_notice, None);
     }
 
     #[test]
