@@ -115,6 +115,10 @@ pub struct EchoDedupe {
     /// `stt.echo_bleed` as a fraction: the mic peak, against the remote channel's over the same
     /// moment, at or below which a short repeat is the speakers heard by the mic.
     pub bleed: f32,
+    /// `stt.echo_sentence` as a fraction: the share of a "you" utterance's words, and of its
+    /// content words, that must recur in order in the remote speech near it for it to be echo
+    /// whatever the word timing (`says_sentence_of`).
+    pub sentence: f32,
 }
 
 fn samples_of(d: crate::config::typed::Dur) -> usize {
@@ -135,6 +139,7 @@ impl Tuning {
                 similarity: c.echo_similarity as f32 / 100.0,
                 short: c.echo_short as usize,
                 bleed: c.echo_bleed as f32 / 100.0,
+                sentence: c.echo_sentence as f32 / 100.0,
             }),
         }
     }
@@ -243,6 +248,51 @@ fn repeats_part_of(w: &[(String, f64)], t: &Utt, d: &EchoDedupe) -> bool {
         })
 }
 
+/// Most words of `w` the same, or nearly, and in the same order, in `them`: the words of the
+/// remote utterances near it, in time order, as one stream (dot-4uzgol.98). An echo says one
+/// remote sentence again whatever the capture latency; the recognisers' sentence and window cuts
+/// differ between the channels, so it may span two remote utterances, and the words' estimated
+/// times (spread evenly over an utterance) are too rough to match one by one. `sentence` of all
+/// its words and of its content words must match within a run of remote words not much longer
+/// than it, so double talk that shares words, even a phrase, with remote speech is not echo.
+fn says_sentence_of(w: &[(String, f64)], them: &[&Utt], d: &EchoDedupe) -> bool {
+    let n = w.len();
+    let content = w.iter().filter(|(x, _)| !common(x)).count();
+    if n <= d.short || content == 0 {
+        return false;
+    }
+    let mut near: Vec<&&Utt> = them.iter().collect();
+    near.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let stream: Vec<String> = near.iter().flat_map(|t| words(&t.text)).collect();
+    let need = |of: usize| (d.sentence * of as f32).ceil() as usize;
+    let (need_all, need_content) = (need(n), need(content));
+    let span = (n + n - need_all).min(stream.len());
+    let same = |a: &str, b: &str| a == b || similarity(a, b) >= d.similarity;
+    if stream.len() < need_all {
+        return false;
+    }
+    (0..=stream.len() - span).any(|at| {
+        // Longest common subsequence of `w` and this run, counting all and content words.
+        let run = &stream[at..at + span];
+        let mut row = vec![(0usize, 0usize); span + 1];
+        for (x, _) in w {
+            let mut diag = (0, 0);
+            for (j, y) in run.iter().enumerate() {
+                let up = row[j + 1];
+                let next = if same(x, y) {
+                    (diag.0 + 1, diag.1 + usize::from(!common(x)))
+                } else {
+                    up.max(row[j])
+                };
+                diag = up;
+                row[j + 1] = next;
+            }
+        }
+        let (all, content) = row[span];
+        all >= need_all && content >= need_content
+    })
+}
+
 /// The loudest sample of `x` from `from` to `to` seconds.
 fn peak_between(x: &[f32], from: f64, to: f64) -> f32 {
     let at = |secs: f64| ((secs.max(0.0) * f64::from(SAMPLE_RATE)) as usize).min(x.len());
@@ -270,6 +320,10 @@ fn near_end(you: &Utt, heard: &Channels, d: &EchoDedupe) -> bool {
 /// remote side...") is echo too, common words or not, unless the recorded channels (`heard`)
 /// show the mic louder than bleed (`near_end`): a reply at the same moment (dot-4uzgol.95).
 /// Without the audio, an utterance of common words alone is kept.
+///
+/// A longer one that says nearly all of the remote sentence near it, in order, is echo however
+/// its word times line up (`says_sentence_of`, dot-4uzgol.98): a capture path's latency or the
+/// recognisers' cuts move the words, not the sentence.
 pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe, heard: Option<&Channels>) -> bool {
     let w = timed_words(you);
     let content = w.iter().filter(|(x, _)| !common(x)).count();
@@ -284,6 +338,9 @@ pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe, heard: Option<&Channels>
             most(c, content) && most(a, w.len())
         })
     {
+        return true;
+    }
+    if says_sentence_of(&w, &near, d) {
         return true;
     }
     let Some(heard) = heard else { return false };
@@ -1988,6 +2045,7 @@ mod tests {
                 similarity: 0.75,
                 short: 2,
                 bleed: 0.25,
+                sentence: 0.85,
             })
         );
         let all = vec![
@@ -2208,6 +2266,71 @@ mod tests {
         );
         // The list is searched by bisection.
         assert!(COMMON.windows(2).all(|p| p[0] < p[1]));
+    }
+
+    /// dot-4uzgol.98, PM say check at 77bee09 with the Core Audio tap: remote_1 said "Second
+    /// check, this sentence should arrive through the core audio process tab." and the same
+    /// sentence came back as a "you" line. The tap's latency puts the mic's copy later than
+    /// ScreenCaptureKit's did, and the channels' recogniser cuts differ: the remote sentence in
+    /// two pieces (a live window cut), or inside a longer utterance whose words' even-rate time
+    /// estimate is off by more than the window. Either way the identical sentence is echo.
+    #[test]
+    fn an_identical_sentence_at_tap_latency_is_echo_however_the_remote_side_is_cut() {
+        let echo = tuning_with(&[]).echo;
+        let sentence =
+            "Second check, this sentence should arrive through the core audio process tab.";
+        let first = said("remote_1", "First check, through the speakers.", 4.0, 6.5);
+        let cut = [
+            first.clone(),
+            said("remote_1", "Second check, this sentence should", 10.0, 11.6),
+            said(
+                "remote_1",
+                "arrive through the core audio process tab.",
+                11.6,
+                14.0,
+            ),
+        ];
+        // A long utterance: a pause inside it, so the even-rate word times run early.
+        let long = [said(
+            "remote_1",
+            &format!("First check, through the speakers. {sentence}"),
+            4.0,
+            14.0,
+        )];
+        for (them, lag) in [
+            (&cut[..], 0.4),
+            (&cut[..], 1.5),
+            (&long[..], 0.4),
+            (&long[..], 1.5),
+        ] {
+            let you = said("you", sentence, 10.0 + lag, 14.0 + lag);
+            let d = echo.unwrap();
+            assert!(is_echo(&you, them, &d, None), "lag {lag}: {them:?}");
+            let mut all = them.to_vec();
+            all.push(you);
+            assert_eq!(drop_echoes(all, "you", echo, None), them.to_vec());
+            // Misheard on the way back, a word lost: still the remote sentence.
+            let misheard = said(
+                "you",
+                "Second check this sentence should arrive through the core audio process tap",
+                10.0 + lag,
+                14.0 + lag,
+            );
+            assert!(is_echo(&misheard, them, &d, None), "lag {lag} misheard");
+        }
+        // The user answering over it, sharing a few of its words: kept.
+        let d = echo.unwrap();
+        for reply in [
+            "Got it, the second one came through fine.",
+            "Yes, I can hear this check now.",
+            "The audio sounds fine from here.",
+        ] {
+            let you = said("you", reply, 10.5, 13.5);
+            assert!(!is_echo(&you, &cut, &d, None), "{reply}");
+            assert!(!is_echo(&you, &long, &d, None), "{reply}");
+        }
+        // The same sentence long after the remote one: the user reading it out, kept.
+        assert!(!is_echo(&said("you", sentence, 30.0, 34.0), &cut, &d, None));
     }
 
     /// dot-4uzgol.95, PM say check at f312d0d: the speakers said "This is the remote side of a

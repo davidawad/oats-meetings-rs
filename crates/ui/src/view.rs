@@ -64,6 +64,9 @@ pub struct MainWindow {
     pub(crate) meter_source: &'static str,
     /// Why the input monitor could not open its devices, if it tried.
     pub(crate) monitor_error: Option<String>,
+    /// Why the recording may be missing its system audio (`Engine::recording_warning`: the macOS
+    /// tap delivering only silence before System Audio Recording is allowed), read each tick.
+    pub(crate) rec_warning: Option<String>,
     /// The settings row whose dropdown menu is open.
     pub(crate) menu: Option<&'static str>,
     /// The palette of the last frame (`ui.theme`, else the OS appearance).
@@ -145,6 +148,7 @@ impl MainWindow {
             levels: (0., 0.),
             meter_source: "none",
             monitor_error: None,
+            rec_warning: None,
             menu: None,
             theme: Theme::DARK,
             appearance: None,
@@ -209,15 +213,24 @@ impl MainWindow {
                 None => was,
             },
         };
+        let warned = self.rec_warning.clone();
+        self.rec_warning = match self.state.rec {
+            Rec::Idle => None,
+            // A start or stop holding the recorder this tick: keep the last reading.
+            _ => self
+                .engine
+                .recording_warning()
+                .or_else(|| warned.clone().filter(|_| self.engine.recording().is_none())),
+        };
         // Until a listing arrives: the worker fills the engine's cache after the first refresh.
         let listing = self.state.devices_note.is_some();
         if listing {
             self.state.sync_devices(&self.engine);
         }
         // The meters and the clock repaint through their own entity; the window (and with it the
-        // tab content) only on a state change (dot-4uzgol.97).
+        // tab content) only on a state change (dot-4uzgol.97), or when the recording banner changes.
         self.show_meters(cx);
-        if listing || self.state.rec != before {
+        if listing || self.state.rec != before || self.rec_warning != warned {
             cx.notify();
         }
     }
@@ -641,10 +654,18 @@ impl MainWindow {
         }))
     }
 
-    /// The banners: transcription unavailable (with a button when an action fixes it), and the
-    /// last failed hook run (dismissable; its output is in Settings > Hooks).
+    /// The banners: system audio silent while recording (the macOS tap without its grant),
+    /// transcription unavailable (with a button when an action fixes it), and the last failed
+    /// hook run (dismissable; its output is in Settings > Hooks).
     pub(crate) fn banner(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let mut rows = vec![];
+        if let Some(w) = self.rec_warning.as_ref() {
+            let (lead, rest) = match w.split_once(": ") {
+                Some((a, b)) => (format!("{}.", capitalised(a)), b.to_string()),
+                None => (w.clone(), String::new()),
+            };
+            rows.push(kit::banner(true, lead, rest));
+        }
         if let Some(p) = self.state.stt_problem.as_ref() {
             let (lead, rest) = match p.message.split_once(": ") {
                 Some((a, b)) => (format!("{a}."), b.to_string()),
@@ -1109,6 +1130,14 @@ pub(crate) fn chrome(rec: &Rec) -> serde_json::Value {
             Dot::Paused => "paused",
         }),
     })
+}
+
+/// `s` with its first letter upper-case.
+fn capitalised(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

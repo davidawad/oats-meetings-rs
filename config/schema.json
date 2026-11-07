@@ -114,6 +114,43 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "echo_align": {
+          "default": "1s",
+          "description": "Largest offset, either way, between system audio and its echo in the mic that the echo canceller measures by cross-correlation at the start of a recording; when the measured offset puts the echo outside audio.echo_tail (a capture path with other latency, such as the macOS Core Audio tap), the canceller delays the mic or the reference to match. 0s keeps audio.echo_delay as the only alignment.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "2s",
+          "x-max-ms": 2000,
+          "x-min": "0s",
+          "x-min-ms": 0,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_align_confidence": {
+          "default": 70,
+          "description": "Percent: the least correlation of the mic and system-audio envelopes at which the audio.echo_align offset is used; below it the measurement starts over.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_align_probe": {
+          "default": "1500ms",
+          "description": "System-audio sound the audio.echo_align measurement collects before it decides.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "100ms",
+          "x-min-ms": 100,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "echo_block": {
           "default": 256,
           "description": "Samples per echo-canceller block (rounded up to a power of two): smaller adapts faster, larger costs less.",
@@ -285,6 +322,20 @@
           "x-max-ms": 1000,
           "x-min": "5ms",
           "x-min-ms": 5,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "silence_warning": {
+          "default": "5s",
+          "description": "A recording whose system audio comes from a source that macOS silences rather than fails without its grant (the Core Audio tap while System Audio Recording is pending or denied) warns, in record-stop, session-get and a window banner naming the System Settings pane, after this much of nothing but digital silence. 0s never warns.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "0s",
+          "x-min-ms": 0,
           "x-reload": "live",
           "x-ui": false
         },
@@ -1444,6 +1495,15 @@
         "echo_overlap": {
           "default": 60,
           "description": "Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_sentence": {
+          "default": 85,
+          "description": "Percent: with audio.echo_cancel, a local-speaker utterance longer than stt.echo_short whose words, and content words, recur this much in the same order (nearly the same spelling counting, stt.echo_similarity) in the remote speech overlapping it is speaker echo, however the word times line up: one remote sentence said again at a capture path's latency, across a recogniser cut.",
           "maximum": 100,
           "minimum": 1,
           "type": "integer",

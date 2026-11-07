@@ -11,6 +11,9 @@
     "backend": "auto",
     "devices_timeout": "3s",
     "devices_ttl": "30s",
+    "echo_align": "1s",
+    "echo_align_confidence": 70,
+    "echo_align_probe": "1500ms",
     "echo_block": 256,
     "echo_cancel": true,
     "echo_delay": "40ms",
@@ -29,6 +32,7 @@
     },
     "open_timeout": "15s",
     "poll_interval": "25ms",
+    "silence_warning": "5s",
     "system": {
       "device": "",
       "enabled": true
@@ -179,6 +183,7 @@
     },
     "echo_bleed": 25,
     "echo_overlap": 60,
+    "echo_sentence": 85,
     "echo_short": 2,
     "echo_similarity": 75,
     "echo_window": "1s",

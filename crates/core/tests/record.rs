@@ -896,3 +896,54 @@ fn session_transcribe_runs_on_a_saved_session_and_guards_its_transcript() {
         .unwrap_err();
     assert_eq!(e.code, "not_found");
 }
+
+/// dot-4uzgol.98: record-start named `screencapturekit` while the Core Audio tap recorded, and the
+/// recording that raised the System Audio Recording prompt captured only silence without a word.
+/// record-start names the source opened; a tap that delivers only silence warns, naming the grant,
+/// in session-get, the engine's banner read and record-stop.
+#[test]
+fn record_start_names_the_tap_and_a_silent_tap_warns() {
+    let r = rig();
+    r.engine
+        .set("audio.silence_warning", &json!("300ms"), "test")
+        .unwrap();
+    r.engine.set_audio_factory(Box::new(|_| {
+        Ok(Box::new(FakeBackend {
+            loopback_hz: 0.0,
+            loopback_tap: true,
+            ..FakeBackend::default()
+        }))
+    }));
+    let v = start(&r, "tap-silent");
+    assert_eq!(
+        (&v["backend"], &v["system_backend"]),
+        (&json!("tap"), &json!("tap"))
+    );
+    wait_until("the silence warning", || {
+        r.engine.recording_warning().is_some()
+    });
+    let got = r
+        .engine
+        .dispatch(&Action::SessionGet {
+            session: "tap-silent".into(),
+        })
+        .unwrap();
+    assert_eq!(got["system_backend"], "tap");
+    assert_eq!(got["warning"], oats_audio::fake::TAP_HINT);
+    let v = stop(&r);
+    assert_eq!(v["system_backend"], "tap");
+    assert_eq!(v["warning"], oats_audio::fake::TAP_HINT);
+    assert!(v["system_samples"].as_u64().unwrap() > 0, "{v}");
+    assert_eq!(r.engine.recording_warning(), None);
+
+    // A backend with one system source keeps its own name and never warns of silence.
+    r.engine
+        .set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
+    let v = start(&r, "plain");
+    assert_eq!(
+        (&v["backend"], &v["system_backend"]),
+        (&json!("fake"), &Value::Null)
+    );
+    let v = stop(&r);
+    assert_eq!(v["warning"], Value::Null);
+}

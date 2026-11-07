@@ -640,6 +640,12 @@ impl Engine {
         self.recorder.levels()
     }
 
+    /// Why the recording in progress may be missing its system audio (the macOS tap delivering
+    /// only silence before System Audio Recording is allowed), for the window banner.
+    pub fn recording_warning(&self) -> Option<String> {
+        self.recorder.warning()
+    }
+
     /// The active config, as one consistent unit.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         Arc::clone(&self.state.read().expect("state").snap)

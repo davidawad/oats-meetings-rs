@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -51,6 +52,10 @@ struct Shared {
     /// RMS of the mic and system samples the writer handled last (`f32` bits), for level meters.
     mic_level: AtomicU32,
     system_level: AtomicU32,
+    /// The system source delivered a sample that is not digital silence.
+    system_heard: AtomicBool,
+    /// The reference-to-mic lag the echo canceller measured, milliseconds.
+    echo_lag_ms: Mutex<Option<i64>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +69,12 @@ pub struct Summary {
     /// delivered audio slower than real time.
     pub system_samples: u64,
     pub mic_samples: u64,
+    /// The system-audio source the backend opened (`Capture::source`), when it has several.
+    pub system_source: Option<&'static str>,
+    /// The reference-to-mic lag the echo canceller measured and aligned to (`audio.echo_align`).
+    pub echo_lag_ms: Option<i64>,
+    /// Why the system channel may be empty (`Recording::warning`), as it stood at the end.
+    pub warning: Option<String>,
 }
 
 pub struct Recording {
@@ -72,6 +83,9 @@ pub struct Recording {
     writer: Option<JoinHandle<Result<Summary>>>,
     path: PathBuf,
     layout: Layout,
+    system_source: Option<&'static str>,
+    /// `Capture::silence_hint` of the system capture, and how much digital silence before it shows.
+    silence_hint: Option<(String, Duration)>,
 }
 
 fn ms(frames: u64) -> u64 {
@@ -157,6 +171,8 @@ pub fn start(
         stop: AtomicBool::new(false),
         mic_level: AtomicU32::new(0),
         system_level: AtomicU32::new(0),
+        system_heard: AtomicBool::new(false),
+        echo_lag_ms: Mutex::new(None),
     });
     let open = |kind: DeviceKind, device: &str, is_sys: bool| -> Result<Box<dyn Capture>> {
         // Weak: a backend that never frees its callback (cpal's macOS stream, dot-4uzgol.80)
@@ -172,6 +188,10 @@ pub fn start(
                 }
                 let mut q = sh.q.lock().expect("queues");
                 if is_sys {
+                    if !sh.system_heard.load(Ordering::Relaxed) && samples.iter().any(|v| *v != 0.0)
+                    {
+                        sh.system_heard.store(true, Ordering::SeqCst);
+                    }
                     q.system.extend(samples);
                     sh.system_in
                         .fetch_add(samples.len() as u64, Ordering::SeqCst);
@@ -196,6 +216,12 @@ pub fn start(
                 .map_err(|e| AudioError::new(e.code, format!("microphone: {}", e.message)))?,
         );
     }
+    let system_source = captures.first().filter(|_| sys).and_then(|c| c.source());
+    let silence_hint = captures
+        .first()
+        .filter(|_| sys && !settings.silence_warning.is_zero())
+        .and_then(|c| c.silence_hint())
+        .map(|h| (h, settings.silence_warning));
     let mut w = match WavWriter::create(path, layout.channels(), SAMPLE_RATE) {
         Ok(w) => w,
         Err(e) => {
@@ -225,6 +251,9 @@ pub fn start(
                     c.flush(&mut mo, &mut so);
                 }
                 (m, s) = (mo, so);
+                if let Some(l) = c.lag_ms() {
+                    *sh.echo_lag_ms.lock().expect("lag") = Some(l);
+                }
             }
             write_frames(&mut w, &m, &s, layout)?;
             if sh.paused.load(Ordering::SeqCst) {
@@ -249,6 +278,7 @@ pub fn start(
             std::thread::sleep(poll);
         }
         let frames = w.finish()?;
+        let echo_lag_ms = *sh.echo_lag_ms.lock().expect("lag");
         Ok(Summary {
             path: out_path,
             frames,
@@ -257,6 +287,9 @@ pub fn start(
             duration_ms: ms(frames),
             system_samples: sh.system_in.load(Ordering::SeqCst),
             mic_samples: sh.mic_in.load(Ordering::SeqCst),
+            system_source,
+            echo_lag_ms,
+            warning: None,
         })
     });
     Ok(Recording {
@@ -265,6 +298,8 @@ pub fn start(
         writer: Some(writer),
         path: path.to_path_buf(),
         layout,
+        system_source,
+        silence_hint,
     })
 }
 
@@ -303,6 +338,26 @@ impl Recording {
         (get(&self.shared.mic_level), get(&self.shared.system_level))
     }
 
+    /// The system-audio source the backend opened (`Capture::source`), e.g. `tap`.
+    pub fn system_source(&self) -> Option<&'static str> {
+        self.system_source
+    }
+
+    /// The reference-to-mic lag the echo canceller has measured so far, milliseconds.
+    pub fn echo_lag_ms(&self) -> Option<i64> {
+        *self.shared.echo_lag_ms.lock().expect("lag")
+    }
+
+    /// Set while the system source has delivered `audio.silence_warning` of nothing but digital
+    /// silence and its capture says why that may be (`Capture::silence_hint`: the macOS tap
+    /// before System Audio Recording is allowed, dot-4uzgol.98). Clears at its first sound.
+    pub fn warning(&self) -> Option<String> {
+        let (hint, after) = self.silence_hint.as_ref()?;
+        let silent = self.shared.system_in.load(Ordering::SeqCst);
+        let after = after.as_millis() as u64 * u64::from(SAMPLE_RATE) / 1000;
+        (silent >= after && !self.shared.system_heard.load(Ordering::SeqCst)).then(|| hint.clone())
+    }
+
     pub fn set_paused(&self, paused: bool) {
         self.shared.paused.store(paused, Ordering::SeqCst);
     }
@@ -310,11 +365,15 @@ impl Recording {
     pub fn stop(mut self) -> Result<Summary> {
         stop_captures(&self.shared, &mut self.captures);
         self.shared.stop.store(true, Ordering::SeqCst);
-        self.writer
+        let warning = self.warning();
+        let mut s = self
+            .writer
             .take()
             .expect("writer")
             .join()
-            .map_err(|_| AudioError::new("internal", "writer thread panicked"))?
+            .map_err(|_| AudioError::new("internal", "writer thread panicked"))??;
+        s.warning = warning;
+        Ok(s)
     }
 }
 
@@ -421,6 +480,56 @@ mod tests {
             last_second(&on, 0),
             last_second(&off, 0)
         );
+    }
+
+    #[test]
+    fn a_tap_that_delivers_only_silence_warns_and_one_with_sound_does_not() {
+        // dot-4uzgol.98: the recording that raised the System Audio Recording prompt got
+        // system_samples 0 of sound and no word of why.
+        let silent_tap = FakeBackend {
+            loopback_hz: 0.0,
+            loopback_tap: true,
+            ..FakeBackend::default()
+        };
+        let st = AudioSettings {
+            silence_warning: Duration::from_millis(300),
+            ..crate::settings::test_settings()
+        };
+        let d = tempfile::tempdir().unwrap();
+        let r = start(&silent_tap, &st, &d.path().join("a.wav"), None).unwrap();
+        assert_eq!(r.system_source(), Some("tap"));
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while r.warning().is_none() {
+            assert!(std::time::Instant::now() < deadline, "no warning");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(r.warning().as_deref(), Some(crate::fake::TAP_HINT));
+        let s = r.stop().unwrap();
+        assert_eq!(s.system_source, Some("tap"));
+        assert_eq!(s.warning.as_deref(), Some(crate::fake::TAP_HINT));
+        assert!(s.system_samples > 0);
+
+        // The same tap with sound, a silent source without a hint, the warning off: no warning.
+        let sounding = FakeBackend {
+            loopback_tap: true,
+            ..FakeBackend::default()
+        };
+        let silent = FakeBackend {
+            loopback_hz: 0.0,
+            ..FakeBackend::default()
+        };
+        let off = AudioSettings {
+            silence_warning: Duration::ZERO,
+            ..st.clone()
+        };
+        for (b, st) in [(&sounding, &st), (&silent, &st), (&silent_tap, &off)] {
+            let r = start(b, st, &d.path().join("b.wav"), None).unwrap();
+            while r.duration_ms() < 600 {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(r.warning(), None);
+            assert_eq!(r.stop().unwrap().warning, None);
+        }
     }
 
     #[test]

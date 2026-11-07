@@ -795,6 +795,7 @@ impl MainWindow {
             "status": st.status,
             "banner": st.stt_problem.as_ref().map(|p| json!({"message": p.message, "fix": p.fix})),
             "hook_banner": st.hook_failure,
+            "record_banner": self.rec_warning,
             "recording": {
                 "state": rec_state,
                 "session": st.rec.session(),

@@ -250,6 +250,9 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
             warmup: dur("audio.echo_warmup")?,
             warmup_step_permille: int("audio.echo_warmup_step"),
             dominance_percent: int("audio.echo_dominance"),
+            align: dur("audio.echo_align")?,
+            align_probe: dur("audio.echo_align_probe")?,
+            align_confidence_percent: int("audio.echo_align_confidence"),
         })
     } else {
         None
@@ -267,6 +270,7 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
             poll: dur("audio.poll_interval")?,
         },
         echo,
+        silence_warning: dur("audio.silence_warning")?,
     })
 }
 
@@ -307,7 +311,11 @@ pub fn settings_of(c: &Config) -> AudioSettings {
             warmup: c.audio.echo_warmup.as_duration(),
             warmup_step_permille: c.audio.echo_warmup_step,
             dominance_percent: c.audio.echo_dominance,
+            align: c.audio.echo_align.as_duration(),
+            align_probe: c.audio.echo_align_probe.as_duration(),
+            align_confidence_percent: c.audio.echo_align_confidence,
         }),
+        silence_warning: c.audio.silence_warning.as_duration(),
     }
 }
 
@@ -579,6 +587,13 @@ impl Recorder {
         })
     }
 
+    /// The recording in progress's warning (`Recording::warning`); None when idle, while a start
+    /// or stop holds the recorder, or when there is nothing to warn of.
+    pub fn warning(&self) -> Option<String> {
+        let g = self.active.try_lock().ok()?;
+        g.as_ref().and_then(|a| a.rec.warning())
+    }
+
     /// The `(mic, system)` RMS levels of the recording in progress; None when idle or while a
     /// start or stop holds the recorder (never blocks).
     pub fn levels(&self) -> Option<(f32, f32)> {
@@ -680,7 +695,11 @@ impl Recorder {
         } else {
             no_trans.clone()
         };
-        let out = json!({"session": id, "path": wav, "backend": be.name(),
+        // The source actually opened (the macOS tap or ScreenCaptureKit), not the backend's
+        // name, which is `screencapturekit` for both (dot-4uzgol.98).
+        let opened = rec.system_source();
+        let out = json!({"session": id, "path": wav, "backend": opened.unwrap_or(be.name()),
+            "system_backend": opened,
             "channels": st.layout.channels(), "rate": oats_audio::SAMPLE_RATE,
             "started_at": oats_audio::timefmt::iso(started), "transcription": transcription});
         *slot = Some(Active {
@@ -731,7 +750,8 @@ impl Recorder {
             json!({"session": id, "path": summary.path, "duration_ms": summary.duration_ms,
             "frames": summary.frames, "rate": summary.rate, "channels": summary.channels,
             "system_samples": summary.system_samples, "mic_samples": summary.mic_samples,
-            "transcription": transcription}),
+            "system_backend": summary.system_source, "echo_lag_ms": summary.echo_lag_ms,
+            "warning": summary.warning, "transcription": transcription}),
         )
     }
 
@@ -758,6 +778,9 @@ impl Recorder {
             });
             v["duration_ms"] = json!(a.rec.duration_ms());
             v["audio_path"] = json!(a.rec.path());
+            v["system_backend"] = json!(a.rec.system_source());
+            v["echo_lag_ms"] = json!(a.rec.echo_lag_ms());
+            v["warning"] = json!(a.rec.warning());
             return;
         }
         v["state"] = json!("saved");

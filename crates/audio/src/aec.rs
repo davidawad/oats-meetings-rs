@@ -13,6 +13,13 @@
 //! streams are not sample-synchronous: the mic is delayed by `delay` inside the canceller so a
 //! reference that arrives a little after its echo still precedes it. Both outputs stay on the
 //! input timeline (the delay is latency, not a shift), so the channels stay aligned in the WAV.
+//!
+//! The capture paths differ in latency (dot-4uzgol.98: a Core Audio process tap delivers the
+//! system audio with another offset to the mic than ScreenCaptureKit), so a fixed `delay` can
+//! leave the echo outside the modelled tail, and whole sentences leak. Until it is confident, a
+//! probe cross-correlates the block energy envelopes of mic and reference over `align` either
+//! way; when the measured lag puts the echo outside the tail, the filter is rebuilt with the mic
+//! or the reference delayed so the echo again lands `delay` after its reference.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -41,6 +48,14 @@ pub struct EchoSettings {
     /// During the warmup a mic stretch whose residual is below this percentage of its energy is
     /// mostly echo and is muted (`audio.echo_dominance`).
     pub dominance_percent: u32,
+    /// Largest reference-to-mic offset, either way, measured by cross-correlation at the start
+    /// (`audio.echo_align`); zero keeps `delay` as the only alignment.
+    pub align: Duration,
+    /// Far-end sound the measurement collects before it decides (`audio.echo_align_probe`).
+    pub align_probe: Duration,
+    /// Least normalised correlation, percent, at which the measured offset is used
+    /// (`audio.echo_align_confidence`); below it the probe starts over.
+    pub align_confidence_percent: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -139,10 +154,9 @@ fn samples(d: Duration) -> usize {
     (d.as_millis() * u128::from(SAMPLE_RATE) / 1000) as usize
 }
 
-/// Streaming canceller: push equal-length mic and reference runs, get the echo-free mic and the
-/// matching reference back, sample for sample. Output lags input by up to one block plus
-/// `delay`; `flush` returns the rest so the totals match.
-pub struct EchoCanceller {
+/// One adaptive filter at a fixed alignment: the mic delayed by `mic_delay` samples and the
+/// reference the filter sees by `ref_delay`.
+struct Filter {
     b: usize,
     fft: Fft,
     step: f32,
@@ -173,13 +187,12 @@ pub struct EchoCanceller {
     skip: usize,
 }
 
-impl EchoCanceller {
-    pub fn new(s: &EchoSettings) -> EchoCanceller {
-        let b = s.block.max(2).next_power_of_two();
+impl Filter {
+    fn new(s: &EchoSettings, delay: usize, ref_delay: usize) -> Filter {
+        let b = block_of(s);
         let n = 2 * b;
         let parts = samples(s.tail).div_ceil(b).max(1);
-        let delay = samples(s.delay);
-        EchoCanceller {
+        Filter {
             b,
             fft: Fft::new(n),
             step: s.step_permille as f32 / 1000.0,
@@ -195,7 +208,7 @@ impl EchoCanceller {
             s_bg: 0.0,
             s_mic: 0.0,
             s_res: 0.0,
-            ref_in: VecDeque::new(),
+            ref_in: std::iter::repeat_n(0.0, ref_delay).collect(),
             mic_in: std::iter::repeat_n(0.0, delay).collect(),
             ref_out: std::iter::repeat_n(0.0, delay).collect(),
             pushed: 0,
@@ -204,15 +217,13 @@ impl EchoCanceller {
         }
     }
 
-    /// Feed `mic` and `reference` (same length, same instants) and append whatever is ready.
-    pub fn process(
+    fn process(
         &mut self,
         mic: &[f32],
         reference: &[f32],
         mic_out: &mut Vec<f32>,
         ref_out: &mut Vec<f32>,
     ) {
-        debug_assert_eq!(mic.len(), reference.len());
         self.mic_in.extend(mic);
         self.ref_in.extend(reference);
         self.ref_out.extend(reference);
@@ -222,8 +233,7 @@ impl EchoCanceller {
         }
     }
 
-    /// Pad with silence until every pushed sample has come out.
-    pub fn flush(&mut self, mic_out: &mut Vec<f32>, ref_out: &mut Vec<f32>) {
+    fn flush(&mut self, mic_out: &mut Vec<f32>, ref_out: &mut Vec<f32>) {
         let target = self.pushed;
         let zeros = vec![0.0; self.b];
         while self.emitted < target {
@@ -347,6 +357,171 @@ impl EchoCanceller {
     }
 }
 
+fn block_of(s: &EchoSettings) -> usize {
+    s.block.max(2).next_power_of_two()
+}
+
+/// Measures the reference-to-mic lag from block energy envelopes (`EchoSettings::align`).
+struct Probe {
+    b: usize,
+    /// Lags searched either way, in blocks.
+    reach: usize,
+    /// Far-end blocks with sound needed before deciding.
+    need: usize,
+    confidence: f32,
+    /// Energy of the block being summed, and its length so far: (mic, reference, samples).
+    acc: (f32, f32, usize),
+    mic: VecDeque<f32>,
+    far: VecDeque<f32>,
+}
+
+impl Probe {
+    fn new(s: &EchoSettings) -> Option<Probe> {
+        let b = block_of(s);
+        let reach = samples(s.align).div_ceil(b);
+        (reach > 0).then(|| Probe {
+            b,
+            reach,
+            need: samples(s.align_probe).div_ceil(b).max(1),
+            confidence: s.align_confidence_percent as f32 / 100.0,
+            acc: (0.0, 0.0, 0),
+            mic: VecDeque::new(),
+            far: VecDeque::new(),
+        })
+    }
+
+    /// Take in the input; once enough far-end sound has passed, the lag (mic behind the
+    /// reference, samples; negative when the reference is the late one) if the envelopes agree.
+    fn push(&mut self, mic: &[f32], reference: &[f32]) -> Option<isize> {
+        let mut found = None;
+        for (m, x) in mic.iter().zip(reference) {
+            self.acc.0 += m * m;
+            self.acc.1 += x * x;
+            self.acc.2 += 1;
+            if self.acc.2 < self.b {
+                continue;
+            }
+            self.mic.push_back(self.acc.0);
+            self.far.push_back(self.acc.1);
+            self.acc = (0.0, 0.0, 0);
+            // Long far-end silence must not grow the window without bound.
+            let keep = 2 * (self.need + self.reach);
+            while self.far.len() > keep {
+                self.far.pop_front();
+                self.mic.pop_front();
+            }
+            let full = self.far.len() >= self.need + 2 * self.reach;
+            if found.is_none() && full && self.far.iter().filter(|e| **e > 0.0).count() >= self.need
+            {
+                found = self.lag();
+                if found.is_none() {
+                    // Not confident (double talk, a quiet echo): measure afresh.
+                    self.far.clear();
+                    self.mic.clear();
+                }
+            }
+        }
+        found
+    }
+
+    /// The block lag with the highest normalised correlation of the envelopes, if high enough.
+    fn lag(&self) -> Option<isize> {
+        let (m, x): (Vec<f32>, Vec<f32>) = (
+            self.mic.iter().map(|e| e.sqrt()).collect(),
+            self.far.iter().map(|e| e.sqrt()).collect(),
+        );
+        let n = m.len() as isize;
+        let reach = self.reach as isize;
+        let mut best: Option<(f32, isize)> = None;
+        for k in -reach..=reach {
+            // The same mic blocks against far[i - k] at every lag, so no lag wins on fewer pairs.
+            let (lo, hi) = (reach, n - reach);
+            let pairs = || (lo..hi).map(|i| (m[i as usize], x[(i - k) as usize]));
+            let len = (hi - lo) as f32;
+            let (mm, mx) = pairs().fold((0.0, 0.0), |(a, b), (p, q)| (a + p, b + q));
+            let (mm, mx) = (mm / len, mx / len);
+            let (mut sxy, mut sxx, mut syy) = (0.0f32, 0.0f32, 0.0f32);
+            for (p, q) in pairs() {
+                let (p, q) = (p - mm, q - mx);
+                sxy += p * q;
+                sxx += p * p;
+                syy += q * q;
+            }
+            let r = sxy / (sxx * syy).sqrt().max(f32::MIN_POSITIVE);
+            if best.is_none_or(|(br, _)| r > br) {
+                best = Some((r, k));
+            }
+        }
+        best.filter(|(r, _)| *r >= self.confidence)
+            .map(|(_, k)| k * self.b as isize)
+    }
+}
+
+/// Streaming canceller: push equal-length mic and reference runs, get the echo-free mic and the
+/// matching reference back, sample for sample. Output lags input by up to one block plus the mic
+/// delay; `flush` returns the rest so the totals match.
+pub struct EchoCanceller {
+    s: EchoSettings,
+    filter: Filter,
+    probe: Option<Probe>,
+    lag: Option<isize>,
+}
+
+impl EchoCanceller {
+    pub fn new(s: &EchoSettings) -> EchoCanceller {
+        EchoCanceller {
+            s: *s,
+            filter: Filter::new(s, samples(s.delay), 0),
+            probe: Probe::new(s),
+            lag: None,
+        }
+    }
+
+    /// The mic-behind-reference lag the probe measured (`EchoSettings::align`), milliseconds:
+    /// negative when the reference arrives after its echo. None until it is confident.
+    pub fn lag_ms(&self) -> Option<i64> {
+        self.lag.map(|l| l as i64 * 1000 / i64::from(SAMPLE_RATE))
+    }
+
+    /// Feed `mic` and `reference` (same length, same instants) and append whatever is ready.
+    pub fn process(
+        &mut self,
+        mic: &[f32],
+        reference: &[f32],
+        mic_out: &mut Vec<f32>,
+        ref_out: &mut Vec<f32>,
+    ) {
+        debug_assert_eq!(mic.len(), reference.len());
+        let found = self.probe.as_mut().and_then(|p| p.push(mic, reference));
+        self.filter.process(mic, reference, mic_out, ref_out);
+        if let Some(lag) = found {
+            self.probe = None;
+            self.lag = Some(lag);
+            self.realign(lag, mic_out, ref_out);
+        }
+    }
+
+    /// With the echo `lag` behind its reference, the fixed `delay` places it `lag + delay` into
+    /// the filter. Outside `0..=tail - delay` the filter cannot model it: emit the old filter's
+    /// pending output and go on with one that delays the mic or the reference so the echo lands
+    /// `delay` after the reference again.
+    fn realign(&mut self, lag: isize, mic_out: &mut Vec<f32>, ref_out: &mut Vec<f32>) {
+        let delay = samples(self.s.delay) as isize;
+        let room = samples(self.s.tail) as isize - delay;
+        if (0..=room).contains(&(lag + delay)) {
+            return;
+        }
+        self.filter.flush(mic_out, ref_out);
+        let (mic_delay, ref_delay) = ((delay - lag).max(0), (lag - delay).max(0));
+        self.filter = Filter::new(&self.s, mic_delay as usize, ref_delay as usize);
+    }
+
+    /// Pad with silence until every pushed sample has come out.
+    pub fn flush(&mut self, mic_out: &mut Vec<f32>, ref_out: &mut Vec<f32>) {
+        self.filter.flush(mic_out, ref_out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +536,9 @@ mod tests {
             warmup: Duration::ZERO,
             warmup_step_permille: 500,
             dominance_percent: 50,
+            align: Duration::ZERO,
+            align_probe: Duration::ZERO,
+            align_confidence_percent: 50,
         }
     }
 

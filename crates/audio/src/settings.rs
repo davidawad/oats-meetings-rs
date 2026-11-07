@@ -119,6 +119,9 @@ pub struct AudioSettings {
     /// Echo cancellation of the mic against system audio (`audio.echo_cancel`); `None` is off.
     /// Only applies while both sources are recorded.
     pub echo: Option<crate::aec::EchoSettings>,
+    /// Digital silence from a system source that a missing grant silences (the macOS tap) before
+    /// the recording warns (`audio.silence_warning`); zero never warns.
+    pub silence_warning: Duration,
 }
 
 impl AudioSettings {
@@ -134,6 +137,7 @@ impl AudioSettings {
             mic_device: String::new(),
             timing,
             echo: None,
+            silence_warning: Duration::ZERO,
         }
     }
 }
@@ -150,6 +154,9 @@ pub(crate) fn test_settings() -> AudioSettings {
             warmup: Duration::ZERO,
             warmup_step_permille: 500,
             dominance_percent: 50,
+            align: Duration::ZERO,
+            align_probe: Duration::ZERO,
+            align_confidence_percent: 50,
         }),
         ..AudioSettings::new(Timing {
             open_timeout: Duration::from_secs(15),

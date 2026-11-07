@@ -24,6 +24,12 @@ backend = "auto"
 devices_timeout = "3s"
 # How long a device listing is reused before the audio backend is asked again.
 devices_ttl = "30s"
+# Largest offset, either way, between system audio and its echo in the mic that the echo canceller measures by cross-correlation at the start of a recording; when the measured offset puts the echo outside audio.echo_tail (a capture path with other latency, such as the macOS Core Audio tap), the canceller delays the mic or the reference to match. 0s keeps audio.echo_delay as the only alignment.
+echo_align = "1s"
+# Percent: the least correlation of the mic and system-audio envelopes at which the audio.echo_align offset is used; below it the measurement starts over.
+echo_align_confidence = 70
+# System-audio sound the audio.echo_align measurement collects before it decides.
+echo_align_probe = "1500ms"
 # Samples per echo-canceller block (rounded up to a power of two): smaller adapts faster, larger costs less.
 echo_block = 256
 # Cancel speaker echo in the mic using system audio as the reference, and drop local-speaker utterances that repeat near-simultaneous remote speech, so remote speech is not transcribed twice.
@@ -52,6 +58,8 @@ layout = "split"
 open_timeout = "15s"
 # Pause of the recorder writer and of capture readiness polling.
 poll_interval = "25ms"
+# A recording whose system audio comes from a source that macOS silences rather than fails without its grant (the Core Audio tap while System Audio Recording is pending or denied) warns, in record-stop, session-get and a window banner naming the System Settings pane, after this much of nothing but digital silence. 0s never warns.
+silence_warning = "5s"
 # macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.
 system_backend = "auto"
 # Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.
@@ -270,6 +278,8 @@ backend = "local"
 echo_bleed = 25
 # Percent of a local-speaker utterance's words, and of its content words (not common words or replies like 'yeah', 'okay', 'right'), that one overlapping remote utterance must say within stt.echo_window of each (each remote word matching once) for it to be dropped as echo. An utterance of common words alone is never echo.
 echo_overlap = 60
+# Percent: with audio.echo_cancel, a local-speaker utterance longer than stt.echo_short whose words, and content words, recur this much in the same order (nearly the same spelling counting, stt.echo_similarity) in the remote speech overlapping it is speaker echo, however the word times line up: one remote sentence said again at a capture path's latency, across a recogniser cut.
+echo_sentence = 85
 # With audio.echo_cancel, a local-speaker utterance of at most this many words that repeats a run of words of a remote utterance starting within stt.echo_window of it ('This' as the speakers say 'This is the remote side...') is dropped as speaker echo in the final pass, common words or not, unless the mic is louder than bleed (stt.echo_bleed). 0 turns this off.
 echo_short = 2
 # Percent: a local-speaker word counts as appearing in remote speech (stt.echo_overlap) when its letter edit-distance similarity to a remote word is at least this, so a misheard echo ('Oaks meeting' for 'Oats Meetings') is still dropped. 100 asks for the exact word.

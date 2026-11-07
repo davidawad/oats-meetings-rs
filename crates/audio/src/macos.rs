@@ -201,6 +201,42 @@ impl SystemSource {
             Self::ScreenCaptureKit => "ScreenCaptureKit",
         }
     }
+
+    /// The `audio.system_backend` value that forces this source.
+    pub fn value(self) -> &'static str {
+        match self {
+            Self::Tap => "tap",
+            Self::ScreenCaptureKit => "screencapturekit",
+        }
+    }
+}
+
+/// A system-audio capture that knows which source it is (dot-4uzgol.98: `record-start` names
+/// the source opened, not the backend's name).
+struct Opened {
+    inner: Box<dyn Capture>,
+    source: SystemSource,
+}
+
+impl Capture for Opened {
+    fn stop(&mut self) {
+        self.inner.stop();
+    }
+
+    fn source(&self) -> Option<&'static str> {
+        Some(self.source.value())
+    }
+
+    fn silence_hint(&self) -> Option<String> {
+        // The tap opens fine without the grant (and while its prompt is up) and then hands over
+        // zeros; ScreenCaptureKit fails instead, which `classify_sck_failure` reports.
+        (self.source == SystemSource::Tap).then(|| {
+            format!(
+                "the Core Audio tap has delivered only silence: macOS mutes it until System Audio Recording is allowed. If something is playing, allow this app in System Settings > {} and start a new recording (or set audio.system_backend = \"screencapturekit\")",
+                Permission::SystemAudioRecording.pane()
+            )
+        })
+    }
 }
 
 /// The sources to try, in order, for `audio.system_backend` on macOS `os` (`None`: unknown, so
@@ -278,7 +314,7 @@ impl MacosBackend {
                 }
             };
             match r {
-                Ok(c) => return Ok(c),
+                Ok(inner) => return Ok(Box::new(Opened { inner, source })),
                 Err(e) if !falls_back(&e) => return Err(e),
                 Err(e) => {
                     failed.push(format!("{}: {}", source.label(), e.message));
@@ -1007,5 +1043,29 @@ mod tests {
         out.push(SAMPLE_RATE / 2, &[0.1; 4800]);
         let total = *got.lock().unwrap();
         assert!((480 + 9000..=480 + 9800).contains(&total), "{total}");
+    }
+
+    #[test]
+    fn the_capture_names_the_source_it_opened() {
+        // dot-4uzgol.98: record-start said `screencapturekit` while the tap was recording.
+        use PermissionState::*;
+        let both = || Ok(vec![SystemSource::Tap, SystemSource::ScreenCaptureKit]);
+        let (b, _) = planned(Granted, Granted, both(), vec![]);
+        let c = b.open(DeviceKind::Loopback, "", Box::new(|_| {})).unwrap();
+        assert_eq!(c.source(), Some("tap"));
+        // Only the tap is silenced, not failed, by a missing grant: its hint names the pane.
+        let hint = c.silence_hint().unwrap();
+        assert!(hint.contains("System Audio Recording Only"), "{hint}");
+        assert!(
+            hint.contains("System Settings > Privacy & Security"),
+            "{hint}"
+        );
+        let fail = vec![(SystemSource::Tap, "capture_failed")];
+        let (b, _) = planned(Granted, Granted, both(), fail);
+        let c = b.open(DeviceKind::Loopback, "", Box::new(|_| {})).unwrap();
+        assert_eq!(c.source(), Some("screencapturekit"));
+        assert_eq!(c.silence_hint(), None);
+        let c = b.open(DeviceKind::Mic, "", Box::new(|_| {})).unwrap();
+        assert_eq!(c.source(), None);
     }
 }

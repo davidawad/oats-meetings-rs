@@ -30,6 +30,19 @@ pub type OnSamples = Box<dyn FnMut(&[f32]) + Send>;
 pub trait Capture: Send {
     /// Stop delivering samples and release the device. Idempotent.
     fn stop(&mut self);
+
+    /// The system-audio source this capture actually opened, as an `audio.system_backend` value,
+    /// when the backend has more than one (macOS: `tap` or `screencapturekit`).
+    fn source(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// What to tell the user when this capture delivers nothing but digital silence: a source
+    /// that macOS silences, rather than fails, until a privacy grant is given (the Core Audio
+    /// tap while System Audio Recording is pending or denied).
+    fn silence_hint(&self) -> Option<String> {
+        None
+    }
 }
 
 pub trait CaptureBackend: Send + Sync {

@@ -33,6 +33,9 @@ fn settings(delay_ms: u64) -> EchoSettings {
         warmup: Duration::ZERO,
         warmup_step_permille: 500,
         dominance_percent: 50,
+        align: Duration::ZERO,
+        align_probe: Duration::ZERO,
+        align_confidence_percent: 50,
     }
 }
 
@@ -204,4 +207,88 @@ fn local_speech_over_the_first_sentence_survives_the_warmup() {
         assert!(o >= l / 4.0, "local speech at {i} muted: {o:.4} of {l:.4}");
     }
     assert!(talking >= 20, "{talking} talking windows");
+}
+
+/// `settings` with the alignment on (`audio.echo_align` searching 400 ms either way; the
+/// shipped probe and confidence).
+fn aligned(delay_ms: u64) -> EchoSettings {
+    EchoSettings {
+        align: Duration::from_millis(400),
+        align_probe: Duration::from_millis(1_500),
+        align_confidence_percent: 70,
+        ..settings(delay_ms)
+    }
+}
+
+/// Reduction over the last half of the far-end fixture said twice, and the lag the canceller
+/// measured: the filter adapts from the realignment on, so it gets a few seconds first.
+fn late_db(s: &EchoSettings, lag_ms: f64) -> (f64, Option<i64>) {
+    let far = fixture("them.wav").repeat(2);
+    let echo = room(&far, lag_ms);
+    let mut c = EchoCanceller::new(s);
+    let (out, refr) = cancel(&mut c, &echo, &far);
+    assert_eq!((out.len(), refr.len()), (far.len(), far.len()));
+    assert_eq!(
+        refr, far,
+        "the reference passes through on its own timeline"
+    );
+    let tail = far.len() / 2;
+    let db = 10.0 * (energy(&echo[tail..]) / energy(&out[tail..]).max(f64::MIN_POSITIVE)).log10();
+    (db, c.lag_ms())
+}
+
+#[test]
+fn a_capture_path_latency_beyond_the_tail_is_measured_and_cancelled() {
+    // dot-4uzgol.98: the Core Audio tap hands the system audio over with another offset to the
+    // mic than ScreenCaptureKit. Echo 300 ms behind its reference, outside the 100 ms tail.
+    let (fixed, none) = late_db(&settings(40), 300.0);
+    assert_eq!(none, None);
+    let (db, lag) = late_db(&aligned(40), 300.0);
+    eprintln!("300 ms: fixed delay {fixed:.1} dB, aligned {db:.1} dB, lag {lag:?}");
+    assert!(
+        fixed < MIN_REDUCTION_DB / 2.0,
+        "fixed delay already at {fixed:.1} dB"
+    );
+    let lag = lag.expect("measured");
+    assert!((lag - 300).abs() <= 15, "lag {lag} ms");
+    assert!(db >= MIN_REDUCTION_DB, "echo reduced by only {db:.1} dB");
+}
+
+#[test]
+fn a_reference_far_later_than_its_echo_is_measured_and_cancelled() {
+    // The system audio arrives 150 ms after the mic heard it: more than audio.echo_delay covers.
+    let (fixed, _) = late_db(&settings(40), -150.0);
+    let (db, lag) = late_db(&aligned(40), -150.0);
+    eprintln!("-150 ms: fixed delay {fixed:.1} dB, aligned {db:.1} dB, lag {lag:?}");
+    assert!(
+        fixed < MIN_REDUCTION_DB / 2.0,
+        "fixed delay already at {fixed:.1} dB"
+    );
+    let lag = lag.expect("measured");
+    assert!((lag + 150).abs() <= 15, "lag {lag} ms");
+    assert!(db >= MIN_REDUCTION_DB, "echo reduced by only {db:.1} dB");
+}
+
+#[test]
+fn an_echo_inside_the_tail_keeps_the_filter_it_has() {
+    // 12 ms is what the fixed delay already models: measuring it must not cost cancellation.
+    let (fixed, _) = late_db(&settings(40), 12.0);
+    let (db, lag) = late_db(&aligned(40), 12.0);
+    assert!(lag.is_some_and(|l| l.abs() <= 30), "lag {lag:?}");
+    assert!(
+        (db - fixed).abs() < 0.01,
+        "aligned {db:.1} dB vs fixed {fixed:.1} dB"
+    );
+}
+
+#[test]
+fn local_speech_alone_is_not_mistaken_for_an_offset() {
+    // The mic hears only the user: the envelopes do not agree, so nothing is realigned.
+    let far = fixture("them.wav").repeat(2);
+    let near = fixture("you.wav").repeat(2);
+    let n = far.len().min(near.len());
+    let mut c = EchoCanceller::new(&aligned(40));
+    let (out, _) = cancel(&mut c, &near[..n], &far[..n]);
+    assert_eq!(c.lag_ms(), None);
+    assert_eq!(out.len(), n);
 }

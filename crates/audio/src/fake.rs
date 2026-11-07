@@ -15,6 +15,9 @@ pub struct FakeBackend {
     /// Second microphone (`fake.mic2`), to test switching devices.
     pub mic2_hz: f32,
     pub amplitude: f32,
+    /// The loopback stands in for the macOS Core Audio tap: its capture names itself `tap` and
+    /// has a silence hint (a `loopback_hz` of 0 is the zeros of a tap without its grant).
+    pub loopback_tap: bool,
 }
 
 impl Default for FakeBackend {
@@ -24,6 +27,7 @@ impl Default for FakeBackend {
             mic_hz: 880.0,
             mic2_hz: 1320.0,
             amplitude: 0.5,
+            loopback_tap: false,
         }
     }
 }
@@ -31,7 +35,11 @@ impl Default for FakeBackend {
 struct FakeCapture {
     stop: Arc<AtomicBool>,
     th: Option<std::thread::JoinHandle<()>>,
+    tap: bool,
 }
+
+/// The silence hint of a `loopback_tap` capture.
+pub const TAP_HINT: &str = "fake tap: allow System Audio Recording";
 
 impl Capture for FakeCapture {
     fn stop(&mut self) {
@@ -39,6 +47,14 @@ impl Capture for FakeCapture {
         if let Some(t) = self.th.take() {
             let _ = t.join();
         }
+    }
+
+    fn source(&self) -> Option<&'static str> {
+        self.tap.then_some("tap")
+    }
+
+    fn silence_hint(&self) -> Option<String> {
+        self.tap.then(|| TAP_HINT.to_string())
     }
 }
 
@@ -88,6 +104,7 @@ impl CaptureBackend for FakeBackend {
             }
         };
         let amp = self.amplitude;
+        let tap = self.loopback_tap && kind == DeviceKind::Loopback;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let th = std::thread::spawn(move || {
@@ -114,7 +131,11 @@ impl CaptureBackend for FakeBackend {
                 on_samples(&buf);
             }
         });
-        Ok(Box::new(FakeCapture { stop, th: Some(th) }))
+        Ok(Box::new(FakeCapture {
+            stop,
+            th: Some(th),
+            tap,
+        }))
     }
 }
 
