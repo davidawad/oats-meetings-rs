@@ -4,6 +4,7 @@ pub mod capture;
 pub mod drive;
 pub mod host;
 pub mod kit;
+pub mod meters;
 pub mod model;
 pub mod settings;
 pub mod shortcuts;

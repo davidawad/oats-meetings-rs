@@ -1925,6 +1925,29 @@
           "x-reload": "live",
           "x-ui": true
         },
+        "meter_interval": {
+          "default": "67ms",
+          "description": "The shortest time between two repaints of the level meters (67ms is 15 per second). A meter repaint redraws the meters and the record clock only, never the transcript.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "10ms",
+          "x-min-ms": 10,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "meter_steps": {
+          "default": 60,
+          "description": "How many visible steps a level meter has over its 60 dB scale (60 is one per dB): a level change smaller than one step does not repaint the meters.",
+          "maximum": 1000,
+          "minimum": 2,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "monitor": {
           "default": "window_visible",
           "description": "Input monitor: live mic and system-audio meters while not recording; the samples feed the meters and are dropped, never recorded or transcribed. window_visible monitors while the window is shown, always while the app runs, off never. Monitoring keeps the mic open, so the macOS orange mic indicator stays on while it runs; system audio uses the existing screen and system audio recording permission.",

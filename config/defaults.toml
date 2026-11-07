@@ -374,6 +374,10 @@ drive_wait = "10s"
 live_follow = true
 # Most lines the Live view keeps for one recording; older lines drop first.
 live_max_lines = 2000
+# The shortest time between two repaints of the level meters (67ms is 15 per second). A meter repaint redraws the meters and the record clock only, never the transcript.
+meter_interval = "67ms"
+# How many visible steps a level meter has over its 60 dB scale (60 is one per dB): a level change smaller than one step does not repaint the meters.
+meter_steps = 60
 # Input monitor: live mic and system-audio meters while not recording; the samples feed the meters and are dropped, never recorded or transcribed. window_visible monitors while the window is shown, always while the app runs, off never. Monitoring keeps the mic open, so the macOS orange mic indicator stays on while it runs; system audio uses the existing screen and system audio recording permission.
 monitor = "window_visible"
 # How long the input monitor waits before it tries a device that failed to open again (a config change retries at once).

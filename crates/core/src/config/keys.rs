@@ -445,6 +445,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "ui.meter_interval",
+        kind: Kind::Duration { min_ms: 10 * MS, max_ms: 10 * SEC },
+        default: Def::D(67 * MS),
+        doc: "The shortest time between two repaints of the level meters (67ms is 15 per second). A meter repaint redraws the meters and the record clock only, never the transcript.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "ui.meter_steps",
+        kind: Kind::Int { min: 2, max: 1000 },
+        default: Def::I(60),
+        doc: "How many visible steps a level meter has over its 60 dB scale (60 is one per dB): a level change smaller than one step does not repaint the meters.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "ui.monitor",
         kind: Kind::Enum(UI_MONITOR),
         default: Def::S("window_visible"),

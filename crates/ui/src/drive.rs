@@ -813,6 +813,7 @@ impl MainWindow {
                 "system": self.levels.1,
                 "monitor": cfg.config.ui.monitor,
                 "error": self.monitor_error,
+                "repaints": self.meters(cx).read(cx).repaints,
             },
             "edit": edit,
             "keys": {
@@ -824,6 +825,7 @@ impl MainWindow {
             },
             "view": view,
             "frames": self.frames,
+            "body_frames": self.body_renders(cx),
         })
     }
 }

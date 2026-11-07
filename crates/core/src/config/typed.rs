@@ -214,6 +214,8 @@ pub struct Ui {
     pub drive_wait: Dur,
     pub live_follow: bool,
     pub live_max_lines: u32,
+    pub meter_interval: Dur,
+    pub meter_steps: u32,
     pub monitor: Monitor,
     pub monitor_retry: Dur,
     pub quit_timeout: Dur,

@@ -11,13 +11,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use gpui::{
-    canvas, div, fill, prelude::*, px, relative, rgb, rgba, Bounds, Context, FocusHandle,
-    FontWeight, IntoElement, Render, ScrollHandle, SharedString, Subscription, Window,
+    canvas, div, fill, prelude::*, px, relative, rgb, rgba, Bounds, Context, Entity, FocusHandle,
+    FontWeight, IntoElement, Render, ScrollHandle, SharedString, StyleRefinement, Subscription,
+    WeakEntity, Window,
 };
 use oats_core::control::engine::Engine;
 use serde_json::json;
 
 use crate::kit::{self, Icon, Kind, Size};
+use crate::meters::{Meters, Reading};
 use crate::state::{fmt_clock, Control, Controls, Dot, Edit, Line, Rec, State, Tab};
 use crate::theme::{self, Theme, MONO, SANS};
 use crate::views;
@@ -74,6 +76,40 @@ pub struct MainWindow {
     pub(crate) keys: views::shortcuts::Keys,
     /// Puts the keyboard back on the window when a focused editor goes away, so bare keys work.
     focus_lost: Option<Subscription>,
+    /// What the meters and the record clock show: a tick that moves only them notifies this,
+    /// never the window (dot-4uzgol.97). Created on first use.
+    meters: Option<Entity<Meters>>,
+    /// The active tab's content as a cached view: it re-renders only when this window is
+    /// notified, so a meter repaint never re-lays out the transcript. Created on first render.
+    body: Option<Entity<Body>>,
+}
+
+/// The active tab's content (Live: its transcript, under the record strip the window draws), as
+/// a view the window embeds cached (dot-4uzgol.97). It observes the window: whatever notifies the
+/// window re-renders it, while a repaint of the meters alone reuses its last layout.
+pub struct Body {
+    main: WeakEntity<MainWindow>,
+    /// How many times the tab content rendered: `ui-state` reports it as `body_frames`.
+    pub(crate) renders: u64,
+}
+
+impl Body {
+    fn new(main: &Entity<MainWindow>, cx: &mut Context<Self>) -> Self {
+        cx.observe(main, |_, _, cx| cx.notify()).detach();
+        Self {
+            main: main.downgrade(),
+            renders: 0,
+        }
+    }
+}
+
+impl Render for Body {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
+        self.main
+            .update(cx, |m, cx| m.tab_body(window, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
 }
 
 impl MainWindow {
@@ -115,7 +151,21 @@ impl MainWindow {
             frames: 0,
             keys: views::shortcuts::Keys::default(),
             focus_lost: None,
+            meters: None,
+            body: None,
         }
+    }
+
+    /// The meters' entity (created on first use: a window is built before it has a context).
+    pub(crate) fn meters(&mut self, cx: &mut Context<Self>) -> Entity<Meters> {
+        self.meters
+            .get_or_insert_with(|| cx.new(|_| Meters::default()))
+            .clone()
+    }
+
+    /// How many times the tab content rendered (0 before the first frame).
+    pub(crate) fn body_renders(&self, cx: &gpui::App) -> u64 {
+        self.body.as_ref().map_or(0, |b| b.read(cx).renders)
     }
 
     /// Apply a pending event line from the engine bus and re-render.
@@ -164,13 +214,30 @@ impl MainWindow {
         if listing {
             self.state.sync_devices(&self.engine);
         }
-        if listing
-            || self.state.rec != before
-            || matches!(self.state.rec, Rec::Recording { .. })
-            || (self.levels, self.meter_source) != was
-        {
+        // The meters and the clock repaint through their own entity; the window (and with it the
+        // tab content) only on a state change (dot-4uzgol.97).
+        self.show_meters(cx);
+        if listing || self.state.rec != before {
             cx.notify();
         }
+    }
+
+    /// Hand this tick's levels and clock to the meters; they repaint only on a visible change, at
+    /// most once per `ui.meter_interval`.
+    pub(crate) fn show_meters(&mut self, cx: &mut Context<Self>) {
+        let ui = &self.engine.snapshot().config.ui;
+        let r = Reading {
+            levels: self.levels,
+            source: self.meter_source,
+            clock: self.state.rec.elapsed_ms(Instant::now()) / 1000,
+            steps: ui.meter_steps,
+            interval: ui.meter_interval.as_duration(),
+        };
+        self.meters(cx).update(cx, |m, cx| {
+            if m.set(r, Instant::now()) {
+                cx.notify();
+            }
+        });
     }
 
     /// A recording button was pressed: the same engine action as `ctl` and the shortcuts. It runs off
@@ -242,7 +309,7 @@ impl MainWindow {
     }
 
     /// The Live tab's record strip: lamp and state word, clock, the two level meters, controls.
-    fn record_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn record_strip(&self, fills: (f32, f32), cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let ui = &self.engine.snapshot().config.ui;
         let c = if self.state.pending.is_some() {
@@ -266,7 +333,7 @@ impl MainWindow {
         // Idle, the meters show the input monitor (nothing recorded); recording, the recorded
         // streams.
         let clock = fmt_clock(self.state.rec.elapsed_ms(Instant::now()));
-        let (mic, sys) = (meter_fill(self.levels.0), meter_fill(self.levels.1));
+        let (mic, sys) = fills;
         let meter = |label: &'static str, level: f32| {
             div()
                 .flex()
@@ -672,9 +739,9 @@ impl MainWindow {
         usize::from(a.mic.enabled) + usize::from(a.system.enabled)
     }
 
-    fn live(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = self.theme;
-        let w = self.speaker_width();
+    /// The Live tab's head, record strip and banner: the window draws them, around the cached
+    /// transcript (`live_body`), so the strip's meters and clock repaint without it.
+    fn live_chrome(&self, fills: (f32, f32), cx: &mut Context<Self>) -> impl IntoElement {
         let controls = self.engine.snapshot().config.ui.record_controls;
         let n = self.inputs();
         let mut head = kit::head("Live").child(div().flex_1());
@@ -685,6 +752,22 @@ impl MainWindow {
             format!("{n} input{}", if n == 1 { "" } else { "s" }),
             false,
         ));
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .child(head)
+            .children(controls.then(|| self.record_strip(fills, cx)))
+            .children(
+                self.banner(cx)
+                    .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b)),
+            )
+    }
+
+    /// The Live transcript (or its empty state), in the cached tab content.
+    fn live_body(&self) -> impl IntoElement {
+        let t = self.theme;
+        let w = self.speaker_width();
         let body = if self.state.live.is_empty() {
             let (h, s) = match self.state.rec {
                 Rec::Idle if self.state.live_session.is_some() => (
@@ -736,26 +819,13 @@ impl MainWindow {
             .flex()
             .flex_col()
             .size_full()
-            .child(head)
-            .children(controls.then(|| self.record_strip(cx)))
-            .children(
-                self.banner(cx)
-                    .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .text_color(rgb(t.text))
-                    .child(body),
-            )
+            .text_color(rgb(t.text))
+            .child(body)
     }
 
     /// The status line: what the window is doing (the last action's result, else the session),
     /// and on Live the model and runtime and the capture devices.
-    fn status_bar(&self) -> impl IntoElement {
+    fn status_bar(&self, meters: &Meters) -> impl IntoElement {
         let t = self.theme;
         let st = &self.state;
         // Every segment ellipsizes (dot-4uzgol.81): at 1100px the devices ran past the edge.
@@ -832,9 +902,9 @@ impl MainWindow {
                     .debug_selector(|| "status-devices".into()),
             );
         }
-        if self.meter_source != "none" {
+        if meters.source != "none" {
             bar = bar.child(
-                self.status_meters()
+                self.status_meters(meters.fills())
                     .when(st.tab != Tab::Live, |d| d.ml_auto()),
             );
         }
@@ -843,7 +913,7 @@ impl MainWindow {
 
     /// The compact meters at the end of the status line, on every tab: mic and system audio
     /// while monitoring or recording.
-    fn status_meters(&self) -> gpui::Div {
+    fn status_meters(&self, (mic, sys): (f32, f32)) -> gpui::Div {
         let t = self.theme;
         let meter = |label: &'static str, level: f32| {
             div()
@@ -852,7 +922,7 @@ impl MainWindow {
                 .items_center()
                 .gap(px(5.))
                 .child(label)
-                .child(div().flex().w(px(36.)).child(kit::meter(meter_fill(level))))
+                .child(div().flex().w(px(36.)).child(kit::meter(level)))
         };
         div()
             .flex()
@@ -861,8 +931,8 @@ impl MainWindow {
             .gap(px(10.))
             .text_color(rgb(t.faint))
             .debug_selector(|| "status-meters".into())
-            .child(meter("You", self.levels.0))
-            .child(meter("Remote", self.levels.1))
+            .child(meter("You", mic))
+            .child(meter("Remote", sys))
     }
 
     /// The blueprint grid behind the content: 1px lines every 24px in the grid colour.
@@ -900,6 +970,29 @@ impl MainWindow {
     }
 }
 
+impl MainWindow {
+    /// The active tab's content, rendered by `Body`; one line per tab, each view in its own file
+    /// under `views/`.
+    fn tab_body(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match self.state.tab {
+            Tab::Live => self.live_body().into_any_element(),
+            Tab::Sessions => {
+                views::sessions::sync_hits(&mut self.state, &self.engine);
+                views::sessions::render(self, cx)
+            }
+            Tab::Notes => views::notes::render(self, cx),
+            Tab::Templates => views::templates::render(self, cx),
+            Tab::Calendar => views::calendar::render(self, cx),
+            Tab::Trash => views::trash::render(self, cx),
+            Tab::Models => views::models::render(self, cx),
+            Tab::Settings => {
+                views::settings::prepare(self);
+                views::settings::render(self, cx)
+            }
+        }
+    }
+}
+
 impl Drop for MainWindow {
     fn drop(&mut self) {
         if let Some(k) = &self.keep {
@@ -933,23 +1026,24 @@ impl Render for MainWindow {
             let f = focus.clone();
             window.defer(cx, move |window, cx| f.focus(window, cx));
         }
-        // One line per tab; each view lives in its own file under `views/`.
-        let body = match self.state.tab {
-            Tab::Live => self.live(cx).into_any_element(),
-            Tab::Sessions => {
-                views::sessions::sync_hits(&mut self.state, &self.engine);
-                views::sessions::render(self, cx)
-            }
-            Tab::Notes => views::notes::render(self, cx),
-            Tab::Templates => views::templates::render(self, cx),
-            Tab::Calendar => views::calendar::render(self, cx),
-            Tab::Trash => views::trash::render(self, cx),
-            Tab::Models => views::models::render(self, cx),
-            Tab::Settings => {
-                views::settings::prepare(self);
-                views::settings::render(self, cx)
-            }
-        };
+        // Reading the meters here is what makes their notify redraw this window's chrome; the tab
+        // content below is cached and re-renders only when this window is notified.
+        let meters = self.meters(cx).read(cx).clone();
+        let main = cx.entity();
+        let tab = self
+            .body
+            .get_or_insert_with(|| cx.new(|cx| Body::new(&main, cx)))
+            .clone()
+            .cached(StyleRefinement::default().w_full().flex_1().min_h_0());
+        let body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .when(self.state.tab == Tab::Live, |d| {
+                d.child(self.live_chrome(meters.fills(), cx))
+            })
+            .child(tab);
         // Live shows the banner under its record strip; the other tabs above their content.
         let banner = (self.state.tab != Tab::Live)
             .then(|| self.banner(cx))
@@ -998,8 +1092,8 @@ impl Render for MainWindow {
                         .min_w_0()
                         .child(self.grid())
                         .children(banner)
-                        .child(div().flex().flex_col().flex_1().min_h_0().child(body))
-                        .child(self.status_bar()),
+                        .child(body)
+                        .child(self.status_bar(&meters)),
                 ),
             )
             .children(self.keys.help.then(|| views::shortcuts::help(self, cx)))
@@ -1259,6 +1353,154 @@ mod tests {
         settle(cx, "none");
         assert!(cx.debug_bounds("status-meters").is_none());
         assert!(!engine.monitor_state().unwrap().open);
+    }
+
+    /// A window over a session of `n` long lines, selected in Sessions; Live holds them too.
+    fn long_session_window(
+        n: usize,
+        pairs: &[(&str, serde_json::Value)],
+    ) -> (
+        Arc<Engine>,
+        tempfile::TempDir,
+        Entity<MainWindow>,
+        &'static mut gpui::VisualTestContext,
+    ) {
+        let (engine, dir) = testutil::engine(pairs);
+        let s = dir.path().join("sessions/s1");
+        std::fs::create_dir_all(&s).unwrap();
+        std::fs::write(
+            s.join("session.json"),
+            r#"{"id":"s1","title":"T","startedAt":"2026-10-27T10:00:00Z"}"#,
+        )
+        .unwrap();
+        let line = "and then we went over the quarterly numbers again, line by line, because ";
+        let jsonl: String = (0..n)
+            .map(|i| {
+                let speaker = if i % 3 == 0 { "you" } else { "them" };
+                let text = format!("{i}: {}", line.repeat(3));
+                format!(
+                    "{}\n",
+                    json!({"speaker": speaker, "text": text, "start": i as f64 * 4.})
+                )
+            })
+            .collect();
+        std::fs::write(s.join("transcript.final.jsonl"), jsonl).unwrap();
+        let cx = Box::leak(Box::new(TestAppContext::single()));
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Sessions;
+            v.state.select(&v.engine, "s1");
+            v.state.live = v.state.transcript.clone();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(view.read_with(cx, |v, _| v.state.transcript.len()), n);
+        (engine, dir, view, cx)
+    }
+
+    /// dot-4uzgol.97: idle meter ticks repaint the meters and the window chrome only. Over N
+    /// visible meter changes the transcript (the cached tab content) renders 0 times, on Sessions
+    /// and on Live, while the meters themselves do redraw; a window notify still re-renders it.
+    #[test]
+    fn meter_ticks_never_render_the_transcript() {
+        let (engine, _dir, view, cx) = long_session_window(400, &[]);
+        engine.enable_monitor();
+        model::dispatch(&engine, "window-show", json!({})).unwrap();
+        // Settle first: the monitor opens and the device listing arrives (a state change, which
+        // does re-render the content once).
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            view.update(cx, |v, cx| v.tick(cx));
+            cx.run_until_parked();
+            let (src, listing) =
+                view.read_with(cx, |v, _| (v.meter_source, v.state.devices_note.is_some()));
+            if src == "monitor" && !listing {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "monitor {src}, listing {listing}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for tab in [Tab::Sessions, Tab::Live] {
+            view.update(cx, |v, cx| {
+                v.state.tab = tab;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let read = |cx: &mut gpui::VisualTestContext| {
+                view.update(cx, |v, cx| {
+                    (v.body_renders(cx), v.frames, v.meters(cx).read(cx).repaints)
+                })
+            };
+            let (body, frames, repaints) = read(cx);
+            assert!(body > 0, "{tab:?}: the tab content never rendered");
+            const N: usize = 20;
+            for i in 0..N {
+                // The real tick (monitor levels), then a visible swing so every tick repaints.
+                view.update(cx, |v, cx| {
+                    v.tick(cx);
+                    v.levels = if i % 2 == 0 { (0.9, 0.01) } else { (0.01, 0.9) };
+                    v.meter_source = "monitor";
+                    v.show_meters(cx);
+                });
+                cx.run_until_parked();
+                std::thread::sleep(std::time::Duration::from_millis(70));
+            }
+            let (body2, frames2, repaints2) = read(cx);
+            assert_eq!(body2, body, "{tab:?}: meter ticks rendered the transcript");
+            assert!(
+                repaints2 - repaints >= (N / 2) as u64,
+                "{tab:?}: meters never repainted"
+            );
+            assert!(
+                frames2 - frames >= (N / 2) as u64,
+                "{tab:?}: the meters drew no frame"
+            );
+            assert!(cx.debug_bounds("status-meters").is_some());
+            // The window's own state changes still reach the tab content.
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            assert_eq!(
+                read(cx).0,
+                body2 + 1,
+                "{tab:?}: a window notify missed the content"
+            );
+        }
+    }
+
+    /// dot-4uzgol.97 perf guard: one idle second of ticks far faster than `ui.tick`, each one a
+    /// visible level swing, draws at most 15 meter frames (`ui.meter_interval`) and lays the long
+    /// transcript out not once.
+    #[test]
+    fn an_idle_second_draws_at_most_15_meter_frames_and_no_transcript_layout() {
+        let (_engine, _dir, view, cx) = long_session_window(400, &[]);
+        let read = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |v, cx| (v.body_renders(cx), v.frames))
+        };
+        let (body, frames) = read(cx);
+        let start = Instant::now();
+        let mut i = 0;
+        while start.elapsed() < std::time::Duration::from_secs(1) {
+            view.update(cx, |v, cx| {
+                v.levels = if i % 2 == 0 { (0.9, 0.9) } else { (0.01, 0.01) };
+                v.meter_source = "monitor";
+                v.show_meters(cx);
+            });
+            cx.run_until_parked();
+            i += 1;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let (body2, frames2) = read(cx);
+        assert_eq!(body2, body, "the transcript was laid out while idle");
+        let drawn = frames2 - frames;
+        // 15 per second, plus the one a throttle window straddling the second's end allows.
+        assert!(
+            drawn >= 5,
+            "{drawn} frames: the meters stopped drawing ({i} ticks)"
+        );
+        assert!(drawn <= 16, "{drawn} frames in one idle second ({i} ticks)");
     }
 
     #[test]
