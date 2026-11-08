@@ -122,7 +122,7 @@ fn recording_without_a_model_says_so_at_start_and_at_stop_and_keeps_the_audio() 
         "{t}"
     );
     std::thread::sleep(Duration::from_millis(600));
-    let stop = r.engine.dispatch(&Action::RecordStop {}).unwrap();
+    let stop = r.engine.dispatch(&Action::RecordStop { by: None }).unwrap();
     assert_eq!(stop["transcription"]["state"], "unavailable");
     assert!(
         std::path::Path::new(stop["path"].as_str().unwrap()).is_file(),
@@ -174,7 +174,7 @@ fn the_first_recording_starts_the_download_and_tells_the_user() {
     });
     let first: Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
     assert_eq!(first["data"]["state"], "downloading");
-    r.engine.dispatch(&Action::RecordStop {}).unwrap();
+    r.engine.dispatch(&Action::RecordStop { by: None }).unwrap();
 }
 
 #[test]
@@ -234,5 +234,5 @@ fn with_a_model_the_default_record_path_turns_transcription_on() {
         })
         .unwrap();
     assert_eq!(start["transcription"]["state"], "on", "{start}");
-    r.engine.dispatch(&Action::RecordStop {}).unwrap();
+    r.engine.dispatch(&Action::RecordStop { by: None }).unwrap();
 }
