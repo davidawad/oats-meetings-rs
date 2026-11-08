@@ -27,6 +27,8 @@
 pub mod capture;
 pub mod catalog;
 pub mod cloud;
+#[cfg(feature = "parakeet")]
+mod confine;
 #[cfg(target_os = "macos")]
 pub mod coreml;
 pub mod diarize;

@@ -3,7 +3,9 @@
 //! files by role; `stt.local.provider` picks the onnxruntime execution provider (CoreML on macOS,
 //! falling back to the CPU when CoreML cannot load the model). The loaded recogniser is cached per
 //! model directory; config reload clears it when `stt.local.*` changes, and `idle` once
-//! `stt.local.unload_after` passes unused.
+//! `stt.local.unload_after` passes unused. Each loaded model lives on a thread of its own that
+//! exits when it is dropped (`confine`), so what onnxruntime leaves on the threads that run it is
+//! released with it.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -14,13 +16,14 @@ use sherpa_onnx::{
 };
 
 use super::catalog::Entry;
+use super::confine::Confined;
 use super::wav::SAMPLE_RATE;
 use super::{Asr, Segment};
 use crate::config::typed::SttProvider;
 use crate::config::{ConfigError, Result};
 
 struct Loaded {
-    recognizer: Mutex<OfflineRecognizer>,
+    recognizer: Confined<OfflineRecognizer>,
     provider: String,
 }
 
@@ -132,10 +135,13 @@ impl SherpaAsr {
         let mut tried = vec![];
         for name in super::provider_order(provider) {
             cfg.model_config.provider = Some((*name).to_string());
-            if let Some(r) = OfflineRecognizer::create(&cfg) {
+            let c = cfg.clone();
+            if let Some(r) =
+                Confined::spawn("oats-sherpa-asr", move || OfflineRecognizer::create(&c))
+            {
                 super::idle::loaded(&format!("{} on {name}", entry.id));
                 let loaded = Arc::new(Loaded {
-                    recognizer: Mutex::new(r),
+                    recognizer: r,
                     provider: (*name).to_string(),
                 });
                 *cache = Some((dir.to_path_buf(), provider, threads, Arc::clone(&loaded)));
@@ -166,11 +172,13 @@ impl SherpaAsr {
     }
 
     fn decode(&self, pcm: &[f32]) -> Vec<Segment> {
-        let r = self.loaded.recognizer.lock().expect("sherpa recogniser");
-        let stream = r.create_stream();
-        stream.accept_waveform(SAMPLE_RATE as i32, pcm);
-        r.decode(&stream);
-        let Some(res) = stream.get_result() else {
+        let samples = pcm.to_vec();
+        let Some(res) = self.loaded.recognizer.run(move |r| {
+            let stream = r.create_stream();
+            stream.accept_waveform(SAMPLE_RATE as i32, &samples);
+            r.decode(&stream);
+            stream.get_result()
+        }) else {
             return vec![];
         };
         let end = pcm.len() as f64 / f64::from(SAMPLE_RATE);
@@ -225,7 +233,7 @@ impl Asr for SherpaAsr {
 /// A sherpa-onnx speaker-embedding model (`stt.diarization.algorithm = sherpa-onnx`,
 /// dot-4uzgol.83): one embedding per utterance, from the whole utterance.
 pub struct SpeakerExtractor {
-    extractor: SpeakerEmbeddingExtractor,
+    extractor: Confined<SpeakerEmbeddingExtractor>,
     provider: String,
 }
 
@@ -261,7 +269,9 @@ impl SpeakerExtractor {
                 debug: false,
                 provider: Some((*name).to_string()),
             };
-            if let Some(extractor) = SpeakerEmbeddingExtractor::create(&cfg) {
+            if let Some(extractor) = Confined::spawn("oats-sherpa-speaker", move || {
+                SpeakerEmbeddingExtractor::create(&cfg)
+            }) {
                 super::idle::loaded(&format!("speaker model {} on {name}", path.display()));
                 let loaded = Arc::new(SpeakerExtractor {
                     extractor,
@@ -288,12 +298,15 @@ impl SpeakerExtractor {
 
     /// The embedding of `pcm` (16 kHz mono); `None` when the model wants more audio.
     pub fn embed(&self, pcm: &[f32]) -> Option<Vec<f32>> {
-        let stream = self.extractor.create_stream()?;
-        stream.accept_waveform(SAMPLE_RATE as i32, pcm);
-        stream.input_finished();
-        if !self.extractor.is_ready(&stream) {
-            return None;
-        }
-        self.extractor.compute(&stream)
+        let samples = pcm.to_vec();
+        self.extractor.run(move |x| {
+            let stream = x.create_stream()?;
+            stream.accept_waveform(SAMPLE_RATE as i32, &samples);
+            stream.input_finished();
+            if !x.is_ready(&stream) {
+                return None;
+            }
+            x.compute(&stream)
+        })
     }
 }
