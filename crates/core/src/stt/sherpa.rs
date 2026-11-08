@@ -133,6 +133,7 @@ impl SherpaAsr {
         for name in super::provider_order(provider) {
             cfg.model_config.provider = Some((*name).to_string());
             if let Some(r) = OfflineRecognizer::create(&cfg) {
+                super::idle::loaded(&format!("{} on {name}", entry.id));
                 let loaded = Arc::new(Loaded {
                     recognizer: Mutex::new(r),
                     provider: (*name).to_string(),
@@ -261,6 +262,7 @@ impl SpeakerExtractor {
                 provider: Some((*name).to_string()),
             };
             if let Some(extractor) = SpeakerEmbeddingExtractor::create(&cfg) {
+                super::idle::loaded(&format!("speaker model {} on {name}", path.display()));
                 let loaded = Arc::new(SpeakerExtractor {
                     extractor,
                     provider: (*name).to_string(),

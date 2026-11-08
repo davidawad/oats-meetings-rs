@@ -95,6 +95,9 @@ pub struct Diarization {
     pub spectral_threshold: f32,
     pub neural: Model,
     pub sherpa: Model,
+    /// `stt.local.unload_after`: the speaker model is released with the recogniser (`idle`);
+    /// `None` leaves the idle clock alone (`spectral`, which has no model).
+    pub unload_after: Option<std::time::Duration>,
 }
 
 /// The CoreML embedding model `neural` runs.
@@ -172,6 +175,7 @@ impl Diarization {
                 provider: d.sherpa_onnx.provider,
                 threads: d.sherpa_onnx.threads.max(1),
             },
+            unload_after: Some(cfg.stt.local.unload_after.as_duration()),
         }))
     }
 
@@ -194,6 +198,7 @@ impl Diarization {
             spectral_threshold: threshold,
             neural: m.clone(),
             sherpa: m,
+            unload_after: None,
         }
     }
 
@@ -258,7 +263,16 @@ type Ran = (String, Algorithm, Option<String>, Vec<String>);
 /// What the last diarizer ran.
 static ACTIVE: Mutex<Option<Ran>> = Mutex::new(None);
 
-/// Forget what ran (config reload changed `stt.diarization.*`) and drop the loaded models.
+/// Diarizers alive (a recording's live pass, a final pass): their models stay loaded (`idle`).
+static ALIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether a diarizer is running, so the idle reaper keeps its model and its status.
+pub fn in_use() -> bool {
+    ALIVE.load(std::sync::atomic::Ordering::SeqCst) > 0
+}
+
+/// Forget what ran and drop the loaded models (config reload changed `stt.diarization.*`, or
+/// `stt.local.unload_after` passed with no diarizer running).
 pub fn clear() {
     *ACTIVE.lock().expect("diarizer status") = None;
     #[cfg(feature = "parakeet")]
@@ -440,10 +454,24 @@ pub struct Diarizer {
     labels: usize,
 }
 
+impl Drop for Diarizer {
+    fn drop(&mut self) {
+        ALIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(after) = self.cfg.unload_after {
+            super::idle::touch(after);
+        }
+    }
+}
+
 impl Diarizer {
     /// The diarizer for `cfg`: the first algorithm of its chain that loads (spectral always
     /// does). What ran, and why the ones before it did not, go to `status`.
     pub fn new(cfg: Diarization) -> Diarizer {
+        ALIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // Its model, once loaded, is released `unload_after` after the last diarizer ends.
+        if let Some(after) = cfg.unload_after {
+            super::idle::touch(after);
+        }
         let mut why = Vec::new();
         let mut loaded = None;
         for &a in &cfg.chain {

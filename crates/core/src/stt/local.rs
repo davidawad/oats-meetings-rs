@@ -45,6 +45,7 @@ impl WhisperAsr {
                             )
                         })?,
                 );
+                super::idle::loaded(&format!("whisper model {}", path.display()));
                 *cache = Some((path.to_path_buf(), Arc::clone(&c)));
                 c
             }

@@ -1642,6 +1642,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                     "download": models::progress(&s.model_file).map(|p| p.to_json()),
                 },
                 "diarization": diarize::status(s.diarize.as_ref()),
+                "models": idle::status(),
                 "problem": problem(&s),
                 "cloud": {
                     "adapter": match s.adapter { SttAdapter::None => "none", SttAdapter::OpenaiCompatible => "openai-compatible" },

@@ -367,6 +367,7 @@ impl CoreMlAsr {
                 ))),
             }
         })?;
+        super::idle::loaded(&format!("{} on {units_label}", entry.id));
         let loaded = Arc::new(Mutex::new(loaded));
         *cache = Some(Cached {
             dir: dir.to_path_buf(),
@@ -660,6 +661,7 @@ impl SpeakerNet {
                 ))),
             }
         })?;
+        super::idle::loaded(&format!("speaker model {} on {units_label}", entry.id));
         let net = Arc::new(Mutex::new(net));
         *cache = Some((dir.to_path_buf(), units, Arc::clone(&net)));
         Ok(net)

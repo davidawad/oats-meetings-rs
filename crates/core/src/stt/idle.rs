@@ -4,8 +4,15 @@
 //! onnxruntime arenas holds well over a gigabyte. `touch` marks a use; a reaper thread drops every
 //! cached model once none has been in use for `stt.local.unload_after` (0 keeps them loaded) and,
 //! on glibc, hands the freed heap back to the OS. The next recording loads them again.
+//!
+//! Idle means idle (dot-4uzgol.106): nothing but a recording or a transcription loads a model.
+//! Every load from disk goes through `loaded`, which counts it (`stt-status` `models.loads`) and
+//! logs the thread that asked, so a load while idle names its caller; the diarizer's speaker model
+//! starts the same idle clock as the recogniser. A cache outside this module's (an injected
+//! `AsrFactory` that keeps its model) joins the reaper with `watch`.
 
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 struct State {
@@ -91,7 +98,51 @@ pub fn touch(after: Duration) {
     MODELS.touch(after);
 }
 
+/// A model cache the reaper empties with the built-in ones.
+pub trait Cache: Send + Sync {
+    /// Whether its model is held outside the cache (a recording, a transcription).
+    fn in_use(&self) -> bool;
+    /// Drop the cached model.
+    fn unload(&self);
+}
+
+static WATCHED: Mutex<Vec<Arc<dyn Cache>>> = Mutex::new(Vec::new());
+
+/// Unload `cache` with the rest once `stt.local.unload_after` passes unused.
+pub fn watch(cache: Arc<dyn Cache>) {
+    WATCHED.lock().expect("idle caches").push(cache);
+}
+
+fn watched() -> Vec<Arc<dyn Cache>> {
+    WATCHED.lock().expect("idle caches").clone()
+}
+
+static LOADS: AtomicU64 = AtomicU64::new(0);
+static UNLOADS: AtomicU64 = AtomicU64::new(0);
+
+/// `what` was just loaded from disk (not taken from its cache): counted, and logged with the
+/// thread that asked for it.
+pub fn loaded(what: &str) {
+    LOADS.fetch_add(1, Ordering::SeqCst);
+    let t = std::thread::current();
+    crate::elog!(
+        "oats-meetings-rs: loaded {what} (thread {})",
+        t.name().unwrap_or("unnamed")
+    );
+}
+
+/// The `models` object of `stt-status`: loads from disk and idle unloads since launch.
+pub fn status() -> serde_json::Value {
+    serde_json::json!({
+        "loads": LOADS.load(Ordering::SeqCst),
+        "unloads": UNLOADS.load(Ordering::SeqCst),
+    })
+}
+
 fn models_in_use() -> bool {
+    if super::diarize::in_use() || watched().iter().any(|c| c.in_use()) {
+        return true;
+    }
     #[cfg(feature = "whisper")]
     if super::local::in_use() {
         return true;
@@ -119,19 +170,28 @@ pub fn settled() {
 /// Drop every cached model, then return the freed heap to the OS.
 fn unload_models() {
     let _unloading = UNLOADING.lock().expect("idle unload");
+    // CoreML (and onnxruntime's CoreML provider) autorelease what they free; this thread has no
+    // pool of its own, so without one those objects would outlive the unload.
+    #[cfg(target_os = "macos")]
+    objc2::rc::autoreleasepool(|_| clear_caches());
+    #[cfg(not(target_os = "macos"))]
+    clear_caches();
+    UNLOADS.fetch_add(1, Ordering::SeqCst);
+    trim();
+}
+
+fn clear_caches() {
     #[cfg(feature = "whisper")]
     super::local::clear_cache();
     #[cfg(feature = "parakeet")]
-    {
-        super::sherpa::clear_cache();
-        super::sherpa::clear_speaker_cache();
-    }
+    super::sherpa::clear_cache();
     #[cfg(target_os = "macos")]
-    {
-        super::coreml::clear_cache();
-        super::coreml::clear_speaker_cache();
+    super::coreml::clear_cache();
+    // The speaker models, and the diarizer's "active" in stt-status with them.
+    super::diarize::clear();
+    for c in watched() {
+        c.unload();
     }
-    trim();
 }
 
 /// glibc keeps freed memory in its arenas, so RSS would stay at the models' size without this.
@@ -143,7 +203,19 @@ fn trim() {
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+/// macOS keeps freed pages in its malloc zones, counted in the process footprint, until asked.
+#[cfg(target_os = "macos")]
+fn trim() {
+    extern "C" {
+        fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+    }
+    // SAFETY: a null zone asks every malloc zone to return what it can; goal 0 means all.
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
 fn trim() {}
 
 #[cfg(test)]
