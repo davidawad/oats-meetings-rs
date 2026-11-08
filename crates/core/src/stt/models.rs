@@ -683,18 +683,70 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_ci_script_pins_match_the_catalog() {
-        let script = include_str!("../../../../ci/fetch-models.sh");
-        let pins: Vec<&str> = script
+    /// The words of the script's `<var>=` assignment (a `${X:-default}` value yields the default).
+    fn script_ids<'a>(script: &'a str, var: &str) -> Vec<&'a str> {
+        let v = script
             .lines()
-            .filter_map(|l| l.trim().strip_prefix('['))
+            .find_map(|l| l.strip_prefix(var)?.strip_prefix('='))
+            .unwrap_or_else(|| panic!("ci/fetch-models.sh sets {var}"));
+        let v = v
+            .split_once(":-")
+            .map_or(v, |(_, d)| d.trim_end_matches('}'));
+        v.split_whitespace().collect()
+    }
+
+    /// dot-4uzgol.104: CI fetches models only through the catalogs, and every catalog URL names an
+    /// immutable revision (an upstream re-export of a mutable release asset turned every gate red).
+    #[test]
+    fn the_ci_script_fetches_only_revision_pinned_catalog_files() {
+        let script = include_str!("../../../../ci/fetch-models.sh");
+        let code: Vec<&str> = script
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
             .collect();
-        assert!(!pins.is_empty());
-        for p in pins {
-            let (name, sha) = p.split_once("]=").expect("[name]=sha");
-            let e = catalog::get(name).unwrap_or_else(|| panic!("{name} is not in the catalog"));
-            assert_eq!(e.files[0].sha256, sha, "ci/fetch-models.sh pin for {name}");
+        for l in &code {
+            assert!(
+                !l.contains("://"),
+                "ci/fetch-models.sh has its own URL: {l}"
+            );
+            assert!(
+                !l.split(|c: char| !c.is_ascii_hexdigit())
+                    .any(|w| w.len() >= 40),
+                "ci/fetch-models.sh has its own hash: {l}"
+            );
+        }
+        let stt = [
+            script_ids(script, "_stt_ids"),
+            script_ids(script, "_stt_ids_parakeet"),
+        ]
+        .concat();
+        assert!(stt.contains(&"tiny.en") && stt.contains(&"parakeet-tdt-0.6b-v2"));
+        for id in stt {
+            assert!(catalog::get(id).is_some(), "{id} is not in stt-models.json");
+        }
+        for id in script_ids(script, "_speaker_ids") {
+            assert!(
+                catalog::speaker(id).is_some(),
+                "{id} is not in speaker-models.json"
+            );
+        }
+        for e in catalog::all().iter().chain(catalog::speakers()) {
+            for f in &e.files {
+                let rest = f
+                    .url
+                    .strip_prefix("https://huggingface.co/")
+                    .unwrap_or_else(|| panic!("{}: {} is not a Hugging Face URL", e.id, f.url));
+                let rev = rest.split('/').nth(3).unwrap_or_default();
+                assert_eq!(rest.split('/').nth(2), Some("resolve"), "{}", f.url);
+                assert!(
+                    rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "{}: {} is not pinned to a commit",
+                    e.id,
+                    f.url
+                );
+                assert!(!f.url.contains("/resolve/main/") && !f.url.contains("releases/download/"));
+                assert!(f.url.ends_with(&format!("/{}", f.name)), "{}", f.url);
+            }
         }
     }
 

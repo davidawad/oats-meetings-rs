@@ -55,7 +55,7 @@
       "languages": ["multilingual"],
       "dir": "",
       "files": [
-        {"role": "model", "name": "ggml-large-v3-turbo-q5_0.bin", "bytes": 574041195, "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"}
+        {"role": "model", "name": "ggml-large-v3-turbo-q5_0.bin", "bytes": 574041195, "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin"}
       ],
       "benchmark": {"wer": 7.83, "rtfx": 216, "source": "Open ASR Leaderboard, openai/whisper-large-v3-turbo (fp16; the q5_0 quantisation is not measured there)"}
     },
@@ -67,7 +67,7 @@
       "languages": ["en"],
       "dir": "",
       "files": [
-        {"role": "model", "name": "ggml-small.en.bin", "bytes": 487614201, "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"}
+        {"role": "model", "name": "ggml-small.en.bin", "bytes": 487614201, "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin"}
       ],
       "benchmark": {"wer": 8.59, "rtfx": null, "source": "Open ASR Leaderboard, openai/whisper-small.en"}
     },
@@ -79,7 +79,7 @@
       "languages": ["en"],
       "dir": "",
       "files": [
-        {"role": "model", "name": "ggml-base.en.bin", "bytes": 147964211, "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"}
+        {"role": "model", "name": "ggml-base.en.bin", "bytes": 147964211, "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin"}
       ],
       "benchmark": {"wer": 10.32, "rtfx": null, "source": "Moonshine paper (arXiv:2410.15608) Table 2, Open ASR Leaderboard sets, openai/whisper-base.en"}
     },
@@ -91,7 +91,7 @@
       "languages": ["en"],
       "dir": "",
       "files": [
-        {"role": "model", "name": "ggml-tiny.en.bin", "bytes": 77704715, "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin"}
+        {"role": "model", "name": "ggml-tiny.en.bin", "bytes": 77704715, "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f", "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin"}
       ],
       "benchmark": {"wer": 12.81, "rtfx": null, "source": "Moonshine paper (arXiv:2410.15608) Table 2, Open ASR Leaderboard sets, openai/whisper-tiny.en"}
     },

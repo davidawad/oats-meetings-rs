@@ -451,12 +451,11 @@ mod tests {
         assert_eq!(speaker(d).map(|e| e.runtime), Some(Runtime::SherpaOnnx));
         // ci/fetch-models.sh fetches the default for tests/diarize_ami.rs, pinned to the catalog.
         let script = include_str!("../../../../ci/fetch-models.sh");
-        let pin = script
+        let ids = script
             .lines()
-            .find_map(|l| l.trim().strip_prefix("_spk_sha="))
-            .expect("ci/fetch-models.sh pins the speaker model");
-        assert!(script.contains(&format!("_spk={}", speaker(d).unwrap().files[0].name)));
-        assert_eq!(pin, speaker(d).unwrap().files[0].sha256);
+            .find_map(|l| l.strip_prefix("_speaker_ids="))
+            .expect("ci/fetch-models.sh fetches a speaker model");
+        assert!(ids.split_whitespace().any(|id| id == d), "{ids}");
     }
 
     #[test]

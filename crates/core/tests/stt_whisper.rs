@@ -44,36 +44,45 @@ fn fetch_script() -> String {
         .unwrap()
 }
 
+/// The default `_stt_ids` of ci/fetch-models.sh (catalog ids it downloads).
+fn fetched_ids() -> Vec<String> {
+    let sh = fetch_script();
+    let v = sh
+        .lines()
+        .find_map(|l| l.strip_prefix("_stt_ids=${OATS_FETCH_MODELS:-"))
+        .expect("ci/fetch-models.sh sets _stt_ids");
+    v.trim_end_matches('}')
+        .split_whitespace()
+        .map(String::from)
+        .collect()
+}
+
 /// The whisper.cpp catalog models ci/fetch-models.sh fetches (OATS_ONLY_MODEL narrows it).
 #[cfg(feature = "whisper")]
 fn models() -> Vec<&'static str> {
-    let sh = fetch_script();
+    let fetched = fetched_ids();
     catalog::all()
         .iter()
         .filter(|e| e.runtime == catalog::Runtime::WhisperCpp)
         .map(|e| e.id.as_str())
-        .filter(|m| sh.contains(&format!("[{m}]=")))
+        .filter(|m| fetched.iter().any(|f| f == m))
         .filter(|m| only().as_deref().is_none_or(|o| o == *m))
         .collect()
 }
 
 #[test]
 fn fetch_script_pins_only_whisper_catalog_models() {
-    let sh = fetch_script();
-    let whisper: Vec<&str> = catalog::all()
+    let fetched = fetched_ids();
+    let pinned = catalog::all()
         .iter()
         .filter(|e| e.runtime == catalog::Runtime::WhisperCpp)
-        .map(|e| e.id.as_str())
-        .collect();
-    let pinned = whisper
-        .iter()
-        .filter(|m| sh.contains(&format!("[{m}]=")))
+        .filter(|e| fetched.contains(&e.id))
         .count();
-    assert!(pinned > 0, "ci/fetch-models.sh pins no whisper model");
+    assert!(pinned > 0, "ci/fetch-models.sh fetches no whisper model");
     assert_eq!(
-        sh.matches("]=").count(),
+        fetched.len(),
         pinned,
-        "ci/fetch-models.sh pins a model the catalog does not have"
+        "ci/fetch-models.sh fetches a whisper model the catalog does not have"
     );
     assert!(STT_LOCAL_MODELS.iter().all(|m| catalog::get(m).is_some()));
 }
