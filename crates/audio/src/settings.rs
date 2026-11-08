@@ -160,6 +160,8 @@ pub(crate) fn test_settings() -> AudioSettings {
             align: Duration::ZERO,
             align_probe: Duration::ZERO,
             align_confidence_percent: 50,
+            suppress_percent: 0,
+            suppress_floor_percent: 10,
         }),
         ..AudioSettings::new(Timing {
             open_timeout: Duration::from_secs(15),

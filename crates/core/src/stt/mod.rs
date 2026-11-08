@@ -119,6 +119,14 @@ pub struct EchoDedupe {
     /// content words, that must recur in order in the remote speech near it for it to be echo
     /// whatever the word timing (`says_sentence_of`).
     pub sentence: f32,
+    /// `stt.echo_track` as a fraction: the least correlation of a "you" utterance's mic energy
+    /// envelope with the remote channel's at the echo lag for it to be echo whatever its words
+    /// (`Envelopes::tracks`); 0 turns this off.
+    pub track: f32,
+    /// `stt.echo_track_swing` as a fraction: the least swing (standard deviation over mean) of
+    /// the remote envelope over the utterance for `track` to apply; a steady sound has no
+    /// envelope to follow.
+    pub swing: f32,
 }
 
 fn samples_of(d: crate::config::typed::Dur) -> usize {
@@ -140,6 +148,8 @@ impl Tuning {
                 short: c.echo_short as usize,
                 bleed: c.echo_bleed as f32 / 100.0,
                 sentence: c.echo_sentence as f32 / 100.0,
+                track: c.echo_track as f32 / 100.0,
+                swing: c.echo_track_swing as f32 / 100.0,
             }),
         }
     }
@@ -351,6 +361,111 @@ pub fn is_echo(you: &Utt, them: &[Utt], d: &EchoDedupe, heard: Option<&Channels>
         && !near_end(you, heard, d)
 }
 
+/// The 10 ms RMS envelopes of the mic and remote channels from one moment on, and the lag at
+/// which the mic's follows the remote's best (dot-4uzgol.101).
+///
+/// The speakers can distort the far end so that the echo the canceller leaves is misrecognised
+/// ("Sons could the mean team" for "Sounds good to me"): no word matches, yet its loudness rises
+/// and falls with the remote speech a fixed lag earlier. Local speech, even over the far end,
+/// does not. The lag is measured once over all the audio (the echo is the one thing the two
+/// channels share), within `EchoDedupe::window` either way.
+pub struct Envelopes {
+    /// Seconds of the first frame.
+    base: f64,
+    mic: Vec<f32>,
+    far: Vec<f32>,
+    /// Frames the mic lags the remote channel (negative: the remote channel is the late one).
+    lag: isize,
+}
+
+fn envelope(x: &[f32]) -> Vec<f32> {
+    x.chunks(SAMPLE_RATE as usize / 100)
+        .map(|c| (c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).sqrt())
+        .collect()
+}
+
+/// Pearson correlation of two equally long series; 0 when either is flat.
+fn correlation(a: &[f32], b: &[f32]) -> f32 {
+    let n = a.len().min(b.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let mean = |x: &[f32]| x[..n].iter().map(|v| f64::from(*v)).sum::<f64>() / n as f64;
+    let (ma, mb) = (mean(a), mean(b));
+    let (mut sab, mut saa, mut sbb) = (0.0f64, 0.0f64, 0.0f64);
+    for (x, y) in a[..n].iter().zip(&b[..n]) {
+        let (x, y) = (f64::from(*x) - ma, f64::from(*y) - mb);
+        sab += x * y;
+        saa += x * x;
+        sbb += y * y;
+    }
+    if saa <= 0.0 || sbb <= 0.0 {
+        return 0.0;
+    }
+    (sab / (saa * sbb).sqrt()) as f32
+}
+
+impl Envelopes {
+    /// `mic` and `far` both start at `base` seconds.
+    pub fn new(mic: &[f32], far: &[f32], base: f64, d: &EchoDedupe) -> Envelopes {
+        let (mic, far) = (envelope(mic), envelope(far));
+        let reach = (d.window * 100.0).round() as isize;
+        let n = mic.len().min(far.len()) as isize;
+        let mut best = (f32::MIN, 0);
+        for k in -reach..=reach {
+            // mic[i] against far[i - k], over the frames both have.
+            let (lo, hi) = (k.max(0), n.min(n + k));
+            if hi - lo < 2 {
+                continue;
+            }
+            let r = correlation(
+                &mic[lo as usize..hi as usize],
+                &far[(lo - k) as usize..(hi - k) as usize],
+            );
+            if r > best.0 {
+                best = (r, k);
+            }
+        }
+        Envelopes {
+            base,
+            mic,
+            far,
+            lag: best.1,
+        }
+    }
+
+    /// The echo lag measured, seconds.
+    pub fn lag_secs(&self) -> f64 {
+        self.lag as f64 / 100.0
+    }
+
+    /// `you`'s mic envelope follows the remote channel's at the measured lag (a frame either way
+    /// for the 10 ms grid) with at least `track` correlation, where the remote envelope swings
+    /// by at least `swing`: the speakers heard by the mic, however it was recognised.
+    pub fn tracks(&self, you: &Utt, d: &EchoDedupe) -> bool {
+        if d.track <= 0.0 {
+            return false;
+        }
+        let at = |secs: f64| ((secs - self.base) * 100.0).round().max(0.0) as isize;
+        let (from, to) = (at(you.start), at(you.end).min(self.mic.len() as isize));
+        if to - from < 2 {
+            return false;
+        }
+        let m = &self.mic[from as usize..to as usize];
+        (self.lag - 1..=self.lag + 1).any(|k| {
+            let (lo, hi) = (from - k, to - k);
+            if lo < 0 || hi > self.far.len() as isize {
+                return false;
+            }
+            let f = &self.far[lo as usize..hi as usize];
+            let mean = f.iter().sum::<f32>() / f.len() as f32;
+            let sd =
+                (f.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / f.len() as f32).sqrt();
+            mean > 0.0 && sd >= d.swing * mean && correlation(m, f) >= d.track
+        })
+    }
+}
+
 /// What became of the mic ("you") channel in one pass (dot-4uzgol.93), to find the stage that
 /// loses near-end speech. The echo canceller (`aec`, `audio.echo_cancel`) runs while recording,
 /// so the recorded mic and every count here are after it.
@@ -402,7 +517,8 @@ fn gate_stats(x: &[f32], t: &Tuning) -> (usize, f64) {
 }
 
 /// Drop every `you` utterance that is echo of remote speech (no-op when `d` is `None`), with
-/// the recorded channels (`heard`) when there are any.
+/// the recorded channels (`heard`) when there are any: by its words (`is_echo`) or by its
+/// loudness following the remote channel's (`Envelopes::tracks`).
 fn drop_echoes(
     utts: Vec<Utt>,
     you: &str,
@@ -411,8 +527,14 @@ fn drop_echoes(
 ) -> Vec<Utt> {
     let Some(d) = d else { return utts };
     let them: Vec<Utt> = utts.iter().filter(|u| u.speaker != you).cloned().collect();
+    let env = heard
+        .filter(|_| d.track > 0.0)
+        .map(|h| Envelopes::new(&h.you, &h.them, 0.0, &d));
     utts.into_iter()
-        .filter(|u| u.speaker != you || !is_echo(u, &them, &d, heard))
+        .filter(|u| {
+            u.speaker != you
+                || !(is_echo(u, &them, &d, heard) || env.as_ref().is_some_and(|e| e.tracks(u, &d)))
+        })
         .collect()
 }
 
@@ -919,6 +1041,9 @@ pub struct Live {
     /// Splits the mic channel by voice (`with_mic_diarization`).
     mic_diarizer: Option<diarize::Diarizer>,
     stages: MicStages,
+    /// Recent audio of both channels from sample `audio_base` on, for `Envelopes::tracks`.
+    audio: [Vec<f32>; 2],
+    audio_base: usize,
 }
 
 /// `pcm` cut into pieces of at most `max` samples, each cut at the quietest 10 ms frame in the
@@ -1008,6 +1133,8 @@ impl Live {
                 aec: tuning.echo.is_some(),
                 ..MicStages::default()
             },
+            audio: [Vec::new(), Vec::new()],
+            audio_base: 0,
         }
     }
 
@@ -1092,9 +1219,20 @@ impl Live {
             });
         self.held = wait;
         let n = ready.len();
+        let env = (n > 0 && d.track > 0.0).then(|| {
+            Envelopes::new(
+                &self.audio[0],
+                &self.audio[1],
+                Self::secs(self.audio_base),
+                &d,
+            )
+        });
         let kept: Vec<Utt> = ready
             .into_iter()
-            .filter(|u| !is_echo(u, &self.heard, &d, None))
+            .filter(|u| {
+                !(is_echo(u, &self.heard, &d, None)
+                    || env.as_ref().is_some_and(|e| e.tracks(u, &d)))
+            })
             .collect();
         self.stages.kept += kept.len();
         self.stages.echo_dropped += n - kept.len();
@@ -1102,6 +1240,16 @@ impl Live {
         // Later "you" utterances start at or after `you_at`.
         let horizon = self.held.iter().map(|u| u.start).fold(you_at, f64::min) - d.window;
         self.heard.retain(|t| t.end >= horizon);
+        // Keep the audio of the lag search either side of the earliest utterance still to come.
+        let keep = ((horizon - 2.0 * d.window).max(0.0) * f64::from(SAMPLE_RATE)) as usize;
+        let cut = keep
+            .saturating_sub(self.audio_base)
+            .min(self.audio[0].len())
+            .min(self.audio[1].len());
+        for a in &mut self.audio {
+            a.drain(..cut);
+        }
+        self.audio_base += cut;
         out
     }
 
@@ -1109,6 +1257,9 @@ impl Live {
     pub fn push(&mut self, channel: usize, samples: &[f32]) -> Result<Vec<Utt>> {
         let ch = channel.min(1);
         self.bufs[ch].pcm.extend_from_slice(samples);
+        if self.tuning.echo.is_some_and(|d| d.track > 0.0) {
+            self.audio[ch].extend_from_slice(samples);
+        }
         let mut fresh = Vec::new();
         while self.bufs[ch].pcm.len() >= self.window {
             let cut = quiet_cut(&self.bufs[ch].pcm, self.window);
@@ -2046,6 +2197,8 @@ mod tests {
                 short: 2,
                 bleed: 0.25,
                 sentence: 0.85,
+                track: 0.6,
+                swing: 0.3,
             })
         );
         let all = vec![
@@ -2606,5 +2759,187 @@ mod tests {
         let t = tuning_with(&[("stt.final_piece", json!("1h")), ("stt.feed", json!("10s"))]);
         assert_eq!(t.final_piece_samples, 3600 * SAMPLE_RATE as usize);
         assert_eq!(t.feed_samples, 10 * SAMPLE_RATE as usize);
+    }
+
+    /// Hears every stretch of speech (split at 300 ms of silence) by its loudness, as the
+    /// dot-4uzgol.101 fixture is mixed: the remote voice at full level, the user at about half,
+    /// and the speakers' echo far below both, misrecognised so that it shares no words with
+    /// what the remote side said.
+    struct ByLevel;
+
+    const FAR: &str = "Sounds good to me. The design team needs two more weeks to finish the new onboarding flow.";
+    const NEAR: &str = "Let's review the quarterly budget before the meeting starts.";
+    const GARBLED: &str = "Sons could the mean team kneads to Moorwicks";
+
+    impl Asr for ByLevel {
+        fn name(&self) -> &'static str {
+            "by-level"
+        }
+        fn transcribe(&self, pcm: &[f32], _l: &str) -> Result<Vec<Segment>> {
+            let frame = SAMPLE_RATE as usize / 100;
+            let loud: Vec<bool> = pcm.chunks(frame).map(|c| peak(c) >= 0.01).collect();
+            let mut out = Vec::new();
+            let mut i = 0;
+            while i < loud.len() {
+                if !loud[i] {
+                    i += 1;
+                    continue;
+                }
+                let (start, mut end, mut quiet) = (i, i, 0);
+                while i < loud.len() && quiet < 30 {
+                    if loud[i] {
+                        end = i;
+                        quiet = 0;
+                    } else {
+                        quiet += 1;
+                    }
+                    i += 1;
+                }
+                let p = peak(&pcm[start * frame..((end + 1) * frame).min(pcm.len())]);
+                let text = match p {
+                    p if p > 0.7 => FAR,
+                    p if p > 0.3 => NEAR,
+                    _ => GARBLED,
+                };
+                out.push(Segment {
+                    start: start as f64 / 100.0,
+                    end: (end + 1) as f64 / 100.0,
+                    text: text.into(),
+                });
+            }
+            Ok(out)
+        }
+    }
+
+    fn fixture(name: &str) -> Vec<f32> {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/stt")
+            .join(name);
+        wav::read(&p).unwrap().you
+    }
+
+    /// `x` scaled to a peak of `to`.
+    fn at_peak(x: &[f32], to: f32) -> Vec<f32> {
+        let p = peak(x);
+        x.iter().map(|v| v / p * to).collect()
+    }
+
+    /// The far end as laptop speakers play it into the mic: `lag_ms` late, `db` down, through an
+    /// overdriven cone, a resonant box and a coarse converter, which no linear filter models.
+    fn garbled(far: &[f32], lag_ms: f64, db: f64) -> Vec<f32> {
+        let g = 10f64.powf(db / 20.0) as f32;
+        let p = peak(far);
+        let lag = (lag_ms * f64::from(SAMPLE_RATE) / 1000.0) as usize;
+        let (mut lp, mut out) = (0.0f32, vec![0.0f32; far.len()]);
+        for i in lag..far.len() {
+            let x = (3.0 * far[i - lag] / p).tanh();
+            lp += 0.35 * (x - lp);
+            out[i] = (lp * 16.0).round() / 16.0 * p * g;
+        }
+        out
+    }
+
+    /// dot-4uzgol.101's 2-channel fixture: the remote side says its two sentences, the user
+    /// answers alone, then the remote side says them again while the user talks over it. The mic
+    /// hears all remote speech 60 ms late at -14 dB, garbled.
+    fn echo_fixture() -> (Channels, [(f64, f64); 2]) {
+        let secs = |s: f64| vec![0.0f32; (s * f64::from(SAMPLE_RATE)) as usize];
+        let them_says = at_peak(&fixture("them.wav"), 0.9);
+        let you_say = at_peak(&fixture("you.wav"), 0.45);
+        let mut them = secs(0.5);
+        them.extend(&them_says);
+        them.extend(secs(1.5));
+        let alone = them.len();
+        them.extend(secs(you_say.len() as f64 / f64::from(SAMPLE_RATE)));
+        them.extend(secs(1.5));
+        let over = them.len();
+        them.extend(&them_says);
+        them.extend(secs(1.0));
+        let mut you = garbled(&them, 60.0, -14.0);
+        you.resize(them.len().max(over + you_say.len()), 0.0);
+        them.resize(you.len(), 0.0);
+        for at in [alone, over] {
+            for (o, v) in you[at..].iter_mut().zip(&you_say) {
+                *o += v;
+            }
+        }
+        let span = |at: usize| {
+            let t = at as f64 / f64::from(SAMPLE_RATE);
+            (t, t + you_say.len() as f64 / f64::from(SAMPLE_RATE))
+        };
+        (Channels { you, them }, [span(alone), span(over)])
+    }
+
+    fn you_lines(all: &[Utt]) -> Vec<&Utt> {
+        all.iter().filter(|u| u.speaker == "you").collect()
+    }
+
+    #[test]
+    fn a_garbled_echo_on_the_mic_makes_no_you_lines_and_local_speech_stays() {
+        // dot-4uzgol.101, sodium live check at fe2b7d0: 2 of 6 final "you" lines were the
+        // speakers' echo of remote_1, misrecognised so the word dedupe passed them.
+        let (chans, local) = echo_fixture();
+        let s = settings(true, true);
+        let (all, st) = final_utts(&ByLevel, &s, &chans).unwrap();
+        let you = you_lines(&all);
+        assert!(
+            you.iter().all(|u| u.text == NEAR),
+            "echo kept as you: {you:?}"
+        );
+        for (from, to) in local {
+            assert!(
+                you.iter().any(|u| u.start < to && u.end > from),
+                "local speech at {from:.1}..{to:.1} s dropped: {you:?}"
+            );
+        }
+        assert_eq!(st.recognised - st.echo_dropped, you.len());
+        assert!(all.iter().filter(|u| u.speaker == "remote_1").count() >= 2);
+        // The words alone do not catch it: with the envelope check off the echo is "you".
+        let mut off = s.clone();
+        off.tuning.echo = off.tuning.echo.map(|d| EchoDedupe { track: 0.0, ..d });
+        let (all, _) = final_utts(&ByLevel, &off, &chans).unwrap();
+        assert!(you_lines(&all).iter().any(|u| u.text == GARBLED));
+        // The lag the envelopes measured is the echo's.
+        let env = Envelopes::new(&chans.you, &chans.them, 0.0, &s.tuning.echo.unwrap());
+        assert!(
+            (env.lag_secs() - 0.06).abs() <= 0.02,
+            "lag {}",
+            env.lag_secs()
+        );
+    }
+
+    #[test]
+    fn the_live_pass_drops_a_garbled_echo_too() {
+        let (chans, local) = echo_fixture();
+        let s = settings(true, true);
+        let mut live = Live::new(
+            Arc::new(ByLevel),
+            "en",
+            s.chunk_secs,
+            s.tuning,
+            "you",
+            "remote_1",
+        );
+        let mut all = Vec::new();
+        let feed = s.tuning.feed_samples;
+        for at in (0..chans.you.len()).step_by(feed) {
+            let end = (at + feed).min(chans.you.len());
+            all.extend(live.push(1, &chans.them[at..end]).unwrap());
+            all.extend(live.push(0, &chans.you[at..end]).unwrap());
+        }
+        all.extend(live.flush().unwrap());
+        let you = you_lines(&all);
+        assert!(
+            you.iter().all(|u| u.text == NEAR),
+            "echo kept as you: {you:?}"
+        );
+        for (from, to) in local {
+            assert!(
+                you.iter().any(|u| u.start < to && u.end > from),
+                "local speech at {from:.1}..{to:.1} s dropped: {you:?}"
+            );
+        }
+        // Bounded: the audio kept for the envelopes trails the transcript.
+        assert!(live.audio[0].len() < chans.you.len());
     }
 }

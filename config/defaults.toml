@@ -42,6 +42,10 @@ echo_divergence = 200
 echo_dominance = 50
 # Echo-canceller adaptation step in per-mille (500 = 0.5): larger converges faster, smaller is steadier.
 echo_step = 500
+# Percent: residual echo suppression after the echo canceller's linear filter. Speakers distort what they play, and the filter cannot cancel distortion; the suppressor estimates the distortion left as this share of the power of the echo the filter did model (spread to neighbouring frequencies and held over audio.echo_tail) and attenuates bands where it dominates the filtered mic. Higher removes more echo and more of local speech over the far end; 0 turns it off.
+echo_suppress = 10
+# Percent of amplitude the residual echo suppressor (audio.echo_suppress) leaves at least in any band: lower removes more echo, higher keeps more of local speech over the far end.
+echo_suppress_floor = 10
 # Longest speaker-to-mic echo the echo canceller models (audio.echo_cancel).
 echo_tail = "200ms"
 # System-audio sound the echo canceller hears before it counts as converged: until then it adapts with audio.echo_warmup_step and mutes the mic where echo dominates (audio.echo_dominance), so the first remote sentence is not transcribed as you. 0 turns the warmup off.
@@ -314,6 +318,10 @@ echo_sentence = 85
 echo_short = 2
 # Percent: a local-speaker word counts as appearing in remote speech (stt.echo_overlap) when its letter edit-distance similarity to a remote word is at least this, so a misheard echo ('Oaks meeting' for 'Oats Meetings') is still dropped. 100 asks for the exact word.
 echo_similarity = 75
+# Percent: with audio.echo_cancel, a local-speaker utterance whose mic loudness rises and falls with the remote channel's (at least this correlation of their 10 ms energy envelopes, at the echo lag measured over the recording within stt.echo_window) is dropped as speaker echo whatever its words: echo the speakers distorted is misrecognised and matches no remote words. Local speech, even over the far end, does not follow it. 0 turns this off.
+echo_track = 60
+# Percent: stt.echo_track applies only where the remote channel's energy envelope over the utterance swings by at least this much of its mean (standard deviation over mean); a steady sound has no envelope for echo to follow.
+echo_track_swing = 30
 # With audio.echo_cancel, a local-speaker utterance whose words remote speech says, or nearly says (stt.echo_similarity), within this time (plus audio.echo_delay) of each word is dropped as speaker echo; double talk with other words at other moments is kept.
 echo_window = "1s"
 # Window used to feed a recorded file to the live pass as if it were arriving.

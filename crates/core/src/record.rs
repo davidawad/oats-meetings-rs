@@ -253,6 +253,8 @@ pub fn settings_from(flat: &Flat) -> Result<AudioSettings> {
             align: dur("audio.echo_align")?,
             align_probe: dur("audio.echo_align_probe")?,
             align_confidence_percent: int("audio.echo_align_confidence"),
+            suppress_percent: int("audio.echo_suppress"),
+            suppress_floor_percent: int("audio.echo_suppress_floor"),
         })
     } else {
         None
@@ -316,6 +318,8 @@ pub fn settings_of(c: &Config) -> AudioSettings {
             align: c.audio.echo_align.as_duration(),
             align_probe: c.audio.echo_align_probe.as_duration(),
             align_confidence_percent: c.audio.echo_align_confidence,
+            suppress_percent: c.audio.echo_suppress,
+            suppress_floor_percent: c.audio.echo_suppress_floor,
         }),
         silence_warning: c.audio.silence_warning.as_duration(),
     }

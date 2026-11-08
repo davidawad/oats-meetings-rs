@@ -208,6 +208,24 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "echo_suppress": {
+          "default": 10,
+          "description": "Percent: residual echo suppression after the echo canceller's linear filter. Speakers distort what they play, and the filter cannot cancel distortion; the suppressor estimates the distortion left as this share of the power of the echo the filter did model (spread to neighbouring frequencies and held over audio.echo_tail) and attenuates bands where it dominates the filtered mic. Higher removes more echo and more of local speech over the far end; 0 turns it off.",
+          "maximum": 1000,
+          "minimum": 0,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_suppress_floor": {
+          "default": 10,
+          "description": "Percent of amplitude the residual echo suppressor (audio.echo_suppress) leaves at least in any band: lower removes more echo, higher keeps more of local speech over the far end.",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "echo_tail": {
           "default": "200ms",
           "description": "Longest speaker-to-mic echo the echo canceller models (audio.echo_cancel).",
@@ -1661,6 +1679,24 @@
           "description": "Percent: a local-speaker word counts as appearing in remote speech (stt.echo_overlap) when its letter edit-distance similarity to a remote word is at least this, so a misheard echo ('Oaks meeting' for 'Oats Meetings') is still dropped. 100 asks for the exact word.",
           "maximum": 100,
           "minimum": 1,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_track": {
+          "default": 60,
+          "description": "Percent: with audio.echo_cancel, a local-speaker utterance whose mic loudness rises and falls with the remote channel's (at least this correlation of their 10 ms energy envelopes, at the echo lag measured over the recording within stt.echo_window) is dropped as speaker echo whatever its words: echo the speakers distorted is misrecognised and matches no remote words. Local speech, even over the far end, does not follow it. 0 turns this off.",
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "echo_track_swing": {
+          "default": 30,
+          "description": "Percent: stt.echo_track applies only where the remote channel's energy envelope over the utterance swings by at least this much of its mean (standard deviation over mean); a steady sound has no envelope for echo to follow.",
+          "maximum": 1000,
+          "minimum": 0,
           "type": "integer",
           "x-reload": "live",
           "x-ui": false

@@ -20,6 +20,14 @@
 //! probe cross-correlates the block energy envelopes of mic and reference over `align` either
 //! way; when the measured lag puts the echo outside the tail, the filter is rebuilt with the mic
 //! or the reference delayed so the echo again lands `delay` after its reference.
+//!
+//! A linear filter cannot cancel what the speakers distort (dot-4uzgol.101: on a laptop's
+//! speakers the echo came back garbled and was transcribed as the local speaker). As in WebRTC's
+//! AEC3, a residual echo suppressor follows: per frequency bin it estimates the echo the filter
+//! left from the power of the echo it did model, and attenuates bins where that estimate
+//! dominates the filter's output. It runs
+//! on 50%-overlapped sqrt-Hann frames (one block of extra latency, still on the input timeline);
+//! local speech, which the reference cannot predict, keeps its bins.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -56,6 +64,11 @@ pub struct EchoSettings {
     /// Least normalised correlation, percent, at which the measured offset is used
     /// (`audio.echo_align_confidence`); below it the probe starts over.
     pub align_confidence_percent: u32,
+    /// Residual echo suppression after the linear filter, percent over-subtraction of the echo
+    /// estimate (`audio.echo_suppress`); 0 turns it off.
+    pub suppress_percent: u32,
+    /// Least gain, percent of amplitude, the suppressor leaves in a band (`audio.echo_suppress_floor`).
+    pub suppress_floor_percent: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -183,8 +196,10 @@ struct Filter {
     ref_out: VecDeque<f32>,
     pushed: usize,
     emitted: usize,
-    /// Output samples still to drop: the silence the delay line was primed with.
+    /// Output samples still to drop: the silence the delay line (and the suppressor's frame)
+    /// was primed with.
     skip: usize,
+    suppress: Option<Suppressor>,
 }
 
 impl Filter {
@@ -192,6 +207,9 @@ impl Filter {
         let b = block_of(s);
         let n = 2 * b;
         let parts = samples(s.tail).div_ceil(b).max(1);
+        let suppress = Suppressor::new(s, b, parts);
+        // The suppressor's overlap-add frame is one block more latency.
+        let latency = delay + suppress.as_ref().map_or(0, |_| b);
         Filter {
             b,
             fft: Fft::new(n),
@@ -210,10 +228,11 @@ impl Filter {
             s_res: 0.0,
             ref_in: std::iter::repeat_n(0.0, ref_delay).collect(),
             mic_in: std::iter::repeat_n(0.0, delay).collect(),
-            ref_out: std::iter::repeat_n(0.0, delay).collect(),
+            ref_out: std::iter::repeat_n(0.0, latency).collect(),
             pushed: 0,
             emitted: 0,
-            skip: delay,
+            skip: latency,
+            suppress,
         }
     }
 
@@ -295,11 +314,15 @@ impl Filter {
         let mute = warm && self.s_res < self.dominance * self.s_mic;
         let k = self.skip.min(b);
         self.skip -= k;
-        if mute {
-            mic_out.extend(std::iter::repeat_n(0.0, b - k));
-        } else {
-            mic_out.extend_from_slice(&e_fg[k..]);
-        }
+        let out = match self.suppress.as_mut() {
+            Some(sp) => {
+                let y: Vec<f32> = d.iter().zip(&e_fg).map(|(d, e)| d - e).collect();
+                sp.block(&self.fft, &y, &e_fg, mute)
+            }
+            None if mute => vec![0.0; b],
+            None => e_fg.clone(),
+        };
+        mic_out.extend_from_slice(&out[k..]);
         ref_out.extend(self.ref_out.drain(..b).skip(k));
         self.emitted += b - k;
 
@@ -354,6 +377,105 @@ impl Filter {
                 wk.im += gk.im;
             }
         }
+    }
+}
+
+/// Residual echo suppression (`EchoSettings::suppress_percent`), one block behind the filter.
+struct Suppressor {
+    b: usize,
+    beta: f32,
+    floor: f32,
+    /// Per-block decay of the echo power estimate: the echo's own reverberation over the tail.
+    decay: f32,
+    /// sqrt-Hann over 2b samples: analysis and synthesis windows at 50% overlap sum to one.
+    win: Vec<f32>,
+    /// The previous block of the filter's echo estimate and output (the first half of the frame).
+    prev_y: Vec<f32>,
+    prev_e: Vec<f32>,
+    /// Overlap-add carry of the last frame's second half.
+    carry: Vec<f32>,
+    /// Per bin: the echo power estimate, held over the tail.
+    echo: Vec<f32>,
+    /// Whether the previous block was muted by the warmup (it is emitted now).
+    prev_mute: bool,
+}
+
+impl Suppressor {
+    fn new(s: &EchoSettings, b: usize, parts: usize) -> Option<Suppressor> {
+        (s.suppress_percent > 0).then(|| {
+            let n = 2 * b;
+            Suppressor {
+                b,
+                beta: s.suppress_percent as f32 / 100.0,
+                floor: (s.suppress_floor_percent as f32 / 100.0).min(1.0),
+                decay: 1.0 - 1.0 / parts as f32,
+                win: (0..n)
+                    .map(|i| (std::f32::consts::PI * (i as f32 + 0.5) / n as f32).sin())
+                    .collect(),
+                prev_y: vec![0.0; b],
+                prev_e: vec![0.0; b],
+                carry: vec![0.0; b],
+                echo: vec![0.0; n],
+                prev_mute: false,
+            }
+        })
+    }
+
+    fn spectrum(&self, fft: &Fft, prev: &[f32], cur: &[f32]) -> Vec<C> {
+        let mut f: Vec<C> = prev
+            .iter()
+            .chain(cur)
+            .zip(&self.win)
+            .map(|(v, w)| C { re: v * w, im: 0.0 })
+            .collect();
+        fft.run(&mut f, false);
+        f
+    }
+
+    /// Take the filter's echo estimate `y` and output `e` for one block; return the previous
+    /// block's output, echo suppressed (zeros where the warmup muted it).
+    ///
+    /// What the speakers distort is not in `y`, but it sits in the same bands at the same
+    /// moments and scales with it: the residual echo is estimated as `beta` times the linear
+    /// estimate's power, spread to the neighbouring bins (distortion smears a harmonic) and held
+    /// over the tail as it decays. Local speech, which the reference cannot predict, has no
+    /// linear estimate and keeps its bins.
+    fn block(&mut self, fft: &Fft, y: &[f32], e: &[f32], mute: bool) -> Vec<f32> {
+        let (b, n) = (self.b, 2 * self.b);
+        let ym = self.spectrum(fft, &self.prev_y, y);
+        let mut em = self.spectrum(fft, &self.prev_e, e);
+        let tiny = f32::EPSILON * n as f32;
+        for k in 0..n {
+            let near = ym[k.saturating_sub(1)]
+                .norm()
+                .max(ym[k].norm())
+                .max(ym[(k + 1).min(n - 1)].norm());
+            self.echo[k] = near.max(self.decay * self.echo[k]);
+        }
+        for (k, c) in em.iter_mut().enumerate() {
+            let pe = c.norm();
+            let g = if pe > tiny {
+                (1.0 - self.beta * self.echo[k] / pe).max(self.floor)
+            } else {
+                1.0
+            };
+            c.re *= g;
+            c.im *= g;
+        }
+        fft.run(&mut em, true);
+        let mut out: Vec<f32> = (0..b)
+            .map(|i| self.carry[i] + em[i].re * self.win[i])
+            .collect();
+        for i in 0..b {
+            self.carry[i] = em[b + i].re * self.win[b + i];
+        }
+        if self.prev_mute {
+            out.iter_mut().for_each(|v| *v = 0.0);
+        }
+        self.prev_mute = mute;
+        self.prev_y.copy_from_slice(y);
+        self.prev_e.copy_from_slice(e);
+        out
     }
 }
 
@@ -539,6 +661,8 @@ mod tests {
             align: Duration::ZERO,
             align_probe: Duration::ZERO,
             align_confidence_percent: 50,
+            suppress_percent: 0,
+            suppress_floor_percent: 10,
         }
     }
 

@@ -20,6 +20,8 @@
     "echo_divergence": 200,
     "echo_dominance": 50,
     "echo_step": 500,
+    "echo_suppress": 10,
+    "echo_suppress_floor": 10,
     "echo_tail": "200ms",
     "echo_warmup": "3s",
     "echo_warmup_step": 1000,
@@ -201,6 +203,8 @@
     "echo_sentence": 85,
     "echo_short": 2,
     "echo_similarity": 75,
+    "echo_track": 60,
+    "echo_track_swing": 30,
     "echo_window": "1s",
     "feed": "500ms",
     "final": {

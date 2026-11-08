@@ -36,6 +36,8 @@ fn settings(delay_ms: u64) -> EchoSettings {
         align: Duration::ZERO,
         align_probe: Duration::ZERO,
         align_confidence_percent: 50,
+        suppress_percent: 0,
+        suppress_floor_percent: 10,
     }
 }
 
@@ -146,12 +148,12 @@ fn local_speech_survives_while_the_far_end_echo_goes() {
 }
 
 /// `settings` with the shipped warmup (`audio.echo_warmup` 3s, `audio.echo_warmup_step` 1000,
-/// `audio.echo_dominance` 50).
+/// `audio.echo_dominance` 50) and residual echo suppressor.
 fn warm(delay_ms: u64) -> EchoSettings {
     EchoSettings {
         warmup: Duration::from_secs(3),
         warmup_step_permille: 1_000,
-        ..settings(delay_ms)
+        ..suppressed(delay_ms)
     }
 }
 
@@ -291,4 +293,96 @@ fn local_speech_alone_is_not_mistaken_for_an_offset() {
     let (out, _) = cancel(&mut c, &near[..n], &far[..n]);
     assert_eq!(c.lag_ms(), None);
     assert_eq!(out.len(), n);
+}
+
+/// `settings` with the shipped residual echo suppressor (`audio.echo_suppress` 10,
+/// `audio.echo_suppress_floor` 10).
+fn suppressed(delay_ms: u64) -> EchoSettings {
+    EchoSettings {
+        suppress_percent: 10,
+        suppress_floor_percent: 10,
+        ..settings(delay_ms)
+    }
+}
+
+/// The far end as laptop speakers play it back into the mic (dot-4uzgol.101): `lag_ms` late,
+/// `db` down, through a soft-clipping, band-limited, coarsely quantised speaker that a linear
+/// filter cannot model.
+fn garbled(far: &[f32], lag_ms: f64, db: f64) -> Vec<f32> {
+    let g = 10f64.powf(db / 20.0) as f32;
+    let peak = far.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let lag = ms(lag_ms);
+    let (mut lp, mut out) = (0.0f32, vec![0.0f32; far.len()]);
+    for i in lag..far.len() {
+        // Overdriven cone, a resonant low-pass box and a 5-bit converter.
+        let x = (3.0 * far[i - lag] / peak).tanh();
+        lp += 0.35 * (x - lp);
+        out[i] = (lp * 16.0).round() / 16.0 * peak * g;
+    }
+    out
+}
+
+#[test]
+fn a_garbled_echo_is_suppressed_where_the_linear_filter_leaves_it() {
+    let far = fixture("them.wav").repeat(2);
+    let echo = garbled(&far, 60.0, -14.0);
+    let half = far.len() / 2;
+    let db = |s: &EchoSettings| {
+        let (out, refr) = cancel(&mut EchoCanceller::new(s), &echo, &far);
+        assert_eq!((out.len(), refr.len()), (far.len(), far.len()));
+        assert_eq!(refr, far);
+        10.0 * (energy(&echo[half..]) / energy(&out[half..]).max(f64::MIN_POSITIVE)).log10()
+    };
+    let (linear, both) = (db(&settings(40)), db(&suppressed(40)));
+    eprintln!("garbled echo: linear {linear:.1} dB, suppressed {both:.1} dB");
+    assert!(
+        both >= linear + 6.0 && both >= MIN_REDUCTION_DB,
+        "suppressor took the garbled echo from {linear:.1} dB to only {both:.1} dB"
+    );
+}
+
+#[test]
+fn local_speech_survives_the_suppressor_under_double_talk() {
+    let far = fixture("them.wav").repeat(2);
+    let near = fixture("you.wav");
+    let echo = garbled(&far, 60.0, -14.0);
+    let half = far.len() / 2;
+    let mut local = vec![0.0f32; far.len()];
+    for (i, v) in near.iter().take(far.len() - half).enumerate() {
+        local[half + i] = 0.5 * v;
+    }
+    let mic: Vec<f32> = echo.iter().zip(&local).map(|(e, l)| e + l).collect();
+    let (out, _) = cancel(&mut EchoCanceller::new(&suppressed(40)), &mic, &far);
+    let err: Vec<f32> = out[half..]
+        .iter()
+        .zip(&local[half..])
+        .map(|(o, l)| o - l)
+        .collect();
+    let local_db = 10.0 * (energy(&local[half..]) / energy(&err)).log10();
+    let kept = energy(&out[half..]) / energy(&local[half..]);
+    eprintln!("double talk: local {local_db:.1} dB above the error, {kept:.2} of its energy out");
+    assert!(
+        local_db >= 12.0,
+        "local speech only {local_db:.1} dB above the error"
+    );
+    assert!(kept >= 0.75, "only {kept:.2} of local speech energy kept");
+}
+
+#[test]
+fn the_suppressor_keeps_the_channels_on_the_input_timeline() {
+    // Mic alone with a silent reference: nothing to suppress, so the mic comes out unchanged
+    // (the overlap-add frame reconstructs it) and in place.
+    let mic = fixture("you.wav");
+    let (out, refr) = cancel(
+        &mut EchoCanceller::new(&suppressed(40)),
+        &mic,
+        &vec![0.0; mic.len()],
+    );
+    assert_eq!((out.len(), refr.len()), (mic.len(), mic.len()));
+    let err: Vec<f32> = out.iter().zip(&mic).map(|(o, m)| o - m).collect();
+    let db = 10.0 * (energy(&mic) / energy(&err).max(f64::MIN_POSITIVE)).log10();
+    assert!(
+        db >= 60.0,
+        "mic changed: only {db:.1} dB above the difference"
+    );
 }
