@@ -55,7 +55,7 @@ fn rig(toml: &str) -> Rig {
     std::fs::write(
         &cfg,
         format!(
-            "# my hooks\n[sessions]\nroot = {:?}\n\n[stt.live]\nchunk = \"1s\"\n\n{toml}",
+            "# my hooks\n[sessions]\nroot = {:?}\n\n[stt.local]\nauto_download = false\n\n[stt.live]\nchunk = \"1s\"\n\n{toml}",
             rec.to_str().unwrap()
         ),
     )
