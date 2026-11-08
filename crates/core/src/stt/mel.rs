@@ -115,7 +115,8 @@ impl Mel {
             let j = if i < 0 {
                 (-i) as usize
             } else if i as usize >= m {
-                2 * (m - 1) - i as usize
+                // Past one reflection (audio shorter than the pad): zero, not an underflow.
+                (2 * (m - 1)).checked_sub(i as usize).unwrap_or(usize::MAX)
             } else {
                 i as usize
             };
@@ -365,5 +366,14 @@ mod tests {
         assert!(mel.iter().all(|x| x.is_finite()));
         let (_, valid) = m.features(&vec![0.1; 1_000_000], 11);
         assert_eq!(valid, 11, "audio past the window is cut");
+        // Windows shorter than the n_fft / 2 reflect pad (a recording stopped at once).
+        for frames in 1..4 {
+            for len in [0, 1, 159, 160, 161, 400] {
+                let (mel, _) = m.log_mel(&vec![0.1; len], frames);
+                assert!(mel.iter().all(|x| x.is_finite()), "{frames} {len}");
+                let (mel, _) = m.features(&vec![0.1; len], frames);
+                assert!(mel.iter().all(|x| x.is_finite()), "{frames} {len}");
+            }
+        }
     }
 }
