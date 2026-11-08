@@ -19,7 +19,7 @@ use oats_core::control::engine::Engine;
 use serde_json::json;
 
 use crate::kit::{self, Icon, Kind, Size};
-use crate::meters::{Meters, Reading};
+use crate::meters::{self, Gauge, Meters, Reading, Slot, Slots};
 use crate::state::{fmt_clock, Control, Controls, Dot, Edit, Line, Rec, State, Tab};
 use crate::theme::{self, Theme, MONO, SANS};
 use crate::views;
@@ -85,6 +85,46 @@ pub struct MainWindow {
     /// The active tab's content as a cached view: it re-renders only when this window is
     /// notified, so a meter repaint never re-lays out the transcript. Created on first render.
     body: Option<Entity<Body>>,
+    /// Everything the window shows but the meter bars and the `?` overlay, as a cached view: it
+    /// re-renders when this window is notified or the record clock or the meters' source changes,
+    /// never for a level change (dot-4uzgol.103). Created on first render.
+    chrome: Option<Entity<Chrome>>,
+    /// The meter bars, drawn over the chrome's `slots` (`meters::layer`). Created on first render.
+    gauges: Vec<(Slot, Entity<Gauge>)>,
+    slots: Slots,
+    /// Whether the platform presents this window's frames: occluded or minimised, the meters
+    /// do not repaint (dot-4uzgol.103).
+    pub(crate) visible: bool,
+    visibility: Option<Subscription>,
+}
+
+/// The window's chrome (rail, Live head and record strip, banner, status line), as a view the
+/// window embeds cached (dot-4uzgol.103): the tab content and the meter bars are drawn over slots
+/// it leaves, so a meter repaint redraws only the bars and a clock tick not the transcript. It
+/// observes the window, like `Body`.
+pub struct Chrome {
+    main: WeakEntity<MainWindow>,
+    /// How many times the chrome rendered: `ui-state` reports it as `chrome_frames`.
+    pub(crate) renders: u64,
+}
+
+impl Chrome {
+    fn new(main: &Entity<MainWindow>, cx: &mut Context<Self>) -> Self {
+        cx.observe(main, |_, _, cx| cx.notify()).detach();
+        Self {
+            main: main.downgrade(),
+            renders: 0,
+        }
+    }
+}
+
+impl Render for Chrome {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.renders += 1;
+        self.main
+            .update(cx, |m, cx| m.chrome(window, cx).into_any_element())
+            .unwrap_or_else(|_| div().into_any_element())
+    }
 }
 
 /// The active tab's content (Live: its transcript, under the record strip the window draws), as
@@ -157,6 +197,11 @@ impl MainWindow {
             focus_lost: None,
             meters: None,
             body: None,
+            chrome: None,
+            gauges: Vec::new(),
+            slots: Slots::default(),
+            visible: true,
+            visibility: None,
         }
     }
 
@@ -170,6 +215,16 @@ impl MainWindow {
     /// How many times the tab content rendered (0 before the first frame).
     pub(crate) fn body_renders(&self, cx: &gpui::App) -> u64 {
         self.body.as_ref().map_or(0, |b| b.read(cx).renders)
+    }
+
+    /// How many times the chrome rendered (0 before the first frame).
+    pub(crate) fn chrome_renders(&self, cx: &gpui::App) -> u64 {
+        self.chrome.as_ref().map_or(0, |c| c.read(cx).renders)
+    }
+
+    /// How many times the meter bars rendered, summed over the bars.
+    pub(crate) fn gauge_renders(&self, cx: &gpui::App) -> u64 {
+        self.gauges.iter().map(|(_, g)| g.read(cx).renders).sum()
     }
 
     /// Apply a pending event line from the engine bus and re-render.
@@ -236,8 +291,13 @@ impl MainWindow {
     }
 
     /// Hand this tick's levels and clock to the meters; they repaint only on a visible change, at
-    /// most once per `ui.meter_interval`.
+    /// most once per `ui.meter_interval`, and not at all while the window is occluded or minimised
+    /// (the first tick it is presented again catches up). A level change redraws the bars alone;
+    /// the clock or the source redraws the chrome too, never the tab content.
     pub(crate) fn show_meters(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
         let ui = &self.engine.snapshot().config.ui;
         let r = Reading {
             levels: self.levels,
@@ -246,11 +306,19 @@ impl MainWindow {
             steps: ui.meter_steps,
             interval: ui.meter_interval.as_duration(),
         };
-        self.meters(cx).update(cx, |m, cx| {
-            if m.set(r, Instant::now()) {
-                cx.notify();
+        let chrome = self.meters(cx).update(cx, |m, cx| {
+            let was = (m.source, m.clock);
+            if !m.set(r, Instant::now()) {
+                return false;
             }
+            cx.notify();
+            was != (m.source, m.clock)
         });
+        if chrome {
+            if let Some(c) = &self.chrome {
+                c.update(cx, |_, cx| cx.notify());
+            }
+        }
     }
 
     /// A recording button was pressed: the same engine action as `ctl` and the shortcuts. It runs off
@@ -322,7 +390,7 @@ impl MainWindow {
     }
 
     /// The Live tab's record strip: lamp and state word, clock, the two level meters, controls.
-    fn record_strip(&self, fills: (f32, f32), cx: &mut Context<Self>) -> impl IntoElement {
+    fn record_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         let ui = &self.engine.snapshot().config.ui;
         let c = if self.state.pending.is_some() {
@@ -346,8 +414,8 @@ impl MainWindow {
         // Idle, the meters show the input monitor (nothing recorded); recording, the recorded
         // streams.
         let clock = fmt_clock(self.state.rec.elapsed_ms(Instant::now()));
-        let (mic, sys) = fills;
-        let meter = |label: &'static str, level: f32| {
+        // The bars are `Gauge`s drawn over these slots (dot-4uzgol.103).
+        let meter = |label: &'static str, s: Slot| {
             div()
                 .flex()
                 .items_center()
@@ -355,7 +423,7 @@ impl MainWindow {
                 .text_size(px(11.))
                 .text_color(rgb(t.dim))
                 .child(div().w(px(66.)).flex_none().child(label))
-                .child(kit::meter(level))
+                .child(meters::slot(&self.slots, s))
         };
         let controls = if idle && self.state.pending.is_none() {
             let fresh = self.state.can_new_session();
@@ -446,8 +514,8 @@ impl MainWindow {
                     .flex_1()
                     .min_w_0()
                     .gap(px(6.))
-                    .child(meter("You", mic))
-                    .child(meter("Remote", sys)),
+                    .child(meter("You", Slot::StripMic))
+                    .child(meter("Remote", Slot::StripSystem)),
             )
             .child(controls)
     }
@@ -762,7 +830,7 @@ impl MainWindow {
 
     /// The Live tab's head, record strip and banner: the window draws them, around the cached
     /// transcript (`live_body`), so the strip's meters and clock repaint without it.
-    fn live_chrome(&self, fills: (f32, f32), cx: &mut Context<Self>) -> impl IntoElement {
+    fn live_chrome(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let controls = self.engine.snapshot().config.ui.record_controls;
         let n = self.inputs();
         let mut head = kit::head("Live").child(div().flex_1());
@@ -778,7 +846,7 @@ impl MainWindow {
             .flex_col()
             .flex_none()
             .child(head)
-            .children(controls.then(|| self.record_strip(fills, cx)))
+            .children(controls.then(|| self.record_strip(cx)))
             .children(
                 self.banner(cx)
                     .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b)),
@@ -846,7 +914,7 @@ impl MainWindow {
 
     /// The status line: what the window is doing (the last action's result, else the session),
     /// and on Live the model and runtime and the capture devices.
-    fn status_bar(&self, meters: &Meters) -> impl IntoElement {
+    fn status_bar(&self, source: &'static str) -> impl IntoElement {
         let t = self.theme;
         let st = &self.state;
         // Every segment ellipsizes (dot-4uzgol.81): at 1100px the devices ran past the edge.
@@ -923,9 +991,9 @@ impl MainWindow {
                     .debug_selector(|| "status-devices".into()),
             );
         }
-        if meters.source != "none" {
+        if source != "none" {
             bar = bar.child(
-                self.status_meters(meters.fills())
+                self.status_meters()
                     .when(st.tab != Tab::Live, |d| d.ml_auto()),
             );
         }
@@ -934,16 +1002,16 @@ impl MainWindow {
 
     /// The compact meters at the end of the status line, on every tab: mic and system audio
     /// while monitoring or recording.
-    fn status_meters(&self, (mic, sys): (f32, f32)) -> gpui::Div {
+    fn status_meters(&self) -> gpui::Div {
         let t = self.theme;
-        let meter = |label: &'static str, level: f32| {
+        let meter = |label: &'static str, s: Slot| {
             div()
                 .flex()
                 .flex_none()
                 .items_center()
                 .gap(px(5.))
                 .child(label)
-                .child(div().flex().w(px(36.)).child(kit::meter(level)))
+                .child(div().flex().w(px(36.)).child(meters::slot(&self.slots, s)))
         };
         div()
             .flex()
@@ -952,8 +1020,8 @@ impl MainWindow {
             .gap(px(10.))
             .text_color(rgb(t.faint))
             .debug_selector(|| "status-meters".into())
-            .child(meter("You", mic))
-            .child(meter("Remote", sys))
+            .child(meter("You", Slot::StatusMic))
+            .child(meter("Remote", Slot::StatusSystem))
     }
 
     /// The blueprint grid behind the content: 1px lines every 24px in the grid colour.
@@ -1022,6 +1090,66 @@ impl Drop for MainWindow {
     }
 }
 
+impl MainWindow {
+    /// The chrome around the cached tab content, rendered by `Chrome`: everything but the meter
+    /// bars, which it leaves `meters::slot`s for.
+    fn chrome(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The slots this render lays out; one it no longer shows stays empty.
+        *self.slots.borrow_mut() = Default::default();
+        let t = self.theme;
+        // The source decides whether the status line has meters; the chrome is notified when it
+        // changes. Levels are read by the bars alone.
+        let source = self.meters(cx).read(cx).source;
+        // The tab content is laid over this slot, not nested in the chrome: a cached view inside
+        // one that re-renders always re-renders too, and the clock redraws the chrome every
+        // second while recording.
+        let tab = meters::place(&self.slots, Slot::Body)
+            .w_full()
+            .flex_1()
+            .min_h_0();
+        let body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .when(self.state.tab == Tab::Live, |d| {
+                d.child(self.live_chrome(cx))
+            })
+            .child(tab);
+        // Live shows the banner under its record strip; the other tabs above their content.
+        let banner = (self.state.tab != Tab::Live)
+            .then(|| self.banner(cx))
+            .flatten()
+            .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b));
+        let recording = matches!(self.state.rec, Rec::Recording { .. });
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            // The recording edge; transparent while idle so the layout does not jump.
+            .border_t(px(3.))
+            .border_color(if recording {
+                rgb(t.rec).into()
+            } else {
+                gpui::transparent_black()
+            })
+            .child(
+                div().flex().flex_1().min_h_0().child(self.rail(cx)).child(
+                    div()
+                        .relative()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.grid())
+                        .children(banner)
+                        .child(body)
+                        .child(self.status_bar(source)),
+                ),
+            )
+    }
+}
+
 impl Render for MainWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.frames += 1;
@@ -1031,6 +1159,14 @@ impl Render for MainWindow {
         theme::set(self.theme);
         if self.appearance.is_none() {
             self.appearance = Some(cx.observe_window_appearance(window, |_, _, cx| cx.notify()));
+        }
+        // Occluded or minimised, the meters stop repainting; presented again, they catch up.
+        self.visible = window.is_visible();
+        if self.visibility.is_none() {
+            self.visibility = Some(cx.observe_window_visibility(window, |this, v, _, cx| {
+                this.visible = v.is_visible();
+                this.show_meters(cx);
+            }));
         }
         let t = self.theme;
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
@@ -1047,46 +1183,40 @@ impl Render for MainWindow {
             let f = focus.clone();
             window.defer(cx, move |window, cx| f.focus(window, cx));
         }
-        // Reading the meters here is what makes their notify redraw this window's chrome; the tab
-        // content below is cached and re-renders only when this window is notified.
-        let meters = self.meters(cx).read(cx).clone();
+        // This render runs on every frame, a meter repaint's included: it only places the cached
+        // chrome and, over its slots, the cached tab content and meter bars (dot-4uzgol.103).
         let main = cx.entity();
-        let tab = self
+        let chrome = self
+            .chrome
+            .get_or_insert_with(|| cx.new(|cx| Chrome::new(&main, cx)))
+            .clone()
+            .cached(StyleRefinement::default().size_full());
+        if self.gauges.is_empty() {
+            let m = self.meters(cx);
+            self.gauges = Slot::GAUGES
+                .iter()
+                .map(|&s| (s, cx.new(|cx| Gauge::new(&m, &main, s, cx))))
+                .collect();
+        }
+        let body = self
             .body
             .get_or_insert_with(|| cx.new(|cx| Body::new(&main, cx)))
-            .clone()
-            .cached(StyleRefinement::default().w_full().flex_1().min_h_0());
-        let body = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .when(self.state.tab == Tab::Live, |d| {
-                d.child(self.live_chrome(meters.fills(), cx))
-            })
-            .child(tab);
-        // Live shows the banner under its record strip; the other tabs above their content.
-        let banner = (self.state.tab != Tab::Live)
-            .then(|| self.banner(cx))
-            .flatten()
-            .map(|b| div().flex_none().mx(px(28.)).mt(px(12.)).child(b));
-        let recording = matches!(self.state.rec, Rec::Recording { .. });
+            .clone();
+        let views = std::iter::once((Slot::Body, gpui::AnyView::from(body)))
+            .chain(
+                self.gauges
+                    .iter()
+                    .map(|(s, g)| (*s, gpui::AnyView::from(g.clone()))),
+            )
+            .collect();
         div()
             .id("window")
-            .flex()
-            .flex_col()
+            .relative()
             .size_full()
             .bg(rgb(t.bg))
             .text_color(rgb(t.text))
             .font_family(SANS)
             .text_size(px(14.))
-            // The recording edge; transparent while idle so the layout does not jump.
-            .border_t(px(3.))
-            .border_color(if recording {
-                rgb(t.rec).into()
-            } else {
-                gpui::transparent_black()
-            })
             .track_focus(&focus)
             // After a focused editor (Notes, a template, a calendar field) had the key: a Rebind
             // listening, the open text box, else a bare shortcut (views::shortcuts).
@@ -1103,20 +1233,8 @@ impl Render for MainWindow {
                     cx.propagate();
                 }
             }))
-            .child(
-                div().flex().flex_1().min_h_0().child(self.rail(cx)).child(
-                    div()
-                        .relative()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .child(self.grid())
-                        .children(banner)
-                        .child(body)
-                        .child(self.status_bar(&meters)),
-                ),
-            )
+            .child(chrome)
+            .child(meters::layer(&self.slots, views))
             .children(self.keys.help.then(|| views::shortcuts::help(self, cx)))
     }
 }
@@ -1460,10 +1578,16 @@ mod tests {
             cx.run_until_parked();
             let read = |cx: &mut gpui::VisualTestContext| {
                 view.update(cx, |v, cx| {
-                    (v.body_renders(cx), v.frames, v.meters(cx).read(cx).repaints)
+                    (
+                        v.body_renders(cx),
+                        v.frames,
+                        v.meters(cx).read(cx).repaints,
+                        v.chrome_renders(cx),
+                        v.gauge_renders(cx),
+                    )
                 })
             };
-            let (body, frames, repaints) = read(cx);
+            let (body, frames, repaints, chrome, gauges) = read(cx);
             assert!(body > 0, "{tab:?}: the tab content never rendered");
             const N: usize = 20;
             for i in 0..N {
@@ -1477,8 +1601,14 @@ mod tests {
                 cx.run_until_parked();
                 std::thread::sleep(std::time::Duration::from_millis(70));
             }
-            let (body2, frames2, repaints2) = read(cx);
+            let (body2, frames2, repaints2, chrome2, gauges2) = read(cx);
             assert_eq!(body2, body, "{tab:?}: meter ticks rendered the transcript");
+            // dot-4uzgol.103: nor the chrome around it; only the bars redraw.
+            assert_eq!(chrome2, chrome, "{tab:?}: meter ticks rendered the chrome");
+            assert!(
+                gauges2 - gauges >= (N / 2) as u64,
+                "{tab:?}: the meter bars never redrew"
+            );
             assert!(
                 repaints2 - repaints >= (N / 2) as u64,
                 "{tab:?}: meters never repainted"
@@ -1499,6 +1629,100 @@ mod tests {
         }
     }
 
+    /// dot-4uzgol.103: occluded or minimised, a visible level swing every tick repaints nothing
+    /// (no frame, no bar, no repaint); presented again, the first tick catches the meters up.
+    #[test]
+    fn an_occluded_window_draws_no_meter_frames() {
+        let (_engine, _dir, view, cx) = long_session_window(50, &[]);
+        let swing = |i: usize, cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |v, cx| {
+                v.levels = if i % 2 == 0 { (0.9, 0.9) } else { (0.01, 0.01) };
+                v.meter_source = "monitor";
+                v.show_meters(cx);
+            });
+            cx.run_until_parked();
+        };
+        let read = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |v, cx| {
+                (
+                    v.frames,
+                    v.meters(cx).read(cx).repaints,
+                    v.gauge_renders(cx),
+                    v.dump(cx)["meters"]["visible"].clone(),
+                )
+            })
+        };
+        swing(0, cx);
+        let (_, _, gauges, visible) = read(cx);
+        assert!(gauges > 0, "the meter bars never drew");
+        assert_eq!(visible, true);
+        let w = cx.window_handle();
+        cx.simulate_window_visibility_change(w, gpui::WindowVisibility::Hidden);
+        cx.run_until_parked();
+        let (frames, repaints, gauges, visible) = read(cx);
+        assert_eq!(visible, false);
+        for i in 1..20 {
+            swing(i, cx);
+            std::thread::sleep(std::time::Duration::from_millis(70));
+        }
+        let (frames2, repaints2, gauges2, _) = read(cx);
+        assert_eq!(frames2, frames, "an occluded window drew meter frames");
+        assert_eq!(
+            repaints2, repaints,
+            "an occluded window repainted the meters"
+        );
+        assert_eq!(gauges2, gauges, "an occluded window redrew the bars");
+        cx.simulate_window_visibility_change(w, gpui::WindowVisibility::Visible);
+        cx.run_until_parked();
+        swing(0, cx);
+        let (frames3, repaints3, gauges3, visible) = read(cx);
+        assert_eq!(visible, true);
+        assert!(
+            repaints3 > repaints2,
+            "shown again, the meters stayed stale"
+        );
+        assert!(frames3 > frames2 && gauges3 > gauges2);
+    }
+
+    /// dot-4uzgol.103: while recording, each new second of the record clock redraws the chrome
+    /// (the strip's clock) but not the transcript laid over it.
+    #[test]
+    fn record_clock_ticks_redraw_the_chrome_not_the_transcript() {
+        let (_engine, _dir, view, cx) = long_session_window(400, &[]);
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Live;
+            v.state.rec = Rec::Recording {
+                session: "s1".into(),
+                base_ms: 0,
+                resumed: Instant::now(),
+            };
+            v.meter_source = "recording";
+            v.show_meters(cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let read = |cx: &mut gpui::VisualTestContext| {
+            view.update(cx, |v, cx| (v.body_renders(cx), v.chrome_renders(cx)))
+        };
+        let (body, chrome) = read(cx);
+        for s in 1..=5u64 {
+            view.update(cx, |v, cx| {
+                if let Rec::Recording { base_ms, .. } = &mut v.state.rec {
+                    *base_ms = s * 1000;
+                }
+                v.show_meters(cx);
+            });
+            cx.run_until_parked();
+        }
+        let (body2, chrome2) = read(cx);
+        assert_eq!(body2, body, "clock ticks rendered the transcript");
+        assert_eq!(
+            chrome2 - chrome,
+            5,
+            "each clock second redraws the chrome once"
+        );
+    }
+
     /// dot-4uzgol.97 perf guard: one idle second of ticks far faster than `ui.tick`, each one a
     /// visible level swing, draws at most 15 meter frames (`ui.meter_interval`) and lays the long
     /// transcript out not once.
@@ -1506,9 +1730,11 @@ mod tests {
     fn an_idle_second_draws_at_most_15_meter_frames_and_no_transcript_layout() {
         let (_engine, _dir, view, cx) = long_session_window(400, &[]);
         let read = |cx: &mut gpui::VisualTestContext| {
-            view.update(cx, |v, cx| (v.body_renders(cx), v.frames))
+            view.update(cx, |v, cx| {
+                (v.body_renders(cx), v.frames, v.chrome_renders(cx))
+            })
         };
-        let (body, frames) = read(cx);
+        let (body, frames, chrome) = read(cx);
         let start = Instant::now();
         let mut i = 0;
         while start.elapsed() < std::time::Duration::from_secs(1) {
@@ -1521,8 +1747,15 @@ mod tests {
             i += 1;
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let (body2, frames2) = read(cx);
+        let (body2, frames2, chrome2) = read(cx);
         assert_eq!(body2, body, "the transcript was laid out while idle");
+        // The first reading moves the source from "none" to "monitor" (the status line gains its
+        // meters); every level change after it redraws the bars alone (dot-4uzgol.103).
+        assert!(
+            chrome2 - chrome <= 1,
+            "{} chrome renders in one idle second",
+            chrome2 - chrome
+        );
         let drawn = frames2 - frames;
         // 15 per second, plus the one a throttle window straddling the second's end allows.
         assert!(

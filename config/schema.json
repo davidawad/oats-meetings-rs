@@ -2131,7 +2131,7 @@
         },
         "meter_interval": {
           "default": "67ms",
-          "description": "The shortest time between two repaints of the level meters (67ms is 15 per second). A meter repaint redraws the meters and the record clock only, never the transcript.",
+          "description": "The shortest time between two repaints of the level meters (67ms is 15 per second). A level repaint redraws the meter bars only, never the window chrome or the transcript, and the meters do not repaint while the window is occluded or minimised.",
           "format": "duration",
           "pattern": "^[0-9]+(ms|s|m|h|d)$",
           "type": "string",

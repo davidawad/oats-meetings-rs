@@ -488,7 +488,7 @@ pub const KEYS: &[Key] = &[
         path: "ui.meter_interval",
         kind: Kind::Duration { min_ms: 10 * MS, max_ms: 10 * SEC },
         default: Def::D(67 * MS),
-        doc: "The shortest time between two repaints of the level meters (67ms is 15 per second). A meter repaint redraws the meters and the record clock only, never the transcript.",
+        doc: "The shortest time between two repaints of the level meters (67ms is 15 per second). A level repaint redraws the meter bars only, never the window chrome or the transcript, and the meters do not repaint while the window is occluded or minimised.",
         ui: false,
         reload: Reload::Live,
     },
