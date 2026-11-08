@@ -229,7 +229,8 @@
       "tdt_max_symbols": 10,
       "tdt_max_tokens": 150,
       "tdt_tail_blanks": 5,
-      "threads": 4
+      "threads": 4,
+      "unload_after": "5m"
     },
     "pad": "250ms",
     "speech_peak": 10

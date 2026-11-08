@@ -393,6 +393,7 @@ pub struct SttLocal {
     pub model_url: String,
     pub auto_download: bool,
     pub threads: u32,
+    pub unload_after: Dur,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

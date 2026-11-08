@@ -2,7 +2,8 @@
 //! Parakeet TDT (transducer) and Moonshine, behind one `Asr`. The catalog entry names the model
 //! files by role; `stt.local.provider` picks the onnxruntime execution provider (CoreML on macOS,
 //! falling back to the CPU when CoreML cannot load the model). The loaded recogniser is cached per
-//! model directory; config reload clears it when `stt.local.*` changes.
+//! model directory; config reload clears it when `stt.local.*` changes, and `idle` once
+//! `stt.local.unload_after` passes unused.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,6 +30,21 @@ static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
 
 pub fn clear_cache() {
     *CACHE.lock().expect("sherpa cache") = None;
+}
+
+/// Whether a loaded recogniser or speaker model is held outside its cache (`idle`).
+pub fn in_use() -> bool {
+    let asr = CACHE
+        .lock()
+        .expect("sherpa cache")
+        .as_ref()
+        .is_some_and(|c| Arc::strong_count(&c.3) > 1);
+    let speaker = SPEAKER_CACHE
+        .lock()
+        .expect("sherpa speaker cache")
+        .as_ref()
+        .is_some_and(|c| Arc::strong_count(&c.3) > 1);
+    asr || speaker
 }
 
 /// The provider the model loaded from `dir` runs on, if it is the one loaded.

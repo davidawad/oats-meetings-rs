@@ -416,6 +416,8 @@ tdt_max_tokens = 150
 tdt_tail_blanks = 5
 # CPU threads for local transcription.
 threads = 4
+# Release the loaded transcription and speaker models (and the memory they hold, over a gigabyte for Parakeet) once none has been used for this long; the next recording or transcription loads them again. The live and final passes share one loaded model. 0s keeps them loaded.
+unload_after = "5m"
 
 [templates]
 # Folder of note-template TOML files; empty means <config dir>/templates.

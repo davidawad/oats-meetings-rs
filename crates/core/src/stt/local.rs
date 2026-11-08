@@ -1,5 +1,6 @@
 //! Local ASR: whisper.cpp through `whisper-rs` (cargo feature `whisper`). The loaded model is
-//! cached per path; config reload clears it when `stt.local.*` changes.
+//! cached per path; config reload clears it when `stt.local.*` changes, and `idle` once
+//! `stt.local.unload_after` passes unused.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,15 @@ static CACHE: Mutex<Option<(PathBuf, Arc<WhisperContext>)>> = Mutex::new(None);
 
 pub fn clear_cache() {
     *CACHE.lock().expect("whisper cache") = None;
+}
+
+/// Whether the loaded model is held outside the cache (`idle`).
+pub fn in_use() -> bool {
+    CACHE
+        .lock()
+        .expect("whisper cache")
+        .as_ref()
+        .is_some_and(|c| Arc::strong_count(&c.1) > 1)
 }
 
 pub struct WhisperAsr {

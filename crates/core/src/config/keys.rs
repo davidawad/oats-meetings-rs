@@ -1805,6 +1805,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "stt.local.unload_after",
+        kind: Kind::Duration { min_ms: 0, max_ms: DAY },
+        default: Def::D(5 * MIN),
+        doc: "Release the loaded transcription and speaker models (and the memory they hold, over a gigabyte for Parakeet) once none has been used for this long; the next recording or transcription loads them again. The live and final passes share one loaded model. 0s keeps them loaded.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "stt.diarization.enabled",
         kind: Kind::Bool,
         default: Def::B(true),

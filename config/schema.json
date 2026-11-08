@@ -1921,6 +1921,20 @@
               "type": "integer",
               "x-reload": "live",
               "x-ui": false
+            },
+            "unload_after": {
+              "default": "5m",
+              "description": "Release the loaded transcription and speaker models (and the memory they hold, over a gigabyte for Parakeet) once none has been used for this long; the next recording or transcription loads them again. The live and final passes share one loaded model. 0s keeps them loaded.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1d",
+              "x-max-ms": 86400000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
             }
           },
           "type": "object"

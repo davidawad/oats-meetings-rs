@@ -611,6 +611,21 @@ pub fn clear_speaker_cache() {
     *SPEAKER_CACHE.lock().expect("coreml speaker cache") = None;
 }
 
+/// Whether a loaded recogniser or speaker model is held outside its cache (`idle`).
+pub fn in_use() -> bool {
+    let asr = CACHE
+        .lock()
+        .expect("coreml cache")
+        .as_ref()
+        .is_some_and(|c| Arc::strong_count(&c.loaded) > 1);
+    let speaker = SPEAKER_CACHE
+        .lock()
+        .expect("coreml speaker cache")
+        .as_ref()
+        .is_some_and(|c| Arc::strong_count(&c.2) > 1);
+    asr || speaker
+}
+
 impl SpeakerNet {
     /// Load `entry`'s `fbank` and `embedding` bundles from `dir` on the compute units `provider`
     /// asks for. Cached per directory and compute units.

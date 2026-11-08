@@ -30,6 +30,7 @@ pub mod cloud;
 #[cfg(target_os = "macos")]
 pub mod coreml;
 pub mod diarize;
+pub mod idle;
 #[cfg(feature = "whisper")]
 pub mod local;
 pub mod mel;
@@ -569,6 +570,8 @@ pub struct Settings {
     pub model_url: String,
     pub auto_download: bool,
     pub threads: u32,
+    /// `stt.local.unload_after`: release the loaded models after this long unused.
+    pub unload_after: std::time::Duration,
     pub provider: SttProvider,
     /// `stt.local.piece` in samples: the longest stretch a sherpa-onnx model decodes at once.
     pub piece_samples: usize,
@@ -639,6 +642,7 @@ impl Settings {
             model_url: c.local.model_url.trim().to_string(),
             auto_download: c.local.auto_download,
             threads: c.local.threads,
+            unload_after: c.local.unload_after.as_duration(),
             provider: c.local.provider,
             piece_samples: samples_of(c.local.piece).max(1),
             tdt: TdtLimits {
@@ -699,6 +703,7 @@ pub fn make_asr(
     network_allow: bool,
     secrets: &dyn crate::secrets::SecretStore,
 ) -> Result<Arc<dyn Asr>> {
+    idle::touch(s.unload_after);
     match s.backend {
         SttBackend::Local => local_asr(s),
         SttBackend::Cloud => {
@@ -1152,6 +1157,7 @@ impl Live {
 
     /// The live transcriber `s` configures.
     pub fn for_settings(asr: Arc<dyn Asr>, s: &Settings) -> Live {
+        idle::touch(s.unload_after);
         Live::new(
             asr,
             &s.language,
@@ -1339,6 +1345,7 @@ pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<
         echo_dropped: recognised - kept,
         kept,
     };
+    idle::touch(s.unload_after);
     Ok((by_time(all), stages))
 }
 

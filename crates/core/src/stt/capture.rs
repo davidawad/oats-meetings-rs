@@ -99,6 +99,7 @@ fn live_worker(
         }
     }
     out.stages = Some(live.mic_stages());
+    super::idle::touch(s.unload_after);
     out
 }
 
