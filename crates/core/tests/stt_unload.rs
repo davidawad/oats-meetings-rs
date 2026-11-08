@@ -1,17 +1,59 @@
-#![cfg(all(feature = "parakeet", target_os = "linux"))]
 //! Idle model release (dot-4uzgol.102): after a transcription through the engine (live + final
 //! pass, one shared Parakeet recogniser and speaker model), `stt.local.unload_after` of quiet
-//! drops the models and the process's anonymous memory returns near where it started. Its own
-//! test binary so no other test's models or threads skew this process's RSS. The model comes from
-//! `ci/fetch-models.sh` (OATS_WHISPER_MODELS_DIR); it is never committed.
+//! drops the models and the process's anonymous memory returns near where it started (Linux,
+//! `parakeet` feature). Its own test binary so no other test's models or threads skew this
+//! process's RSS. The model comes from `ci/fetch-models.sh` (OATS_WHISPER_MODELS_DIR); it is never
+//! committed.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(all(feature = "parakeet", target_os = "linux"))]
+use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(all(feature = "parakeet", target_os = "linux"))]
 use std::time::{Duration, Instant};
 
 use oats_core::action::Action;
 use oats_core::control::engine::{Engine, EngineOpts};
 
+fn engine_with(dir: &Path, toml: &str) -> Arc<Engine> {
+    let cfg = dir.join("cfg").join("config.toml");
+    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    std::fs::write(&cfg, toml).unwrap();
+    Engine::new(EngineOpts {
+        user_config: cfg,
+        pack: None,
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        machine: "default".into(),
+        sessions_dir: dir.join("data").join("sessions"),
+        secrets: None,
+    })
+    .unwrap()
+}
+
+fn unload_after(e: &Engine) -> serde_json::Value {
+    e.dispatch(&Action::ConfigGet {
+        key: "stt.local.unload_after".into(),
+    })
+    .unwrap()["value"]
+        .clone()
+}
+
+/// The idle timeout is a declarative key: five minutes by default, settable in the config file
+/// (0s keeps the models loaded).
+#[test]
+fn unload_after_is_a_config_key_defaulting_to_five_minutes() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(unload_after(&engine_with(dir.path(), "")), "5m");
+    let dir = tempfile::tempdir().unwrap();
+    let e = engine_with(dir.path(), "[stt.local]\nunload_after = \"2s\"\n");
+    assert_eq!(unload_after(&e), "2s");
+    let dir = tempfile::tempdir().unwrap();
+    let e = engine_with(dir.path(), "[stt.local]\nunload_after = \"0s\"\n");
+    assert_eq!(unload_after(&e), "0s");
+}
+
+#[cfg(all(feature = "parakeet", target_os = "linux"))]
 /// RssAnon of this process, in bytes.
 fn rss_anon() -> u64 {
     let s = std::fs::read_to_string("/proc/self/status").unwrap();
@@ -23,6 +65,7 @@ fn rss_anon() -> u64 {
     kb * 1024
 }
 
+#[cfg(all(feature = "parakeet", target_os = "linux"))]
 fn models_dir() -> PathBuf {
     PathBuf::from(
         std::env::var("OATS_WHISPER_MODELS_DIR")
@@ -30,35 +73,24 @@ fn models_dir() -> PathBuf {
     )
 }
 
+#[cfg(all(feature = "parakeet", target_os = "linux"))]
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/stt")
         .join(name)
 }
 
+#[cfg(all(feature = "parakeet", target_os = "linux"))]
 #[test]
 fn the_models_are_released_after_the_idle_timeout() {
     let dir = tempfile::tempdir().unwrap();
-    let cfg = dir.path().join("cfg").join("config.toml");
-    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
-    std::fs::write(
-        &cfg,
-        format!(
+    let engine = engine_with(
+        dir.path(),
+        &format!(
             "[stt.local]\nmodel = \"parakeet-tdt-0.6b-v2\"\nmodels_dir = '{}'\nthreads = 4\nauto_download = false\nunload_after = \"2s\"\n",
             models_dir().display()
         ),
-    )
-    .unwrap();
-    let engine: Arc<Engine> = Engine::new(EngineOpts {
-        user_config: cfg,
-        pack: None,
-        os: "linux".into(),
-        arch: "x86_64".into(),
-        machine: "default".into(),
-        sessions_dir: dir.path().join("data").join("sessions"),
-        secrets: None,
-    })
-    .unwrap();
+    );
     let active = |e: &Engine| {
         e.dispatch(&Action::SttStatus {}).unwrap()["local"]["provider"]["active"].clone()
     };
