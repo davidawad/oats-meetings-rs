@@ -1310,14 +1310,26 @@ mod tests {
         let (engine, _d) = testutil::engine(&[]);
         engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
         let mut st = State::default();
+        // sync_rec skips a tick while another engine thread holds the recorder (it never
+        // blocks the window); the window syncs again on its next tick, and so does this.
+        let sync_until = |st: &mut State, want: fn(&Rec) -> bool| {
+            let t = std::time::Instant::now();
+            st.sync_rec(&engine);
+            while !want(&st.rec) {
+                assert!(
+                    t.elapsed() < std::time::Duration::from_secs(5),
+                    "{:?}",
+                    st.rec
+                );
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                st.sync_rec(&engine);
+            }
+        };
         model::dispatch(&engine, "record-start", json!({})).unwrap();
-        st.sync_rec(&engine);
-        assert!(matches!(st.rec, Rec::Recording { .. }));
+        sync_until(&mut st, |r| matches!(r, Rec::Recording { .. }));
         model::dispatch(&engine, "record-pause", json!({})).unwrap();
-        st.sync_rec(&engine);
-        assert!(matches!(st.rec, Rec::Paused { .. }));
+        sync_until(&mut st, |r| matches!(r, Rec::Paused { .. }));
         model::dispatch(&engine, "record-stop", json!({})).unwrap();
-        st.sync_rec(&engine);
-        assert_eq!(st.rec, Rec::Idle);
+        sync_until(&mut st, |r| *r == Rec::Idle);
     }
 }
