@@ -3,13 +3,16 @@
 //! files by role; `stt.local.provider` picks the onnxruntime execution provider (CoreML on macOS,
 //! falling back to the CPU when CoreML cannot load the model). The loaded recogniser is cached per
 //! model directory; config reload clears it when `stt.local.*` changes, and `idle` once
-//! `stt.local.unload_after` passes unused. Each loaded model lives on a thread of its own that
-//! exits when it is dropped (`confine`), so what onnxruntime leaves on the threads that run it is
-//! released with it.
+//! `stt.local.unload_after` passes unused. Each loaded model runs in a worker process of its own
+//! that ends when it is dropped (`worker`), so whatever onnxruntime and CoreML keep for it is
+//! released with it; without a worker command, on a thread of its own that exits with it
+//! (`confine`).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
 use sherpa_onnx::{
     OfflineMoonshineModelConfig, OfflineRecognizer, OfflineRecognizerConfig,
     OfflineTransducerModelConfig, SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
@@ -18,12 +21,188 @@ use sherpa_onnx::{
 use super::catalog::Entry;
 use super::confine::Confined;
 use super::wav::SAMPLE_RATE;
+use super::worker::Worker;
 use super::{Asr, Segment};
 use crate::config::typed::SttProvider;
 use crate::config::{ConfigError, Result};
 
+/// A model to make, wherever it runs: the recogniser (its catalog arch and files by role) or the
+/// speaker model, with its threads and execution provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Spec {
+    Recognizer {
+        arch: String,
+        files: BTreeMap<String, String>,
+        threads: i32,
+        provider: String,
+    },
+    Speaker {
+        model: String,
+        threads: i32,
+        provider: String,
+    },
+}
+
+impl Spec {
+    /// What it makes, for messages.
+    pub fn what(&self) -> String {
+        match self {
+            Spec::Recognizer {
+                arch,
+                files,
+                provider,
+                ..
+            } => format!(
+                "the {arch} recogniser {} on {provider}",
+                files.get("tokens").map_or("", String::as_str)
+            ),
+            Spec::Speaker {
+                model, provider, ..
+            } => format!("the speaker model {model} on {provider}"),
+        }
+    }
+}
+
+/// A made model.
+pub enum Model {
+    Recognizer(OfflineRecognizer),
+    Speaker(SpeakerEmbeddingExtractor),
+}
+
+/// What a model gives for some audio.
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Reply {
+    /// The recogniser's text, tokens and their times.
+    Decoded {
+        text: String,
+        tokens: Vec<String>,
+        timestamps: Option<Vec<f32>>,
+        durations: Option<Vec<f32>>,
+    },
+    /// The speaker model's embedding; `None` when it wants more audio.
+    Embedding(Option<Vec<f32>>),
+}
+
+impl Model {
+    pub fn make(spec: &Spec) -> Option<Model> {
+        match spec {
+            Spec::Recognizer {
+                arch,
+                files,
+                threads,
+                provider,
+            } => {
+                let f = |role: &str| files.get(role).cloned();
+                let mut cfg = OfflineRecognizerConfig::default();
+                match arch.as_str() {
+                    "transducer" => {
+                        cfg.model_config.transducer = OfflineTransducerModelConfig {
+                            encoder: f("encoder"),
+                            decoder: f("decoder"),
+                            joiner: f("joiner"),
+                        }
+                    }
+                    "moonshine" => {
+                        cfg.model_config.moonshine = OfflineMoonshineModelConfig {
+                            preprocessor: f("preprocessor"),
+                            encoder: f("encoder"),
+                            uncached_decoder: f("uncached_decoder"),
+                            cached_decoder: f("cached_decoder"),
+                            merged_decoder: None,
+                        }
+                    }
+                    _ => return None,
+                }
+                cfg.model_config.tokens = f("tokens");
+                cfg.model_config.num_threads = *threads;
+                cfg.model_config.provider = Some(provider.clone());
+                OfflineRecognizer::create(&cfg).map(Model::Recognizer)
+            }
+            Spec::Speaker {
+                model,
+                threads,
+                provider,
+            } => SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig {
+                model: Some(model.clone()),
+                num_threads: *threads,
+                debug: false,
+                provider: Some(provider.clone()),
+            })
+            .map(Model::Speaker),
+        }
+    }
+
+    /// Run the model on `pcm` (16 kHz mono).
+    pub fn run(&self, pcm: &[f32]) -> Reply {
+        match self {
+            Model::Recognizer(r) => {
+                let stream = r.create_stream();
+                stream.accept_waveform(SAMPLE_RATE as i32, pcm);
+                r.decode(&stream);
+                match stream.get_result() {
+                    Some(res) => Reply::Decoded {
+                        text: res.text,
+                        tokens: res.tokens,
+                        timestamps: res.timestamps,
+                        durations: res.durations,
+                    },
+                    None => Reply::Decoded {
+                        text: String::new(),
+                        tokens: vec![],
+                        timestamps: None,
+                        durations: None,
+                    },
+                }
+            }
+            Model::Speaker(x) => Reply::Embedding((|| {
+                let stream = x.create_stream()?;
+                stream.accept_waveform(SAMPLE_RATE as i32, pcm);
+                stream.input_finished();
+                if !x.is_ready(&stream) {
+                    return None;
+                }
+                x.compute(&stream)
+            })()),
+        }
+    }
+}
+
+/// Where a loaded model runs: a worker process, or a thread of this one.
+enum Home {
+    Process(Worker),
+    Thread(Confined<Model>),
+}
+
+impl Home {
+    /// Make `spec`'s model, in a worker when the host can start one; `None` when it would not load.
+    fn make(thread: &str, spec: Spec) -> Option<Home> {
+        match Worker::spawn(&spec) {
+            Some(Ok(w)) => Some(Home::Process(w)),
+            Some(Err(e)) => {
+                crate::elog!("oats-meetings-rs: {e}");
+                None
+            }
+            None => Confined::spawn(thread, move || Model::make(&spec)).map(Home::Thread),
+        }
+    }
+
+    /// Run the model on `pcm`; `None` when its worker is gone.
+    fn run(&self, pcm: &[f32]) -> Option<Reply> {
+        match self {
+            Home::Process(w) => w
+                .run(pcm)
+                .map_err(|e| crate::elog!("oats-meetings-rs: {e}"))
+                .ok(),
+            Home::Thread(c) => {
+                let samples = pcm.to_vec();
+                Some(c.run(move |m| m.run(&samples)))
+            }
+        }
+    }
+}
+
 struct Loaded {
-    recognizer: Confined<OfflineRecognizer>,
+    model: Home,
     provider: String,
 }
 
@@ -66,8 +245,26 @@ pub struct SherpaAsr {
     piece: usize,
 }
 
-fn config(entry: &Entry, dir: &Path, threads: u32) -> Result<OfflineRecognizerConfig> {
-    let file = |role: &str| -> Result<Option<String>> {
+/// The recogniser `entry` names, from the files in `dir`, on `provider`.
+fn spec(entry: &Entry, dir: &Path, threads: u32, provider: &str) -> Result<Spec> {
+    let roles: &[&str] = match entry.arch.as_str() {
+        "transducer" => &["encoder", "decoder", "joiner", "tokens"],
+        "moonshine" => &[
+            "preprocessor",
+            "encoder",
+            "uncached_decoder",
+            "cached_decoder",
+            "tokens",
+        ],
+        a => {
+            return Err(ConfigError::new(
+                "model_load_failed",
+                format!("{}: sherpa-onnx arch '{a}' is not supported", entry.id),
+            ))
+        }
+    };
+    let mut files = BTreeMap::new();
+    for role in roles {
         let f = entry.file(role).ok_or_else(|| {
             ConfigError::new(
                 "model_load_failed",
@@ -75,43 +272,20 @@ fn config(entry: &Entry, dir: &Path, threads: u32) -> Result<OfflineRecognizerCo
             )
         })?;
         let p = dir.join(&f.name);
-        if p.is_file() {
-            Ok(Some(p.display().to_string()))
-        } else {
-            Err(ConfigError::new(
+        if !p.is_file() {
+            return Err(ConfigError::new(
                 "model_not_found",
                 format!("{} not found", p.display()),
-            ))
+            ));
         }
-    };
-    let mut cfg = OfflineRecognizerConfig::default();
-    match entry.arch.as_str() {
-        "transducer" => {
-            cfg.model_config.transducer = OfflineTransducerModelConfig {
-                encoder: file("encoder")?,
-                decoder: file("decoder")?,
-                joiner: file("joiner")?,
-            }
-        }
-        "moonshine" => {
-            cfg.model_config.moonshine = OfflineMoonshineModelConfig {
-                preprocessor: file("preprocessor")?,
-                encoder: file("encoder")?,
-                uncached_decoder: file("uncached_decoder")?,
-                cached_decoder: file("cached_decoder")?,
-                merged_decoder: None,
-            }
-        }
-        a => {
-            return Err(ConfigError::new(
-                "model_load_failed",
-                format!("{}: sherpa-onnx arch '{a}' is not supported", entry.id),
-            ))
-        }
+        files.insert((*role).to_string(), p.display().to_string());
     }
-    cfg.model_config.tokens = file("tokens")?;
-    cfg.model_config.num_threads = i32::try_from(threads.max(1)).unwrap_or(i32::MAX);
-    Ok(cfg)
+    Ok(Spec::Recognizer {
+        arch: entry.arch.clone(),
+        files,
+        threads: i32::try_from(threads.max(1)).unwrap_or(i32::MAX),
+        provider: provider.to_string(),
+    })
 }
 
 impl SherpaAsr {
@@ -131,17 +305,13 @@ impl SherpaAsr {
                 });
             }
         }
-        let mut cfg = config(entry, dir, threads)?;
         let mut tried = vec![];
         for name in super::provider_order(provider) {
-            cfg.model_config.provider = Some((*name).to_string());
-            let c = cfg.clone();
-            if let Some(r) =
-                Confined::spawn("oats-sherpa-asr", move || OfflineRecognizer::create(&c))
-            {
+            let spec = spec(entry, dir, threads, name)?;
+            if let Some(model) = Home::make("oats-sherpa-asr", spec) {
                 super::idle::loaded(&format!("{} on {name}", entry.id));
                 let loaded = Arc::new(Loaded {
-                    recognizer: r,
+                    model,
                     provider: (*name).to_string(),
                 });
                 *cache = Some((dir.to_path_buf(), provider, threads, Arc::clone(&loaded)));
@@ -172,23 +342,23 @@ impl SherpaAsr {
     }
 
     fn decode(&self, pcm: &[f32]) -> Vec<Segment> {
-        let samples = pcm.to_vec();
-        let Some(res) = self.loaded.recognizer.run(move |r| {
-            let stream = r.create_stream();
-            stream.accept_waveform(SAMPLE_RATE as i32, &samples);
-            r.decode(&stream);
-            stream.get_result()
-        }) else {
+        let Some(Reply::Decoded {
+            text,
+            tokens,
+            timestamps,
+            durations,
+        }) = self.loaded.model.run(pcm)
+        else {
             return vec![];
         };
         let end = pcm.len() as f64 / f64::from(SAMPLE_RATE);
-        match &res.timestamps {
-            Some(t) if !t.is_empty() && t.len() == res.tokens.len() => {
-                super::sentences(&res.tokens, t, res.durations.as_deref(), end)
+        match &timestamps {
+            Some(t) if !t.is_empty() && t.len() == tokens.len() => {
+                super::sentences(&tokens, t, durations.as_deref(), end)
             }
             // No token times (Moonshine): the piece is one segment.
             _ => {
-                let text = res.text.trim().to_string();
+                let text = text.trim().to_string();
                 if text.is_empty() {
                     vec![]
                 } else {
@@ -233,7 +403,7 @@ impl Asr for SherpaAsr {
 /// A sherpa-onnx speaker-embedding model (`stt.diarization.algorithm = sherpa-onnx`,
 /// dot-4uzgol.83): one embedding per utterance, from the whole utterance.
 pub struct SpeakerExtractor {
-    extractor: Confined<SpeakerEmbeddingExtractor>,
+    model: Home,
     provider: String,
 }
 
@@ -263,18 +433,15 @@ impl SpeakerExtractor {
         }
         let mut tried = vec![];
         for name in super::provider_order(provider) {
-            let cfg = SpeakerEmbeddingExtractorConfig {
-                model: Some(path.display().to_string()),
-                num_threads: i32::try_from(threads.max(1)).unwrap_or(i32::MAX),
-                debug: false,
-                provider: Some((*name).to_string()),
+            let spec = Spec::Speaker {
+                model: path.display().to_string(),
+                threads: i32::try_from(threads.max(1)).unwrap_or(i32::MAX),
+                provider: (*name).to_string(),
             };
-            if let Some(extractor) = Confined::spawn("oats-sherpa-speaker", move || {
-                SpeakerEmbeddingExtractor::create(&cfg)
-            }) {
+            if let Some(model) = Home::make("oats-sherpa-speaker", spec) {
                 super::idle::loaded(&format!("speaker model {} on {name}", path.display()));
                 let loaded = Arc::new(SpeakerExtractor {
-                    extractor,
+                    model,
                     provider: (*name).to_string(),
                 });
                 *cache = Some((path.to_path_buf(), provider, threads, Arc::clone(&loaded)));
@@ -298,15 +465,9 @@ impl SpeakerExtractor {
 
     /// The embedding of `pcm` (16 kHz mono); `None` when the model wants more audio.
     pub fn embed(&self, pcm: &[f32]) -> Option<Vec<f32>> {
-        let samples = pcm.to_vec();
-        self.extractor.run(move |x| {
-            let stream = x.create_stream()?;
-            stream.accept_waveform(SAMPLE_RATE as i32, &samples);
-            stream.input_finished();
-            if !x.is_ready(&stream) {
-                return None;
-            }
-            x.compute(&stream)
-        })
+        match self.model.run(pcm)? {
+            Reply::Embedding(e) => e,
+            Reply::Decoded { .. } => None,
+        }
     }
 }

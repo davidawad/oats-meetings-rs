@@ -1,8 +1,10 @@
-//! Idle model release (dot-4uzgol.102, .107): after a transcription through the engine (live +
-//! final pass, one shared Parakeet recogniser and the sherpa-onnx speaker model),
-//! `stt.local.unload_after` of quiet drops both models and the process footprint (macOS
-//! `phys_footprint`, Linux `RssAnon`) returns within 100 MB of where it was before the load, and
-//! stays there; the next transcription loads them again (`parakeet` feature). Its own test binary
+//! Idle model release (dot-4uzgol.102, .107, .108): after a transcription through the engine
+//! (live + final pass, one shared Parakeet recogniser and the sherpa-onnx speaker model),
+//! `stt.local.unload_after` of quiet drops both models and the footprint (macOS
+//! `phys_footprint`, Linux `RssAnon`) of this process and its model workers together returns
+//! within 100 MB of where it was before the load, and stays there; the next transcription loads
+//! them again (`parakeet` feature). The models run in worker processes, as in the app: this test
+//! binary is the worker (`footprint::worker`), and each unload ends its worker. Its own test binary
 //! so no other test's models or threads skew this process's footprint. The models come from
 //! `ci/fetch-models.sh` (OATS_WHISPER_MODELS_DIR, OATS_DIARIZE_MODELS_DIR); never committed.
 
@@ -57,38 +59,85 @@ mod footprint {
 
     use oats_core::action::Action;
     use oats_core::control::engine::Engine;
-    use oats_core::stt::{catalog, wav};
+    use oats_core::stt::{catalog, wav, worker};
 
     /// What may stay of the models after they unload.
     const SLACK: u64 = 100 << 20;
 
-    /// RssAnon of this process, in bytes.
+    /// RssAnon from a /proc/<pid>/status, in bytes.
     #[cfg(target_os = "linux")]
-    fn footprint() -> u64 {
-        let s = std::fs::read_to_string("/proc/self/status").unwrap();
-        let kb: u64 = s
+    fn rss_anon(status: &str) -> Option<u64> {
+        let kb: u64 = status
             .lines()
             .find_map(|l| l.strip_prefix("RssAnon:"))
-            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
-            .expect("RssAnon in /proc/self/status");
-        kb * 1024
+            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())?;
+        Some(kb * 1024)
     }
 
-    /// phys_footprint of this process (what Activity Monitor's Memory column shows), in bytes.
-    #[cfg(target_os = "macos")]
+    /// RssAnon of this process and its children (the model workers), in bytes. The children are
+    /// found by their parent in /proc, not by the ids `Command` gives, which name other
+    /// processes when /proc belongs to another pid namespace (a sandbox).
+    #[cfg(target_os = "linux")]
     fn footprint() -> u64 {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let me = stat.split(' ').next().unwrap().to_string();
+        let mut total = rss_anon(&std::fs::read_to_string("/proc/self/status").unwrap())
+            .expect("RssAnon in /proc/self/status");
+        for d in std::fs::read_dir("/proc").unwrap().flatten() {
+            let Ok(stat) = std::fs::read_to_string(d.path().join("stat")) else {
+                continue;
+            };
+            // pid (comm) state ppid ...; comm may hold spaces.
+            let ppid = stat
+                .rsplit_once(") ")
+                .and_then(|(_, rest)| rest.split(' ').nth(1));
+            if ppid == Some(me.as_str()) {
+                if let Ok(s) = std::fs::read_to_string(d.path().join("status")) {
+                    total += rss_anon(&s).unwrap_or(0);
+                }
+            }
+        }
+        total
+    }
+
+    /// phys_footprint of process `pid` (what Activity Monitor's Memory column shows), in bytes;
+    /// `None` once it has exited.
+    #[cfg(target_os = "macos")]
+    fn footprint_of(pid: u32) -> Option<u64> {
         let mut info = std::mem::MaybeUninit::<libc::rusage_info_v2>::zeroed();
         // SAFETY: RUSAGE_INFO_V2 fills exactly a rusage_info_v2.
         let rc = unsafe {
             libc::proc_pid_rusage(
-                libc::getpid(),
+                pid as libc::pid_t,
                 libc::RUSAGE_INFO_V2,
                 info.as_mut_ptr().cast::<libc::rusage_info_t>(),
             )
         };
-        assert_eq!(rc, 0, "proc_pid_rusage");
-        // SAFETY: filled above.
-        unsafe { info.assume_init() }.ri_phys_footprint
+        // SAFETY: filled when rc is 0.
+        (rc == 0).then(|| unsafe { info.assume_init() }.ri_phys_footprint)
+    }
+
+    /// phys_footprint of this process and its live model workers, in bytes.
+    #[cfg(target_os = "macos")]
+    fn footprint() -> u64 {
+        let me = footprint_of(std::process::id()).expect("own footprint");
+        me + worker::live()
+            .into_iter()
+            .filter_map(footprint_of)
+            .sum::<u64>()
+    }
+
+    fn workers(e: &Engine) -> u64 {
+        status(e)["models"]["workers"].as_u64().unwrap()
+    }
+
+    /// This test binary as a model worker, when the footprint test starts it as one (the app
+    /// starts itself as `oats-meetings-rs stt-worker`); otherwise nothing.
+    #[test]
+    fn worker() {
+        if std::env::args().any(|a| a == worker::ARG) {
+            std::process::exit(worker::serve());
+        }
     }
 
     fn fixture(name: &str) -> PathBuf {
@@ -175,8 +224,10 @@ mod footprint {
         let s = status(e);
         assert!(!s["local"]["provider"]["active"].is_null(), "{s}");
         assert_eq!(s["diarization"]["active"], "sherpa-onnx", "{s}");
-        // The recogniser and the speaker model, each once (live and final share them).
+        // The recogniser and the speaker model, each once (live and final share them), each in
+        // a worker of its own.
         assert_eq!(loads(e) - before, 2, "{s}");
+        assert_eq!(workers(e), 2, "{s}");
         footprint()
     }
 
@@ -187,6 +238,9 @@ mod footprint {
             assert!(t.elapsed() < Duration::from_secs(60), "still loaded");
             std::thread::sleep(Duration::from_millis(100));
         }
+        // Each unload ended its worker.
+        assert_eq!(workers(e), 0);
+        assert!(worker::live().is_empty());
         let t = Instant::now();
         let first = footprint();
         let mut high = first;
@@ -211,6 +265,14 @@ mod footprint {
         let Some(models) = models(dir.path()) else {
             return;
         };
+        worker::set_command(
+            std::env::current_exe().unwrap(),
+            vec![
+                "--exact".into(),
+                "footprint::worker".into(),
+                "--nocapture".into(),
+            ],
+        );
         let engine = super::engine_with(
             dir.path(),
             &format!(

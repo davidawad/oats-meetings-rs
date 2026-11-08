@@ -42,6 +42,8 @@ pub mod sherpa;
 pub mod tdt;
 pub mod wav;
 pub mod wer;
+#[cfg(feature = "parakeet")]
+pub mod worker;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};

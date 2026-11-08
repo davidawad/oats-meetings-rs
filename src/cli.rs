@@ -18,6 +18,8 @@ pub enum Mode {
     Help,
     Headless,
     Gui,
+    /// A sherpa-onnx model worker the app started (`oats_core::stt::worker`); not for people.
+    SttWorker,
     /// An argument the app does not know, to print and exit 2.
     Bad(String),
 }
@@ -26,6 +28,7 @@ pub fn mode(args: &[String]) -> Mode {
     match args.first().map(String::as_str) {
         Some("ctl") => return Mode::Ctl,
         Some("config") => return Mode::Config,
+        Some("stt-worker") => return Mode::SttWorker,
         _ => {}
     }
     let mut m = Mode::Gui;
@@ -57,6 +60,7 @@ mod tests {
         assert_eq!(m(&["--headless", "--version"]), Mode::Version);
         assert_eq!(m(&["ctl", "ping"]), Mode::Ctl);
         assert_eq!(m(&["config", "--help"]), Mode::Config);
+        assert_eq!(m(&["stt-worker"]), Mode::SttWorker);
         for h in ["--help", "-h"] {
             assert_eq!(m(&[h]), Mode::Help);
             assert_eq!(m(&["--headless", h]), Mode::Help);

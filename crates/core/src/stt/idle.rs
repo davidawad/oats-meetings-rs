@@ -131,11 +131,17 @@ pub fn loaded(what: &str) {
     );
 }
 
-/// The `models` object of `stt-status`: loads from disk and idle unloads since launch.
+/// The `models` object of `stt-status`: loads from disk and idle unloads since launch, and the
+/// model worker processes alive now (one per loaded sherpa-onnx model).
 pub fn status() -> serde_json::Value {
+    #[cfg(feature = "parakeet")]
+    let workers = super::worker::live().len();
+    #[cfg(not(feature = "parakeet"))]
+    let workers = 0;
     serde_json::json!({
         "loads": LOADS.load(Ordering::SeqCst),
         "unloads": UNLOADS.load(Ordering::SeqCst),
+        "workers": workers,
     })
 }
 

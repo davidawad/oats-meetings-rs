@@ -18,7 +18,7 @@ pub struct Confined<T> {
 }
 
 /// Run `f` in an autorelease pool of its own on macOS (what CoreML frees is released at its end).
-fn pooled<R>(f: impl FnOnce() -> R) -> R {
+pub(super) fn pooled<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(target_os = "macos")]
     return objc2::rc::autoreleasepool(|_| f());
     #[cfg(not(target_os = "macos"))]
