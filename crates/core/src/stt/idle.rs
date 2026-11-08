@@ -107,8 +107,18 @@ fn models_in_use() -> bool {
     false
 }
 
+/// Held for the whole of an unload, so a status read never sees one cache emptied while the
+/// rest, and the heap they leave, are still being freed.
+static UNLOADING: Mutex<()> = Mutex::new(());
+
+/// Wait for an unload in progress, if any, to finish (the loaded-model status reads after it).
+pub fn settled() {
+    drop(UNLOADING.lock().expect("idle unload"));
+}
+
 /// Drop every cached model, then return the freed heap to the OS.
 fn unload_models() {
+    let _unloading = UNLOADING.lock().expect("idle unload");
     #[cfg(feature = "whisper")]
     super::local::clear_cache();
     #[cfg(feature = "parakeet")]

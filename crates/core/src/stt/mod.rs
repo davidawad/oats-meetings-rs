@@ -894,6 +894,7 @@ fn coreml_loaded(_dir: &Path) -> Option<String> {
 /// would use; `fallback`, the model running in place of the configured one and why (no CoreML in
 /// this build, or CoreML failed to load it).
 fn provider_status(s: &Settings) -> Value {
+    idle::settled();
     let mut fallback = Value::Null;
     let (runtime, active): (Option<&str>, Option<String>) = match s.entry.runtime {
         catalog::Runtime::WhisperCpp => (Some("whisper.cpp"), Some("cpu".into())),
