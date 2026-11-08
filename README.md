@@ -2,3 +2,29 @@ oats-meetings-rs: GPUI + Rust rewrite of openoats (private).
 
 Private; licence undecided (placeholder `LicenseRef-Undecided`). No cargo on carbon: build in pods.
 CI: none hosted. Pods are the CI: `bin/pod-run <repo> <ref> bash ci/linux-nix.sh` (add `env CROSS_TARGET=x86_64-pc-windows-msvc` for the Windows check).
+
+## Calendar
+
+Recordings are titled from the calendar event that overlaps them. Events come from
+`calendar.sources`: this computer's accounts, Google, Microsoft 365, CalDAV, ICS feeds, or any
+program you name (`kind=command`). See [docs/calendar-providers.md](docs/calendar-providers.md).
+
+A command source needs no sign-in. Point it at whatever already prints your calendar, as ICS or as
+JSON events (Google Calendar API, Microsoft Graph, or plain `{title, start, end, uid, location,
+attendees}`). It runs on every calendar read, without a shell:
+
+```sh
+#!/bin/sh
+# ~/bin/my-meetings: any tool that prints events works; this one prints plain JSON.
+cat <<JSON
+[{"title": "Design review", "start": "2026-11-09T10:00:00+01:00",
+  "end": "2026-11-09T10:30:00+01:00", "uid": "review-42@example.com",
+  "attendees": ["ana@example.com"]}]
+JSON
+```
+
+```sh
+ctl calendar-source-add name=mine kind=command 'argv=["/home/me/bin/my-meetings"]'
+ctl calendar-connect source=mine      # a test run: how many events it read, or why it failed
+ctl calendar-events
+```

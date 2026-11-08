@@ -11,6 +11,7 @@
 //! - `caldav`: any CalDAV server, found through `.well-known/caldav` (`caldav`).
 //! - `ics`: the cached `ics.feeds` (URLs and local files).
 //! - `eventkit`: the macOS Calendar app (the os-local provider of a Mac, by its old name).
+//! - `command`: a program the user names, run on each read, printing ICS or JSON (`command`).
 //!
 //! Tests swap any provider for a fake with `Engine::set_calendar_provider`.
 
@@ -46,9 +47,13 @@ pub trait Provider: Send + Sync {
     ) -> Result<Vec<Event>>;
 }
 
-/// The engine's providers: the built-in one per kind unless a test put another in.
+/// The engine's providers: the built-in one per kind unless a test put another in; and the
+/// command sources' last runs.
 #[derive(Default)]
-pub struct ProviderSlot(Mutex<BTreeMap<&'static str, Arc<dyn Provider>>>);
+pub struct ProviderSlot(
+    Mutex<BTreeMap<&'static str, Arc<dyn Provider>>>,
+    super::command::Runs,
+);
 
 impl ProviderSlot {
     pub fn get(&self, kind: SourceKind) -> Arc<dyn Provider> {
@@ -61,6 +66,10 @@ impl ProviderSlot {
     pub fn set(&self, kind: SourceKind, p: Arc<dyn Provider>) {
         self.0.lock().expect("providers").insert(kind.as_str(), p);
     }
+
+    pub fn command_runs(&self) -> &super::command::Runs {
+        &self.1
+    }
 }
 
 fn builtin(kind: SourceKind) -> Arc<dyn Provider> {
@@ -71,6 +80,7 @@ fn builtin(kind: SourceKind) -> Arc<dyn Provider> {
         SourceKind::Google => Arc::new(super::google::Google),
         SourceKind::Microsoft => Arc::new(super::graph::Graph),
         SourceKind::Caldav => Arc::new(super::caldav::CalDav),
+        SourceKind::Command => Arc::new(super::command::CommandProvider),
     }
 }
 

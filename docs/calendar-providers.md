@@ -14,6 +14,7 @@ calendars the same way for all of them: the Settings > Calendar sources checkbox
 | `caldav`    | any CalDAV server: iCloud, Fastmail, Nextcloud, Proton Bridge, Radicale, ...             | `network.allow`  | user name + app password (`secret:` ref)  |
 | `ics`       | the cached `ics.feeds`: URLs (`https`, `webcal`, `caldav://`) and local `.ics` files      | the feed refresh | the feed's header secret                  |
 | `eventkit`  | the macOS Calendar app (the old name for os-local on a Mac)                              | none             | the Calendars grant                       |
+| `command`   | whatever a program you name prints (ICS, or Google / Graph / plain JSON events), run on each read | the program's own | none (the program's own)          |
 
 The default is `[{"name":"local","kind":"os-local"},{"name":"ics","kind":"ics"}]`, so the
 accounts already on the computer are used with no setup.
@@ -46,9 +47,56 @@ ctl calendar-source-add name=fastmail kind=caldav url=https://caldav.fastmail.co
 ctl calendar-connect source=fastmail         # lists the calendars it found
 ```
 
+`ctl calendar-source-edit name=<source> ...` changes the given fields of a source later.
+
 Settings has the same steps: **Use this computer's calendars**, **Add Google**, **Add Microsoft
 365**, then **Connect** on the new source. The `calendar.google_client_id` and
 `calendar.microsoft_client_id` keys give a default client to sources that set none.
+
+## Command sources
+
+A `command` source (dot-4uzgol.105) runs a program on every calendar read and takes the events it
+prints. Use it for any feed you already have: a calendar CLI, a script over an API, a file another
+tool keeps up to date. Nothing in oats knows about the program: its argv is user config.
+
+```sh
+ctl calendar-source-add name=mine kind=command 'argv=["my-calendar","events","--json"]' \
+    'env={"MY_CALENDAR_PROFILE":"work"}' cwd=/home/me timeout=30s format=auto
+ctl calendar-connect source=mine              # run it now: events read, or the error
+ctl calendar-source-edit name=mine format=json
+```
+
+- `argv` (required): the program and its arguments, an array (a string is split on spaces). It is
+  never run through a shell; for pipes, name a script.
+- `cwd`: its working directory (default the app's). `env`: variables added to the app's
+  environment, an object or `NAME=value` strings.
+- `timeout`: how long it may run (default `calendar.command_timeout`, 20 s); it is then killed,
+  with its process group on unix.
+- `format`: `auto` (default: `BEGIN:VCALENDAR` is ICS, `[` or `{` is JSON), `ics` or `json`.
+
+What it may print:
+
+- **ICS**: one VCALENDAR, read with the `ics.*` parser (recurrences expanded, `ics.default_tz`).
+- **JSON**: an array of events, or an object with the array under `items`, `events` or `value`.
+  Each event is one of:
+  - a Google Calendar API event: `summary`, `start.dateTime` or `start.date`, `end`, `iCalUID`,
+    `id`, `location`, `attendees[].email`, `status` (`cancelled` events are dropped);
+  - a Microsoft Graph event: `subject`, `start.dateTime` + `start.timeZone`, `iCalUId`,
+    `isCancelled`;
+  - a plain event: `title` or `summary`, `start`, `end` (RFC 3339, or `YYYY-MM-DD` for all-day),
+    and optionally `uid`, `location`, `attendees` (addresses or `{email, name}`), `url`,
+    `description`, `status`.
+
+Stdout is capped at `calendar.command_max_bytes` (8 MB). A run that cannot start, exits nonzero
+(`command_failed`, with the start of its stderr), runs past its timeout (`command_timeout`), or prints
+too much or something unreadable (`command_output`) is that source's error. It shows in
+`calendar-events`, `calendar-sources-list` (`error`, and `last_run`) and on the source's row in
+Settings. It never stops a recording, and the events of the source's last good run are still used.
+Events dedupe with the other sources by iCalUID and start, and a matched event names the session as
+with any other provider.
+
+In Settings, **Add command feed** opens a form (name, command, format, timeout, folder, env); a
+command source's row shows its command and last run, with **Run now** and **Edit**.
 
 ## Sign-in and tokens
 
@@ -87,7 +135,7 @@ tokens. CalDAV passwords and Google client secrets are `secret:` references, res
 `calendar.timeout` (one HTTP call), `calendar.oauth_timeout`, `calendar.token_skew`,
 `calendar.page_size` / `calendar.max_pages` (Google / Graph paging; CalDAV redirect hops),
 `calendar.token_file`, `calendar.google_*` and `calendar.microsoft_*` (client ids, tenant, endpoint
-URLs).
+URLs), `calendar.command_timeout` and `calendar.command_max_bytes` (command sources).
 
 ## Tests
 
@@ -99,3 +147,8 @@ URLs).
 - CalDAV discovery against a fake server, and against a real Radicale when `radicale` is on PATH.
   CI's nix environment provides one;
 - the Linux reader over a fake Evolution / Akonadi home.
+
+`crates/core/tests/calendar_command.rs` runs fixture scripts through a command source end to end:
+Google-shaped JSON, ICS, plain JSON, dedupe, a recording titled from it, and nonzero exit,
+timeout, oversized and unreadable output keeping the last good events. The JSON parsers have unit
+tests over synthetic events in `crates/core/src/calendar/command.rs`.

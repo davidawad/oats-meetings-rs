@@ -338,6 +338,8 @@ pub struct State {
     pub settings_ui: crate::views::settings::Ui,
     /// The Settings tab's Hooks panel (`views::hooks`).
     pub hooks_ui: crate::views::hooks::Ui,
+    /// The Calendar sources panel's Add / Edit command-source form (`views::calendar_sources`).
+    pub calsrc_draft: Option<crate::views::calendar_sources::Draft>,
     /// The last failed hook run, as the banner says it, until dismissed.
     pub hook_failure: Option<String>,
     /// Why the engine stopped the last recording itself (a forced `recording-stopped`), as the
@@ -731,6 +733,9 @@ impl State {
         }
         if crate::views::hooks::is_ours(e.path) {
             return crate::views::hooks::commit(self);
+        }
+        if crate::views::calendar_sources::is_ours(e.path) {
+            return crate::views::calendar_sources::commit(self);
         }
         match model::dispatch(
             engine,

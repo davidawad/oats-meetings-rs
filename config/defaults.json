@@ -45,6 +45,8 @@
   },
   "calendar": {
     "access_timeout": "2m",
+    "command_max_bytes": 8388608,
+    "command_timeout": "20s",
     "google_api": "https://www.googleapis.com/calendar/v3",
     "google_auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
     "google_client_id": "",

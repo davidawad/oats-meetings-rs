@@ -7,6 +7,10 @@
 //! thread, since a source being turned on may wait on the one macOS Calendars prompt or the
 //! network; the panel then re-reads `calendar-sources-list`. Connect opens the provider's sign-in
 //! page in the browser. Nothing here asks for access unless one of those is clicked.
+//! A command source (dot-4uzgol.105) shows its command and its last run (the error when it
+//! failed); Add command feed and its Edit open a form whose text boxes are the window's one editor
+//! (`State::edit`) and whose Save runs `calendar-source-add` / `calendar-source-edit`; Run now is
+//! `calendar-connect`, a test run off the UI thread.
 //! The panel re-reads at most once per `ics.poll_interval`, plus after each action.
 
 use std::time::Instant;
@@ -16,8 +20,187 @@ use serde_json::{json, Value};
 
 use crate::kit::{self, Kind, Size};
 use crate::model;
+use crate::state::State;
 use crate::theme;
 use crate::view::MainWindow;
+
+/// The command-source form's text boxes, as `Edit` paths.
+pub(crate) const NAME: &str = "calsrc:name";
+pub(crate) const COMMAND: &str = "calsrc:command";
+pub(crate) const TIMEOUT: &str = "calsrc:timeout";
+pub(crate) const CWD: &str = "calsrc:cwd";
+pub(crate) const ENV: &str = "calsrc:env";
+
+/// The formats a command source's output can be read as.
+const FORMATS: &[&str] = &["auto", "ics", "json"];
+
+/// The Add / Edit form of a command source.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Draft {
+    /// The source being edited (its name), None for a new one.
+    pub editing: Option<String>,
+    pub name: String,
+    /// The program and its arguments split on spaces, or a JSON array of them.
+    pub command: String,
+    pub format: String,
+    /// Empty: `calendar.command_timeout`.
+    pub timeout: String,
+    pub cwd: String,
+    /// `NAME=value` pairs split on spaces.
+    pub env: String,
+    pub error: Option<String>,
+}
+
+impl Draft {
+    fn dump(&self) -> Value {
+        json!({"editing": self.editing, "name": self.name, "command": self.command,
+               "format": self.format, "timeout": self.timeout, "cwd": self.cwd, "env": self.env,
+               "error": self.error})
+    }
+}
+
+/// argv as the form shows it: words joined by spaces, or a JSON array when one holds a space.
+pub(crate) fn argv_text(argv: &[String]) -> String {
+    if argv
+        .iter()
+        .any(|a| a.is_empty() || a.contains(char::is_whitespace))
+    {
+        serde_json::to_string(argv).unwrap_or_default()
+    } else {
+        argv.join(" ")
+    }
+}
+
+/// The form's command text as argv: a JSON array of strings, else split on whitespace.
+pub(crate) fn argv_of(text: &str) -> Value {
+    let t = text.trim();
+    if t.starts_with('[') {
+        if let Ok(v) = serde_json::from_str::<Vec<String>>(t) {
+            return json!(v);
+        }
+    }
+    json!(t.split_whitespace().collect::<Vec<_>>())
+}
+
+pub fn is_ours(path: &str) -> bool {
+    path.starts_with("calsrc:")
+}
+
+/// Enter in a form box: keep its text in the form.
+pub fn commit(st: &mut State) {
+    let Some(e) = st.edit.take() else { return };
+    let Some(d) = st.calsrc_draft.as_mut() else {
+        return;
+    };
+    let v = e.buf.trim().to_string();
+    match e.path {
+        NAME => d.name = v,
+        COMMAND => d.command = v,
+        TIMEOUT => d.timeout = v,
+        CWD => d.cwd = v,
+        ENV => d.env = v,
+        _ => {}
+    }
+}
+
+/// Open the Add form (`src` None) or the Edit form for the command source `src` (a
+/// `calendar-sources-list` row).
+pub fn open(st: &mut State, src: Option<&Value>) {
+    st.cancel_edit();
+    let strs = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect()
+    };
+    st.calsrc_draft = Some(match src {
+        None => Draft {
+            name: "command".into(),
+            format: "auto".into(),
+            ..Draft::default()
+        },
+        Some(s) => {
+            let text = |k: &str| s[k].as_str().unwrap_or_default().to_string();
+            let env: Vec<String> = s["env"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or_default()))
+                .collect();
+            Draft {
+                editing: Some(text("name")),
+                name: text("name"),
+                command: argv_text(&strs(&s["argv"])),
+                format: if text("format").is_empty() {
+                    "auto".into()
+                } else {
+                    text("format")
+                },
+                timeout: text("timeout"),
+                cwd: text("cwd"),
+                env: env.join(" "),
+                error: None,
+            }
+        }
+    });
+}
+
+/// Save the form through `calendar-source-add` / `-edit` (neither runs the command); the form
+/// stays open with the error on refusal. True when saved.
+pub fn save(st: &mut State, engine: &oats_core::control::engine::Engine) -> bool {
+    if st.edit.as_ref().is_some_and(|e| is_ours(e.path)) {
+        commit(st);
+    }
+    let Some(d) = st.calsrc_draft.clone() else {
+        return false;
+    };
+    let mut params = json!({"argv": argv_of(&d.command), "format": d.format,
+                            "timeout": d.timeout, "cwd": d.cwd, "env": d.env});
+    let id = match &d.editing {
+        None => {
+            params["name"] = json!(d.name);
+            params["kind"] = json!("command");
+            "calendar-source-add"
+        }
+        Some(old) => {
+            params["name"] = json!(old);
+            if old != &d.name {
+                params["rename"] = json!(d.name);
+            }
+            "calendar-source-edit"
+        }
+    };
+    match model::dispatch(engine, id, params) {
+        Ok(_) => {
+            st.calsrc_draft = None;
+            st.status = format!("Saved calendar source {}.", d.name);
+            true
+        }
+        Err(e) => {
+            if let Some(d) = st.calsrc_draft.as_mut() {
+                d.error = Some(e.to_string());
+            }
+            false
+        }
+    }
+}
+
+pub fn cancel(st: &mut State) {
+    if st.edit.as_ref().is_some_and(|e| is_ours(e.path)) {
+        st.edit = None;
+    }
+    st.calsrc_draft = None;
+}
+
+/// Save the form, and on success re-read the panel and the Calendar tab.
+pub(crate) fn save_and_reload(w: &mut MainWindow, cx: &mut Context<MainWindow>) {
+    if save(&mut w.state, &w.engine) {
+        cx.default_global::<Sources>().load(w);
+        cx.default_global::<super::calendar::Cal>().loaded = None;
+    }
+    cx.notify();
+}
 
 #[derive(Default)]
 pub(crate) struct Sources {
@@ -52,10 +235,10 @@ impl Sources {
         self.list["sources"].as_array().cloned().unwrap_or_default()
     }
 
-    /// What `ui-state` shows for the panel.
-    pub(crate) fn dump(&self) -> Value {
+    /// What `ui-state` shows for the panel, with the command-source form when open.
+    pub(crate) fn dump(&self, draft: Option<&Draft>) -> Value {
         json!({"sources": self.list["sources"], "eventkit": self.list["eventkit"],
-               "error": self.error, "busy": self.busy})
+               "error": self.error, "busy": self.busy, "draft": draft.map(Draft::dump)})
     }
 }
 
@@ -121,6 +304,15 @@ fn summary(id: &str, v: &Value) -> String {
             v["source"]["name"].as_str().unwrap_or_default()
         ),
         "calendar-access" => "Calendars access checked.".to_string(),
+        "calendar-connect" if v["kind"] == "command" => format!(
+            "Calendar source {} ran: {} events{}.",
+            v["source"].as_str().unwrap_or_default(),
+            v["events"],
+            match v["errors"][0]["error"]["message"].as_str() {
+                Some(e) => format!(" ({e})"),
+                None => String::new(),
+            }
+        ),
         "calendar-connect" if v["url"].is_string() => format!(
             "Sign in to {} in the browser that just opened.",
             v["source"].as_str().unwrap_or_default()
@@ -217,6 +409,7 @@ pub(crate) fn kind_label(kind: &str) -> &'static str {
         "microsoft" => "Microsoft 365",
         "caldav" => "CalDAV",
         "eventkit" => "macOS Calendar",
+        "command" => "Command",
         _ => "ICS feeds",
     }
 }
@@ -312,6 +505,76 @@ fn source_row(src: &Value, busy: bool, last: bool, cx: &mut Context<MainWindow>)
         }
         col = col.child(line);
     }
+    if kind == "command" {
+        let argv: Vec<String> = src["argv"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect();
+        let r = &src["last_run"];
+        let ran = if r.is_object() {
+            format!(
+                "Last run {}: {} events, {} ms{}",
+                r["ran_at"].as_str().unwrap_or_default(),
+                r["events"],
+                r["duration_ms"],
+                if r["kept_last_good"] == true {
+                    "; showing the last good run"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            "Not run yet: it runs on each calendar read.".to_string()
+        };
+        let mut line = div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                kit::mono(argv_text(&argv))
+                    .text_size(px(12.))
+                    .text_color(rgb(t.dim))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap(),
+            )
+            .child(div().flex_1());
+        if !busy {
+            let n = name.clone();
+            let row = src.clone();
+            line = line
+                .child(
+                    kit::button(
+                        format!("calsrc-run-{name}"),
+                        "Run now",
+                        Kind::Secondary,
+                        Size::Sm,
+                        true,
+                    )
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        act(w, "calendar-connect", json!({"source": n}), cx);
+                    })),
+                )
+                .child(
+                    kit::button(
+                        format!("calsrc-edit-{name}"),
+                        "Edit",
+                        Kind::Secondary,
+                        Size::Sm,
+                        true,
+                    )
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        open(&mut w.state, Some(&row));
+                        cx.notify();
+                    })),
+                );
+        }
+        col = col
+            .child(line)
+            .child(div().text_size(px(12.)).text_color(rgb(t.dim)).child(ran));
+    }
     if let Some(e) = src["error"]["message"].as_str() {
         col = col.child(
             div()
@@ -352,7 +615,13 @@ fn source_row(src: &Value, busy: bool, last: bool, cx: &mut Context<MainWindow>)
             },
         ));
     }
-    for acct in src["accounts"].as_array().into_iter().flatten() {
+    // A command source has one calendar: no checkboxes.
+    let accounts = if kind == "command" {
+        None
+    } else {
+        src["accounts"].as_array()
+    };
+    for acct in accounts.into_iter().flatten() {
         let title = acct["title"].as_str().unwrap_or_default().to_string();
         let akind = acct["kind"].as_str().unwrap_or_default().to_string();
         col = col.child(check_row(
@@ -403,8 +672,105 @@ fn add_button(
     ))
 }
 
+/// The Add / Edit form of a command source.
+fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
+    use super::hooks::{labelled, text_box};
+    let t = theme::current();
+    let chips = div().flex().gap(px(6.)).children(FORMATS.iter().map(|f| {
+        let on = d.format == *f;
+        kit::button(
+            format!("calsrc-format-{f}"),
+            *f,
+            if on { Kind::Primary } else { Kind::Secondary },
+            Size::Sm,
+            true,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if let Some(d) = this.state.calsrc_draft.as_mut() {
+                d.format = f.to_string();
+            }
+            cx.notify();
+        }))
+    }));
+    let mut col = kit::panel()
+        .p(px(14.))
+        .gap(px(8.))
+        .mb(px(10.))
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(t.dim))
+                .child(match &d.editing {
+                    Some(n) => format!("Edit calendar source {n}"),
+                    None => "Add a command feed: a program that prints ICS or JSON events".into(),
+                }),
+        )
+        .child(labelled(
+            "Name",
+            text_box(w, NAME, &d.name, "name", 260., cx),
+        ))
+        .child(labelled(
+            "Command",
+            text_box(
+                w,
+                COMMAND,
+                &d.command,
+                "program and arguments, e.g. my-calendar events --json (no shell)",
+                480.,
+                cx,
+            ),
+        ))
+        .child(labelled("Format", chips.into_any_element()))
+        .child(labelled(
+            "Timeout",
+            text_box(
+                w,
+                TIMEOUT,
+                &d.timeout,
+                "default (calendar.command_timeout)",
+                200.,
+                cx,
+            ),
+        ))
+        .child(labelled(
+            "Folder",
+            text_box(w, CWD, &d.cwd, "the app's own", 360., cx),
+        ))
+        .child(labelled(
+            "Env",
+            text_box(w, ENV, &d.env, "NAME=value NAME2=value", 360., cx),
+        ));
+    if let Some(e) = &d.error {
+        col = col.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(t.err))
+                .child(e.clone()),
+        );
+    }
+    col.child(
+        div()
+            .flex()
+            .gap(px(8.))
+            .child(
+                kit::button("calsrc-save", "Save", Kind::Primary, Size::Sm, true)
+                    .on_click(cx.listener(|this, _, _, cx| save_and_reload(this, cx))),
+            )
+            .child(
+                kit::button("calsrc-cancel", "Cancel", Kind::Secondary, Size::Sm, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        cancel(&mut this.state);
+                        cx.notify();
+                    }),
+                ),
+            ),
+    )
+    .into_any_element()
+}
+
 /// The panel: one row per source, and buttons that add this computer's accounts (or the macOS
-/// Calendar app), Google and Microsoft 365 where no such source is listed yet.
+/// Calendar app), Google and Microsoft 365 where no such source is listed yet, and a command feed.
 pub(crate) fn panel(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let t = theme::current();
     let s = cx.default_global::<Sources>();
@@ -480,10 +846,28 @@ pub(crate) fn panel(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement 
                         "microsoft",
                         cx,
                     ))
+                })
+                .when(busy.is_none() && w.state.calsrc_draft.is_none(), |d| {
+                    d.child(
+                        kit::button(
+                            "calsrc-add-command",
+                            "Add command feed",
+                            Kind::Secondary,
+                            Size::Sm,
+                            true,
+                        )
+                        .on_click(cx.listener(|w, _, _, cx| {
+                            open(&mut w.state, None);
+                            cx.notify();
+                        })),
+                    )
                 }),
         );
     if let Some(e) = error {
         out = out.child(kit::banner(true, "Calendar sources failed.", e));
+    }
+    if let Some(d) = &w.state.calsrc_draft {
+        out = out.child(form(w, d, cx));
     }
     out.child(panel).into_any_element()
 }
@@ -687,5 +1071,109 @@ mod tests {
         });
         assert_eq!(kind_label("os-local"), "This computer");
         assert_eq!(kind_label("microsoft"), "Microsoft 365");
+    }
+
+    #[test]
+    fn a_command_feed_is_added_edited_and_shows_its_last_run() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        let invoke = |v: &mut MainWindow, args: Value, cx: &mut Context<MainWindow>| {
+            v.drive(
+                &json!({"op": "invoke", "name": "settings.calendar_command", "args": args}),
+                cx,
+            )
+            .unwrap();
+        };
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Settings;
+            // A refused save keeps the form open with the reason.
+            invoke(v, json!({"name": "mine", "command": "  "}), cx);
+            let d = v.dump(cx);
+            let draft = &d["view"]["calendar_sources"]["draft"];
+            assert!(
+                draft["error"].as_str().unwrap().contains("argv"),
+                "{draft}"
+            );
+            cancel(&mut v.state);
+            invoke(
+                v,
+                json!({"name": "mine", "command": "/bin/echo [] ", "env": "A=1 B=2", "timeout": "5s"}),
+                cx,
+            );
+            let d = v.dump(cx);
+            assert_eq!(d["view"]["calendar_sources"]["draft"], Value::Null, "{d}");
+            let src = d["view"]["calendar_sources"]["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["name"] == "mine")
+                .unwrap()
+                .clone();
+            assert_eq!(src["kind"], "command");
+            assert_eq!(src["argv"], json!(["/bin/echo", "[]"]));
+            assert_eq!(src["env"], json!({"A": "1", "B": "2"}));
+            assert!(src["last_run"].is_null());
+            // Edit: a quoted argument, another format, a new name.
+            invoke(
+                v,
+                json!({"source": "mine", "name": "feed", "command": "[\"/bin/echo\", \"[ ]\"]",
+                       "format": "json", "timeout": ""}),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        let saved: Value = serde_json::from_str(&sources(&engine)).unwrap();
+        let feed = saved
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["kind"] == "command")
+            .unwrap()
+            .clone();
+        assert_eq!(feed["name"], "feed");
+        assert_eq!(feed["argv"], json!(["/bin/echo", "[ ]"]));
+        assert_eq!(feed["format"], "json");
+        assert!(feed.get("timeout").is_none());
+        // Opening its Edit form shows the quoted argument as a JSON array.
+        view.update(cx, |v, cx| {
+            let row = cx.global::<Sources>().list["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["name"] == "feed")
+                .unwrap()
+                .clone();
+            open(&mut v.state, Some(&row));
+            let d = v.state.calsrc_draft.clone().unwrap();
+            assert_eq!(d.command, r#"["/bin/echo","[ ]"]"#);
+            assert_eq!(d.env, "A=1 B=2");
+            cancel(&mut v.state);
+            // Run now: the panel then shows the run.
+            v.drive(
+                &json!({"op": "invoke", "name": "settings.calendar_connect", "args": {"source": "feed"}}),
+                cx,
+            )
+            .unwrap();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |v, cx| {
+            assert!(
+                v.state.status.contains("feed ran: 0 events"),
+                "{}",
+                v.state.status
+            );
+            let s = cx.global::<Sources>();
+            let row = s.list["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["name"] == "feed")
+                .unwrap()
+                .clone();
+            assert_eq!(row["last_run"]["ok"], true, "{row}");
+        });
+        assert_eq!(kind_label("command"), "Command");
+        assert_eq!(argv_of("a  b"), json!(["a", "b"]));
     }
 }

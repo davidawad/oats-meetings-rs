@@ -208,6 +208,7 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "calendar-select",
     "calendar-source-enable",
     "calendar-source-add",
+    "calendar-source-edit",
     "calendar-access",
     "calendar-connect",
     "calendar-disconnect",

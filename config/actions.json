@@ -342,7 +342,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a calendar source. kind: os-local (this computer's accounts: macOS Calendar, Linux Evolution / GNOME Online Accounts and KDE Akonadi, Windows Appointments), google (client_id, optional client_secret secret: ref; then calendar-connect), microsoft (client_id, tenant; then calendar-connect), caldav (url: the server, discovered through .well-known/caldav; username; password: a secret: ref), ics (feeds: feed names, default every enabled feed) or eventkit (macOS Calendar). accounts (titles or emails) and calendars (titles or ids) pick what is read, default everything; each list takes one string or an array. Enabling a source that reads the macOS Calendars store asks for access the first time.",
+      "doc": "Add a calendar source. kind: os-local (this computer's accounts: macOS Calendar, Linux Evolution / GNOME Online Accounts and KDE Akonadi, Windows Appointments), google (client_id, optional client_secret secret: ref; then calendar-connect), microsoft (client_id, tenant; then calendar-connect), caldav (url: the server, discovered through .well-known/caldav; username; password: a secret: ref), ics (feeds: feed names, default every enabled feed), eventkit (macOS Calendar) or command (argv: a program and its arguments, an array, run without a shell on every calendar read; optional cwd, env (an object or KEY=VALUE strings), timeout (default calendar.command_timeout) and format auto|ics|json: ICS, or JSON of Google Calendar API, Microsoft Graph or plain {title, start, end, uid, location, attendees} events). accounts (titles or emails) and calendars (titles or ids) pick what is read, default everything; each list takes one string or an array. Enabling a source that reads the macOS Calendars store asks for access the first time.",
       "effect": "write",
       "name": "calendar-source-add",
       "params": [
@@ -403,6 +403,124 @@
         },
         {
           "name": "tenant",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "argv",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "cwd",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "env",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "timeout",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "format",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Change a calendar source's fields (the same ones calendar-source-add takes, but not its kind): each one given replaces the old value, an empty string or array clears it; rename=<new name> renames it.",
+      "effect": "write",
+      "name": "calendar-source-edit",
+      "params": [
+        {
+          "name": "name",
+          "required": true,
+          "type": "String"
+        },
+        {
+          "name": "rename",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
+          "name": "feeds",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "accounts",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "calendars",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "url",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "username",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "password",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "client_id",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "client_secret",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "tenant",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "argv",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "cwd",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "env",
+          "required": false,
+          "type": "Option<Value>"
+        },
+        {
+          "name": "timeout",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "format",
           "required": false,
           "type": "Option<String>"
         }
@@ -523,7 +641,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Sign a google or microsoft calendar source in: returns the authorization URL (open=true opens it in the browser) and waits in the background on a loopback redirect (OAuth installed-app flow with PKCE); the tokens go to the app's own secret store, never the keychain. Events calendar-connected / calendar-connect-failed follow. For a caldav source it runs discovery and lists the calendars; for an os-local / eventkit source it asks for the Calendars grant where there is one.",
+      "doc": "Sign a google or microsoft calendar source in: returns the authorization URL (open=true opens it in the browser) and waits in the background on a loopback redirect (OAuth installed-app flow with PKCE); the tokens go to the app's own secret store, never the keychain. Events calendar-connected / calendar-connect-failed follow. For a caldav source it runs discovery and lists the calendars; for a command source it runs the command now and reports how many events it read; for an os-local / eventkit source it asks for the Calendars grant where there is one.",
       "effect": "control",
       "name": "calendar-connect",
       "params": [

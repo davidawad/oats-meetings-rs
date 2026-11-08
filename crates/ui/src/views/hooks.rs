@@ -287,7 +287,7 @@ fn open_box(
     cx.notify();
 }
 
-fn text_box(
+pub(crate) fn text_box(
     w: &MainWindow,
     path: &'static str,
     value: &str,
@@ -321,7 +321,7 @@ fn text_box(
     f.into_any_element()
 }
 
-fn labelled(label: &'static str, control: AnyElement) -> impl IntoElement {
+pub(crate) fn labelled(label: &'static str, control: AnyElement) -> impl IntoElement {
     let t = theme::current();
     div()
         .flex()

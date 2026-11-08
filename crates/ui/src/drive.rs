@@ -180,6 +180,11 @@ pub const OPS: &[(&str, &str, &str)] = &[
         "add a calendar source of a kind (os-local, google, microsoft, caldav, ics, eventkit), as the Add buttons do",
     ),
     (
+        "settings.calendar_command",
+        "name, command?, source?, format?, timeout?, cwd?, env?",
+        "Calendar sources: Add command feed (or a command source's Edit, source=<its name>), fill the form (command: program and arguments, or a JSON array; env: NAME=value ...), Save",
+    ),
+    (
         "settings.calendar_connect",
         "source",
         "Connect: sign a google / microsoft source in (opens the browser); discover a caldav source's calendars",
@@ -564,6 +569,43 @@ impl MainWindow {
                 }
                 calendar_sources::act(self, "calendar-source-add", params, cx);
             }
+            "settings.calendar_command" => {
+                let row = match arg(args, "source") {
+                    Some(src) => {
+                        calendar_sources::prepare(self, cx);
+                        let rows = cx.global::<calendar_sources::Sources>().list["sources"].clone();
+                        let row = rows
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .find(|r| r["name"] == src && r["kind"] == "command")
+                            .cloned()
+                            .ok_or_else(|| bad(format!("{op}: no command source named '{src}'")))?;
+                        Some(row)
+                    }
+                    None => {
+                        need(args, op, "name")?;
+                        need(args, op, "command")?;
+                        None
+                    }
+                };
+                calendar_sources::open(&mut self.state, row.as_ref());
+                if let Some(d) = self.state.calsrc_draft.as_mut() {
+                    for (k, f) in [
+                        ("name", &mut d.name),
+                        ("command", &mut d.command),
+                        ("format", &mut d.format),
+                        ("timeout", &mut d.timeout),
+                        ("cwd", &mut d.cwd),
+                        ("env", &mut d.env),
+                    ] {
+                        if let Some(v) = arg(args, k) {
+                            *f = v.to_string();
+                        }
+                    }
+                }
+                calendar_sources::save_and_reload(self, cx);
+            }
             "settings.calendar_connect" => {
                 let source = need(args, op, "source")?;
                 calendar_sources::act(self, "calendar-connect", json!({"source": source}), cx);
@@ -831,7 +873,9 @@ impl MainWindow {
                         "path": r.path, "value": widget_value(&r.widget),
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
-                "calendar_sources": cx.default_global::<calendar_sources::Sources>().dump(),
+                "calendar_sources": cx
+                    .default_global::<calendar_sources::Sources>()
+                    .dump(st.calsrc_draft.as_ref()),
                 "hooks": st.hooks_ui.dump(),
             }),
         };

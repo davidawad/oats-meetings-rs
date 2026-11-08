@@ -73,6 +73,10 @@ pub fn account(engine: &Engine, token: &str) -> Result<String> {
 /// A Graph `dateTimeTimeZone`: a wall time and its zone (UTC under our Prefer header).
 fn when(v: &Value) -> Option<DateTime<Utc>> {
     let wall = v["dateTime"].as_str()?;
+    // An exported event may carry its offset already.
+    if let Ok(d) = DateTime::parse_from_rfc3339(wall) {
+        return Some(d.with_timezone(&Utc));
+    }
     let n = NaiveDateTime::parse_from_str(wall, "%Y-%m-%dT%H:%M:%S%.f").ok()?;
     let tz = v["timeZone"].as_str().unwrap_or("UTC");
     Some(match tz.parse::<Tz>() {

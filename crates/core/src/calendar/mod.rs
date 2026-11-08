@@ -3,7 +3,8 @@
 //!
 //! `calendar.sources` is a JSON array of sources, each read through one provider (`provider`):
 //! `os-local` (this computer's accounts, the default), `google`, `microsoft`, `caldav`, `ics`
-//! (the cached `ics.feeds`, all or some by name) or `eventkit` (the macOS Calendar app). Every
+//! (the cached `ics.feeds`, all or some by name), `eventkit` (the macOS Calendar app) or `command`
+//! (a program run on each read, printing ICS or JSON events: `command`). Every
 //! provider lists accounts and their calendars, chosen by account title / email and by calendar
 //! title or id. `calendar-sources-list` shows each source with what it can read (ticked or not);
 //! `calendar-select` ticks and unticks them, as the Settings checkboxes do; `calendar-connect`
@@ -26,9 +27,11 @@
 //! (no grant), `calendar_access_failed`, `calendar_access_timeout`, `network_denied`,
 //! `calendar_not_connected` (an OAuth source never signed in), `calendar_auth` (refused or
 //! expired credentials), `calendar_connect_timeout`, `calendar_not_found`, `fetch_failed`,
-//! `fetch_timeout`, `http_status`.
+//! `fetch_timeout`, `http_status`, `command_failed` (a command source could not run or exited
+//! nonzero), `command_timeout`, `command_output` (too much or unreadable output).
 
 pub mod caldav;
+pub mod command;
 pub mod eventkit;
 pub mod google;
 pub mod graph;
@@ -39,6 +42,7 @@ pub mod rules;
 #[cfg(windows)]
 pub mod windows;
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use chrono::{DateTime, Duration, FixedOffset, SecondsFormat, Utc};
@@ -47,7 +51,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::action::Action;
-use crate::config::typed::{Calendar as CalendarCfg, Config};
+use crate::config::typed::{Calendar as CalendarCfg, Config, Dur};
 use crate::config::{ConfigError, Result};
 use crate::control::engine::Engine;
 use crate::control::subsystem::Subsystem;
@@ -71,16 +75,19 @@ pub enum SourceKind {
     Ics,
     #[serde(rename = "eventkit")]
     Eventkit,
+    #[serde(rename = "command")]
+    Command,
 }
 
 impl SourceKind {
-    pub const ALL: [SourceKind; 6] = [
+    pub const ALL: [SourceKind; 7] = [
         SourceKind::OsLocal,
         SourceKind::Google,
         SourceKind::Microsoft,
         SourceKind::Caldav,
         SourceKind::Ics,
         SourceKind::Eventkit,
+        SourceKind::Command,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -91,6 +98,7 @@ impl SourceKind {
             SourceKind::Caldav => "caldav",
             SourceKind::Ics => "ics",
             SourceKind::Eventkit => "eventkit",
+            SourceKind::Command => "command",
         }
     }
 
@@ -171,6 +179,21 @@ pub struct Source {
     /// microsoft: the Entra tenant (else `calendar.microsoft_tenant`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tenant: String,
+    /// command: the program and its arguments, run without a shell.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+    /// command: its working directory; empty is the app's own.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cwd: String,
+    /// command: variables set on top of the app's environment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// command: how long it may run; None is `calendar.command_timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<Dur>,
+    /// command: `auto` (empty: sniffed), `ics` or `json`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub format: String,
 }
 
 fn invalid(key: &str, why: impl std::fmt::Display) -> ConfigError {
@@ -235,6 +258,14 @@ fn check_fields(s: &Source) -> std::result::Result<(), String> {
         &[Google, Microsoft],
     )?;
     only("tenant", !s.tenant.is_empty(), &[Microsoft])?;
+    only("argv", !s.argv.is_empty(), &[Command])?;
+    only("cwd", !s.cwd.is_empty(), &[Command])?;
+    only("env", !s.env.is_empty(), &[Command])?;
+    only("timeout", s.timeout.is_some(), &[Command])?;
+    only("format", !s.format.is_empty(), &[Command])?;
+    if k == Command {
+        command::check(s)?;
+    }
     if k == Caldav && !crate::http::valid_url(s.url.trim()) {
         return Err("a caldav source needs url, an http(s) URL of the server".into());
     }
@@ -493,6 +524,11 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             client_id,
             client_secret,
             tenant,
+            argv,
+            cwd,
+            env,
+            timeout,
+            format,
         } => {
             let kind = SourceKind::parse(kind).ok_or_else(|| {
                 let all: Vec<&str> = SourceKind::ALL.iter().map(|k| k.as_str()).collect();
@@ -517,8 +553,79 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                     client_id: text(client_id),
                     client_secret: text(client_secret),
                     tenant: text(tenant),
+                    argv: argv_arg(argv.as_ref())?,
+                    cwd: text(cwd),
+                    env: env_arg(env.as_ref())?,
+                    timeout: timeout_arg(timeout.as_deref())?,
+                    format: text(format),
                 },
             )
+        }
+        Action::CalendarSourceEdit {
+            name,
+            rename,
+            enabled,
+            feeds,
+            accounts,
+            calendars,
+            url,
+            username,
+            password,
+            client_id,
+            client_secret,
+            tenant,
+            argv,
+            cwd,
+            env,
+            timeout,
+            format,
+        } => {
+            let _g = SOURCE_LIST_LOCK.lock().expect("source list lock");
+            let mut sources = load(engine)?;
+            let s = find_mut(&mut sources, name)?;
+            let set = |field: &mut String, v: &Option<String>| {
+                if let Some(v) = v {
+                    *field = v.trim().to_string();
+                }
+            };
+            if let Some(r) = rename {
+                s.name = r.trim().to_string();
+            }
+            if let Some(e) = enabled {
+                s.enabled = *e;
+            }
+            if feeds.is_some() {
+                s.feeds = strings("feeds", feeds.as_ref())?;
+            }
+            if accounts.is_some() {
+                s.accounts = strings("accounts", accounts.as_ref())?;
+            }
+            if calendars.is_some() {
+                s.calendars = strings("calendars", calendars.as_ref())?;
+            }
+            set(&mut s.url, url);
+            set(&mut s.username, username);
+            set(&mut s.password, password);
+            set(&mut s.client_id, client_id);
+            set(&mut s.client_secret, client_secret);
+            set(&mut s.tenant, tenant);
+            if argv.is_some() {
+                s.argv = argv_arg(argv.as_ref())?;
+            }
+            set(&mut s.cwd, cwd);
+            if env.is_some() {
+                s.env = env_arg(env.as_ref())?;
+            }
+            if timeout.is_some() {
+                s.timeout = timeout_arg(timeout.as_deref())?;
+            }
+            set(&mut s.format, format);
+            let src = s.clone();
+            parse_sources(&serde_json::to_string(&sources).expect("serialize"))
+                .map_err(|e| ConfigError::new("invalid_argument", e.message))?;
+            save(engine, &sources, "calendar-source-edit")?;
+            engine.calendar_command_runs().forget(name);
+            Ok(json!({"source": source_json(&src), "sources": sources.len()}))
         }
         Action::CalendarSourceRemove { name } => source_remove(engine, name),
         Action::CalendarSourceEnable { name, enabled } => {
@@ -564,6 +671,63 @@ fn strings(name: &str, v: Option<&Value>) -> Result<Vec<String>> {
             .map(|x| x.as_str().map(str::to_string).ok_or_else(bad))
             .collect(),
         Some(_) => Err(bad()),
+    }
+}
+
+/// command `argv`: an array of strings, or one string split on whitespace.
+fn argv_arg(v: Option<&Value>) -> Result<Vec<String>> {
+    match v {
+        Some(Value::String(s)) => Ok(s.split_whitespace().map(str::to_string).collect()),
+        other => strings("argv", other),
+    }
+}
+
+/// command `env`: `{"NAME": "value"}`, or `NAME=value` strings (an array, or one string of them
+/// split on whitespace).
+fn env_arg(v: Option<&Value>) -> Result<BTreeMap<String, String>> {
+    let bad = |what: &str| {
+        ConfigError::new(
+            "invalid_argument",
+            format!("env must be an object of strings or NAME=value strings ({what})"),
+        )
+    };
+    let pairs: Vec<String> = match v {
+        None | Some(Value::Null) => return Ok(BTreeMap::new()),
+        Some(Value::Object(m)) => {
+            return m
+                .iter()
+                .map(|(k, v)| {
+                    v.as_str()
+                        .map(|v| (k.clone(), v.to_string()))
+                        .ok_or_else(|| bad(k))
+                })
+                .collect()
+        }
+        Some(Value::String(s)) => s.split_whitespace().map(str::to_string).collect(),
+        other => strings("env", other)?,
+    };
+    pairs
+        .iter()
+        .map(|p| {
+            p.split_once('=')
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .ok_or_else(|| bad(p))
+        })
+        .collect()
+}
+
+/// command `timeout`: a duration like `"20s"`; empty is the default.
+fn timeout_arg(t: Option<&str>) -> Result<Option<Dur>> {
+    match t.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(t) => crate::config::keys::parse_duration_ms(t)
+            .map(|ms| Some(Dur(ms)))
+            .ok_or_else(|| {
+                ConfigError::new(
+                    "invalid_argument",
+                    format!("timeout \"{t}\" is not a duration like \"20s\""),
+                )
+            }),
     }
 }
 
@@ -639,6 +803,7 @@ fn source_remove(engine: &Engine, name: &str) -> Result<Value> {
     find_mut(&mut sources, name)?;
     sources.retain(|s| s.name != name);
     save(engine, &sources, "calendar-source-remove")?;
+    engine.calendar_command_runs().forget(name);
     Ok(json!({"removed": name, "sources": sources.len()}))
 }
 
@@ -781,6 +946,19 @@ fn sources_list(engine: &Engine) -> Result<Value> {
             if uses_eventkit(s.kind) {
                 v["authorization"] = json!(access.as_str());
             }
+            if s.kind == SourceKind::Command {
+                v["accounts"] = accounts_json(s, &[command::calendar_of(s)]);
+                match engine.calendar_command_runs().status(s) {
+                    Some((run, err)) => {
+                        v["last_run"] = run;
+                        if let Some(e) = err {
+                            v["error"] = err_json(&e);
+                        }
+                    }
+                    None => v["last_run"] = Value::Null,
+                }
+                return v;
+            }
             if s.kind.oauth() {
                 let t = oauth::load(engine, s).ok().flatten();
                 v["connected"] = json!(t.as_ref().is_some_and(|t| !t.refresh_token.is_empty()));
@@ -823,6 +1001,20 @@ fn connect(engine: &Engine, name: &str, open: bool) -> Result<Value> {
         return oauth::connect(engine, s, open);
     }
     let mut out = json!({"source": s.name, "kind": s.kind.as_str()});
+    if s.kind == SourceKind::Command {
+        // A test run over the events window: the error, if any, is the answer.
+        let (from, to) = window(engine, None, None)?;
+        let mut errors = Vec::new();
+        let evs = command::read(engine, s, from, to, &mut errors)?;
+        out["events"] = json!(evs.len());
+        out["errors"] = json!(errors);
+        out["last_run"] = engine
+            .calendar_command_runs()
+            .status(s)
+            .map(|x| x.0)
+            .unwrap_or_default();
+        return Ok(out);
+    }
     if uses_eventkit(s.kind) {
         out["access"] = ensure_access(engine);
     }

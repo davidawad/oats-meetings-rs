@@ -546,6 +546,8 @@ pub struct Ics {
 #[serde(deny_unknown_fields)]
 pub struct Calendar {
     pub access_timeout: Dur,
+    pub command_max_bytes: u64,
+    pub command_timeout: Dur,
     pub google_api: String,
     pub google_auth_url: String,
     pub google_client_id: String,

@@ -614,6 +614,11 @@ impl Engine {
         self.calendar_providers.get(kind)
     }
 
+    /// The command calendar sources' last runs and last good output.
+    pub fn calendar_command_runs(&self) -> &crate::calendar::command::Runs {
+        self.calendar_providers.command_runs()
+    }
+
     pub fn set_calendar_provider(
         &self,
         kind: crate::calendar::SourceKind,
@@ -1423,6 +1428,7 @@ impl Engine {
             | Action::HookEnable { .. } => crate::hooks::dispatch(self, a),
             Action::CalendarSourcesList {}
             | Action::CalendarSourceAdd { .. }
+            | Action::CalendarSourceEdit { .. }
             | Action::CalendarSourceRemove { .. }
             | Action::CalendarSourceEnable { .. }
             | Action::CalendarSelect { .. }

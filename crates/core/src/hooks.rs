@@ -415,7 +415,7 @@ fn command_of(hook: &Hook) -> Command {
 }
 
 /// Read all of `r`, keeping the first `max` bytes; true when some were dropped.
-fn drain(mut r: impl Read, max: usize) -> (Vec<u8>, bool) {
+pub(crate) fn drain(mut r: impl Read, max: usize) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let mut buf = [0u8; 8192];
     let mut dropped = false;
@@ -432,7 +432,7 @@ fn drain(mut r: impl Read, max: usize) -> (Vec<u8>, bool) {
     (kept, dropped)
 }
 
-fn kill(child: &mut Child) {
+pub(crate) fn kill(child: &mut Child) {
     #[cfg(unix)]
     {
         // The hook leads its own process group: take its children (a shell's sleep) down too.

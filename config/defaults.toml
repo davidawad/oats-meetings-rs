@@ -86,6 +86,10 @@ enabled = true
 [calendar]
 # How long a Calendars access request (the one macOS prompt) waits for an answer.
 access_timeout = "2m"
+# Largest stdout a command calendar source may print, in bytes; more is a failed run.
+command_max_bytes = 8388608
+# How long a command calendar source's program may run (unless its own timeout says otherwise) before it is killed and the run counts as failed.
+command_timeout = "20s"
 # Base URL of the Google Calendar API v3.
 google_api = "https://www.googleapis.com/calendar/v3"
 # Google's OAuth authorization endpoint.
@@ -124,7 +128,7 @@ prefer_attendees = true
 prefer_video = true
 # record-stop re-matches over the whole recording and updates an automatic title; a title edited by hand is kept.
 retitle_on_save = true
-# JSON array of calendar sources: {name, kind, enabled, ...}. kind os-local (this computer's calendar accounts: macOS Calendar / EventKit, Linux Evolution Data Server and KDE Akonadi, Windows Appointments; no network), google (Google Calendar API, OAuth; client_id, client_secret secret: ref), microsoft (Microsoft Graph, OAuth; client_id, tenant), caldav (url discovered through .well-known/caldav, username, password secret: ref), ics (feeds: names in ics.feeds, empty = every enabled feed) or eventkit (the macOS Calendar app, as os-local on a Mac). accounts / account and calendars pick what is read (account title or email, calendar title or id; both empty = every calendar). An event seen through two sources is kept once (same iCalUID and start; the earlier source wins). Edit with calendar-source-add / -remove / -enable, calendar-select and calendar-connect.
+# JSON array of calendar sources: {name, kind, enabled, ...}. kind os-local (this computer's calendar accounts: macOS Calendar / EventKit, Linux Evolution Data Server and KDE Akonadi, Windows Appointments; no network), google (Google Calendar API, OAuth; client_id, client_secret secret: ref), microsoft (Microsoft Graph, OAuth; client_id, tenant), caldav (url discovered through .well-known/caldav, username, password secret: ref), ics (feeds: names in ics.feeds, empty = every enabled feed), eventkit (the macOS Calendar app, as os-local on a Mac) or command (argv: a program and its arguments, run without a shell on every calendar read; optional cwd, env {NAME: value}, timeout (default calendar.command_timeout) and format auto|ics|json; it prints ICS, or JSON events: an array or {items|events|value: [...]} of Google Calendar API events, Microsoft Graph events or plain {title, start, end, uid, location, attendees} with RFC 3339 or YYYY-MM-DD times; a failed run is the source's error and the last good run's events stay; e.g. {"name":"mine","kind":"command","argv":["my-calendar","--json"]}). accounts / account and calendars pick what is read (account title or email, calendar title or id; both empty = every calendar). An event seen through two sources is kept once (same iCalUID and start; the earlier source wins). Edit with calendar-source-add / -edit / -remove / -enable, calendar-select and calendar-connect.
 sources = "[{\"name\":\"local\",\"kind\":\"os-local\"},{\"name\":\"ics\",\"kind\":\"ics\"}]"
 # Whole-request limit for one Google Calendar, Microsoft Graph, CalDAV or OAuth token call.
 timeout = "30s"

@@ -22,6 +22,8 @@ fn t(s: &str) -> DateTime<Utc> {
 fn rules() -> Rules {
     let c = oats_core::config::typed::Calendar {
         access_timeout: oats_core::config::typed::Dur(1000),
+        command_max_bytes: 1024,
+        command_timeout: oats_core::config::typed::Dur(1000),
         google_api: String::new(),
         google_auth_url: String::new(),
         google_client_id: String::new(),
