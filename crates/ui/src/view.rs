@@ -724,7 +724,8 @@ impl MainWindow {
         }))
     }
 
-    /// The banners: a recording the engine had to stop (why), system audio silent or being
+    /// The banners: a recording the engine had to stop (why), an auto-stop on its way (with Keep
+    /// recording) or a recording that stopped or started by itself, system audio silent or being
     /// reopened while recording (the macOS tap without its grant, a lost capture),
     /// transcription unavailable (with a button when an action fixes it), and the last failed
     /// hook run (dismissable; its output is in Settings > Hooks).
@@ -736,6 +737,31 @@ impl MainWindow {
                 None => (n.clone(), String::new()),
             };
             rows.push(kit::banner(true, lead, rest));
+        }
+        if let Some(n) = self.state.auto_pending.as_ref() {
+            let (lead, rest) = match n.split_once(": ") {
+                Some((a, b)) => (format!("{a}."), capitalised(b)),
+                None => (n.clone(), String::new()),
+            };
+            rows.push(kit::banner(false, lead, rest).child(
+                kit::button("auto-keep", "Keep recording", Kind::Primary, Size::Sm, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state
+                            .act(&this.engine, "record-keep", json!({"by": "window"}));
+                        cx.notify();
+                    }),
+                ),
+            ));
+        }
+        if let Some(n) = self.state.auto_notice.as_ref() {
+            rows.push(kit::banner(false, n.clone(), String::new()).child(
+                kit::button("auto-dismiss", "Dismiss", Kind::Secondary, Size::Sm, true).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state.auto_notice = None;
+                        cx.notify();
+                    }),
+                ),
+            ));
         }
         if let Some(w) = self.rec_warning.as_ref() {
             let (lead, rest) = match w.split_once(": ") {

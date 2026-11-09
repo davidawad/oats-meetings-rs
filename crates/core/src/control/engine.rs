@@ -142,6 +142,10 @@ pub struct Engine {
     calendar_providers: crate::calendar::provider::ProviderSlot,
     /// The hook runs so far (`hook-list`).
     pub(crate) hooks: crate::hooks::Runner,
+    /// When the last recording stopped: `record.auto_start.cooldown` counts from it.
+    last_stop: Mutex<Option<std::time::Instant>>,
+    /// The auto-start watcher thread is running (`watch_auto_start`).
+    auto_start: AtomicBool,
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -299,6 +303,8 @@ impl Engine {
             event_store: crate::calendar::StoreSlot::default(),
             calendar_providers: Default::default(),
             hooks: crate::hooks::Runner::default(),
+            last_stop: Mutex::new(None),
+            auto_start: AtomicBool::new(false),
         });
         // Hooks follow the published events; the tap only starts threads, so it never blocks.
         let me = Arc::downgrade(&engine);
@@ -943,9 +949,18 @@ impl Engine {
     /// `forced` is `(session, reason)` only on a forced stop, the one stop nobody asked for: the
     /// recording could no longer write its audio. Both are logged and in the `recording-stopped` event, whose
     /// `forced` the window shows as a banner (dot-4uzgol.99).
-    fn stop_recording(&self, by: &str, forced: Option<(&str, &str)>) -> Result<Value> {
+    ///
+    /// `cut_ms` is an auto-stop's: the audio from there on is dropped (`Recorder::stop`).
+    fn stop_recording(
+        &self,
+        by: &str,
+        forced: Option<(&str, &str)>,
+        cut_ms: Option<u64>,
+    ) -> Result<Value> {
         let reason = forced.map(|(_, why)| why);
-        let mut v = match self.recorder.stop() {
+        let stopped = self.recorder.stop(cut_ms);
+        *self.last_stop.lock().expect("last stop") = Some(std::time::Instant::now());
+        let mut v = match stopped {
             Ok(v) => v,
             Err(e) => {
                 // A forced stop is announced even when its audio could not be saved: never silent.
@@ -1001,19 +1016,179 @@ impl Engine {
                     Some(Some((cur, _, _))) if cur == *id => {
                         if let Some((cur, why)) = e.recorder.fault() {
                             if cur == *id {
-                                let _ = e.stop_recording("engine", Some((id, &why)));
+                                let _ = e.stop_recording("engine", Some((id, &why)), None);
                                 return;
                             }
+                        }
+                        if e.auto_stop_tick(id) {
+                            return;
                         }
                     }
                     Some(_) => return,
                 }
-                let every = e.snapshot().config.audio.restart_wait.as_duration();
+                let cfg = &e.snapshot().config;
+                let every = cfg
+                    .audio
+                    .restart_wait
+                    .as_duration()
+                    .min(cfg.record.auto_check.as_duration());
                 drop(e);
                 std::thread::sleep(every);
             });
         if let Err(err) = spawned {
             crate::elog!("oats-meetings-rs: cannot watch recording {id}: {err}");
+        }
+    }
+
+    /// One auto-stop look at recording `id` (dot-4uzgol.110): warn, withdraw the warning, or stop
+    /// it with its trailing silence cut. True once it is stopped.
+    fn auto_stop_tick(&self, id: &str) -> bool {
+        let rule = crate::autorec::StopRule::of(&self.snapshot().config);
+        let after = keys::format_duration_ms(rule.after_ms);
+        match self.recorder.auto_stop_check(id, rule) {
+            Some(crate::autorec::StopCheck::Warn {
+                silence_ms,
+                stop_in_ms,
+                first: true,
+            }) => {
+                self.bus.publish(
+                    "auto-stop-pending",
+                    json!({"session": id, "silence_ms": silence_ms, "stop_in_ms": stop_in_ms,
+                           "after": after,
+                           "message": format!("No sound for a while: recording stops in {} unless you keep it",
+                               keys::format_duration_ms(stop_in_ms.div_ceil(1000) * 1000))}),
+                );
+                false
+            }
+            Some(crate::autorec::StopCheck::Resumed) => {
+                self.bus
+                    .publish("auto-stop-cancelled", json!({"session": id, "by": "sound"}));
+                false
+            }
+            Some(crate::autorec::StopCheck::Stop { silence_ms, cut_ms }) => {
+                let message = format!("Recording stopped after {after} of silence");
+                crate::elog!("oats-meetings-rs: recording {id}: {message}");
+                match self.stop_recording("auto-stop", None, Some(cut_ms)) {
+                    Ok(v) => self.bus.publish(
+                        "auto-stopped",
+                        json!({"session": id, "silence_ms": silence_ms, "after": after,
+                               "cut_ms": cut_ms, "trimmed_ms": v["trimmed_ms"],
+                               "duration_ms": v["duration_ms"], "message": message}),
+                    ),
+                    Err(e) => crate::elog!("oats-meetings-rs: auto-stop of {id} failed: {e}"),
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `record-start` (a caller's, or auto-start's with `auto` the reason it started).
+    fn start_recording(
+        &self,
+        session: Option<&str>,
+        title: Option<&str>,
+        auto: Option<Value>,
+    ) -> Result<Value> {
+        let cfg = self.snapshot().config.clone();
+        let (plan, why) = self.transcribe_plan(&cfg)?;
+        // Saved as audio only for want of the model: transcribed once it is present.
+        let pending = why["code"] == "model_not_found";
+        let store = self.store();
+        // The event overlapping now names the session unless a title was given.
+        let cal = crate::calendar::for_start(self, chrono::Utc::now(), title);
+        let mut v = self.recorder.start(
+            &self.audio_settings()?,
+            &store,
+            session,
+            cal.title.as_deref(),
+            plan,
+            why,
+            crate::autorec::StopRule::of(&cfg),
+        )?;
+        if let Some(id) = v["session"].as_str() {
+            if pending {
+                store.set_pending(id, true)?;
+            }
+            if !cal.fields.is_empty() {
+                store.merge_meta(id, &cal.fields)?;
+            }
+        }
+        v["title"] = json!(cal.title.unwrap_or_default());
+        v["calendar"] = cal.report;
+        if let Some(a) = auto {
+            v["auto_start"] = a;
+        }
+        if let Some(id) = v["session"].as_str() {
+            self.guard_recording(id);
+        }
+        self.bus.publish("recording-started", v.clone());
+        Ok(v)
+    }
+
+    /// The auto-start watcher (dot-4uzgol.110), from app launch until shutdown: while idle, a
+    /// source the monitor has heard active for `record.auto_start.after` starts a recording.
+    fn watch_auto_start(&self) {
+        if self.auto_start.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = Weak::clone(&self.me);
+        let spawned = std::thread::Builder::new()
+            .name("oats-auto-start".into())
+            .spawn(move || loop {
+                let Some(e) = me.upgrade() else { return };
+                if e.is_shutdown() {
+                    return;
+                }
+                e.auto_start_tick();
+                let every = e.snapshot().config.record.auto_check.as_duration();
+                drop(e);
+                std::thread::sleep(every);
+            });
+        if let Err(err) = spawned {
+            self.auto_start.store(false, Ordering::SeqCst);
+            crate::elog!("oats-meetings-rs: cannot watch for auto-start: {err}");
+        }
+    }
+
+    /// One auto-start look: start a recording when a counted source is due, unless one is
+    /// running, the last stopped within the cooldown, or (`only_in_event`) no event is on.
+    fn auto_start_tick(&self) {
+        let cfg = self.snapshot().config.clone();
+        let rule = crate::autorec::StartRule::of(&cfg);
+        let Some(src) = self.recorder.activity_due(rule) else {
+            return;
+        };
+        if !matches!(self.recorder.active_state(), Some(None)) {
+            return;
+        }
+        let a = &cfg.record.auto_start;
+        let cooling = self
+            .last_stop
+            .lock()
+            .expect("last stop")
+            .is_some_and(|t| t.elapsed() < a.cooldown.as_duration());
+        if cooling || (a.only_in_event && !crate::calendar::event_now(self, chrono::Utc::now())) {
+            self.recorder.reset_activity();
+            return;
+        }
+        let name = crate::autorec::source_name(src);
+        let after = keys::format_duration_ms(a.after.0);
+        let message = format!("Recording started: {name} audio for {after}");
+        let why = json!({"source": name, "after": after});
+        match self.start_recording(None, None, Some(why)) {
+            Ok(v) => {
+                crate::elog!("oats-meetings-rs: {message}");
+                self.bus.publish(
+                    "auto-started",
+                    json!({"session": v["session"], "source": name, "after": after,
+                           "message": message}),
+                );
+            }
+            Err(e) => {
+                crate::elog!("oats-meetings-rs: auto-start failed: {e}");
+                self.recorder.reset_activity();
+            }
         }
     }
 
@@ -1027,12 +1202,14 @@ impl Engine {
     pub fn sync_monitor(&self) {
         use crate::config::typed::Monitor;
         let cfg = &self.snapshot().config;
+        // Auto-start listens through the monitor: it keeps it open while the app runs.
         let on = self.monitoring.load(Ordering::SeqCst)
-            && match cfg.ui.monitor {
-                Monitor::Off => false,
-                Monitor::Always => true,
-                Monitor::WindowVisible => self.window_visible.load(Ordering::SeqCst),
-            };
+            && (cfg.record.auto_start.enabled
+                || match cfg.ui.monitor {
+                    Monitor::Off => false,
+                    Monitor::Always => true,
+                    Monitor::WindowVisible => self.window_visible.load(Ordering::SeqCst),
+                });
         let want = on.then(|| record::settings_of(cfg));
         self.recorder
             .monitor(want, cfg.ui.monitor_retry.as_duration());
@@ -1043,6 +1220,7 @@ impl Engine {
     pub fn enable_monitor(&self) {
         self.monitoring.store(true, Ordering::SeqCst);
         self.sync_monitor();
+        self.watch_auto_start();
     }
 
     /// The input monitor: open or not, `(mic, system)` levels and callback blocks, the last open
@@ -1130,43 +1308,32 @@ impl Engine {
                 record::device_wait_of(&self.snapshot().config),
             ),
             Action::RecordStart { session, title } => {
-                let cfg = self.snapshot().config.clone();
-                let (plan, why) = self.transcribe_plan(&cfg)?;
-                // Saved as audio only for want of the model: transcribed once it is present.
-                let pending = why["code"] == "model_not_found";
-                let store = self.store();
-                // The event overlapping now names the session unless a title was given.
-                let cal = crate::calendar::for_start(self, chrono::Utc::now(), title.as_deref());
-                let mut v = self.recorder.start(
-                    &self.audio_settings()?,
-                    &store,
-                    session.as_deref(),
-                    cal.title.as_deref(),
-                    plan,
-                    why,
-                )?;
-                if let Some(id) = v["session"].as_str() {
-                    if pending {
-                        store.set_pending(id, true)?;
-                    }
-                    if !cal.fields.is_empty() {
-                        store.merge_meta(id, &cal.fields)?;
-                    }
-                }
-                v["title"] = json!(cal.title.unwrap_or_default());
-                v["calendar"] = cal.report;
-                if let Some(id) = v["session"].as_str() {
-                    self.guard_recording(id);
-                }
-                self.bus.publish("recording-started", v.clone());
-                Ok(v)
+                self.start_recording(session.as_deref(), title.as_deref(), None)
             }
             Action::RecordStop { by } => {
-                self.stop_recording(by.as_deref().unwrap_or(DEFAULT_BY), None)
+                self.stop_recording(by.as_deref().unwrap_or(DEFAULT_BY), None, None)
             }
             Action::RecordPause {} => {
                 let v = self.recorder.pause()?;
                 self.bus.publish("recording-paused", v.clone());
+                Ok(v)
+            }
+            Action::RecordKeep { by } => {
+                let (session, pending) = self.recorder.keep()?;
+                let by = by.as_deref().unwrap_or(DEFAULT_BY);
+                if pending {
+                    self.bus
+                        .publish("auto-stop-cancelled", json!({"session": session, "by": by}));
+                }
+                Ok(json!({"session": session, "was_pending": pending}))
+            }
+            Action::RecordAutoStatus {} => {
+                let cfg = &self.snapshot().config;
+                let mut v = self.recorder.auto_status();
+                v["auto_stop"] = json!(cfg.record.auto_stop);
+                v["auto_start"] = json!(cfg.record.auto_start);
+                v["listening"] =
+                    json!(cfg.record.auto_start.enabled && self.auto_start.load(Ordering::SeqCst));
                 Ok(v)
             }
             Action::SessionList { from, to } => self.store().list(from.as_deref(), to.as_deref()),

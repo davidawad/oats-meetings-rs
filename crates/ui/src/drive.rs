@@ -888,6 +888,8 @@ impl MainWindow {
             "hook_banner": st.hook_failure,
             "record_banner": self.rec_warning,
             "stop_banner": st.stop_notice,
+            "auto_banner": st.auto_notice,
+            "auto_stop_pending": st.auto_pending,
             "recording": {
                 "state": rec_state,
                 "session": st.rec.session(),

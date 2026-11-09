@@ -144,6 +144,26 @@
     "hide_from_capture": true,
     "hide_method": "none"
   },
+  "record": {
+    "auto_check": "250ms",
+    "auto_start": {
+      "after": "30s",
+      "cooldown": "2m",
+      "enabled": false,
+      "gap": "2s",
+      "level": 20,
+      "only_in_event": false,
+      "sources": "speaker"
+    },
+    "auto_stop": {
+      "after": "5m",
+      "blip": "300ms",
+      "enabled": true,
+      "silence_level": 10,
+      "tail": "2s",
+      "warn_before": "30s"
+    }
+  },
   "secrets": {
     "backend": "env-then-keyring",
     "env_prefix": "OATS_SECRET_",

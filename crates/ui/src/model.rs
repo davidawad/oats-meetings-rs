@@ -213,6 +213,7 @@ pub const VIEW_ACTIONS: &[&str] = &[
     "calendar-connect",
     "calendar-disconnect",
     "devices-list",
+    "record-keep",
     "notes-get",
     "notes-set",
     "notes-generate",
@@ -273,6 +274,10 @@ pub const EXEMPT: &[(&str, &str)] = &[
         "OpenOats interchange verb, like session-import (ctl)",
     ),
     ("kb-search", "agent query (ctl)"),
+    (
+        "record-auto-status",
+        "agent query (ctl); the window shows a pending auto-stop and an auto start or stop as banners",
+    ),
     (
         "perms-status",
         "headless provisioning check (ctl); the window shows capture errors as they happen",

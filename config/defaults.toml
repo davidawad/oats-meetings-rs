@@ -263,6 +263,40 @@ hide_from_capture = true
 # How hiding is done; set per OS by the os axis.
 hide_method = "none"
 
+[record]
+# How often the engine checks the auto-stop silence and the auto-start activity: the most an auto-stop or auto-start can be late by.
+auto_check = "250ms"
+
+[record.auto_start]
+# Auto-start: how long the activity must be sustained before a recording starts; shorter sound (a notification, a short clip) never starts one.
+after = "30s"
+# Auto-start: no recording starts by itself this soon after one stopped (a recording you stopped while audio still plays is not restarted at once).
+cooldown = "2m"
+# Start recording by itself when, while idle, record.auto_start.sources stay above record.auto_start.level for record.auto_start.after (a call that began without pressing Record). Listening keeps the input monitor open while the app runs, as ui.monitor = always does. Publishes auto-started and says so in the window.
+enabled = false
+# Auto-start: a quiet dip shorter than this does not break sustained activity (the pauses between sentences); a longer one starts the count over.
+gap = "2s"
+# Auto-start: per-mille of full scale; a 10 ms frame whose peak reaches this is activity (20 = 0.02).
+level = 20
+# Auto-start: only while a calendar event (calendar.sources) is on now; music outside meetings never starts a recording.
+only_in_event = false
+# Auto-start: which channel's activity counts: speaker (system audio, what the machine plays), mic, or either.
+sources = "speaker"
+
+[record.auto_stop]
+# Auto-stop: how long both channels must stay silent before the recording stops. Audio time: a paused recording does not count, and a resume starts the silence over.
+after = "5m"
+# Auto-stop: sound shorter than this does not end the silence (a notification ping or a click does not keep a finished meeting recording). 0s counts any frame above the level.
+blip = "300ms"
+# Stop a recording by itself once both system audio and the microphone have stayed below record.auto_stop.silence_level for record.auto_stop.after (a meeting that ended while the recording ran on). The silent stretch after the last sound (but record.auto_stop.tail) is cut from the saved audio and transcript, the window says why it stopped, and the auto-stopped event is published.
+enabled = true
+# Auto-stop: per-mille of full scale; a 10 ms frame whose peak is below this on a channel is silence there (10 = 0.01, like stt.speech_peak). Both channels must be silent for the silence to count.
+silence_level = 10
+# Auto-stop: silence kept after the last sound when the trailing silence is cut, so the last word is not clipped.
+tail = "2s"
+# Auto-stop: warn this long before stopping (auto-stop-pending event, a window banner with Keep recording, which runs record-keep). 0s stops without a warning.
+warn_before = "30s"
+
 [secrets]
 # Where secret:<key> references are resolved: environment variables, the OS keychain, or env first then keychain.
 backend = "env-then-keyring"

@@ -1234,6 +1234,11 @@ fn match_now(engine: &Engine, at: Option<&str>, to: Option<&str>) -> Result<Valu
     Ok(v)
 }
 
+/// Whether a calendar event is on at `now` (`record.auto_start.only_in_event`).
+pub fn event_now(engine: &Engine, now: DateTime<Utc>) -> bool {
+    titled(engine, now, now).report["event"].is_object()
+}
+
 /// At `record-start`: the event overlapping `now`. `given` is the title passed in; with one the
 /// event is still recorded but the title is the user's.
 pub fn for_start(engine: &Engine, now: DateTime<Utc>, given: Option<&str>) -> Titled {

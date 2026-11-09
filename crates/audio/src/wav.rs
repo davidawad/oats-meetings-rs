@@ -76,6 +76,42 @@ impl WavWriter {
     }
 }
 
+/// Cut a WAV this module wrote (the 44-byte header) to its first `frames` frames, in place: the
+/// trailing silence an auto-stop drops (dot-4uzgol.110). Returns the frames it keeps (fewer when
+/// the file is shorter).
+pub fn truncate(path: &Path, frames: u64) -> Result<u64> {
+    let p = path.display().to_string();
+    let bad = |m: &str| AudioError::new("invalid_wav", format!("{p}: {m}"));
+    let mut f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| io_err(&p, e))?;
+    let mut h = [0u8; 44];
+    f.read_exact(&mut h).map_err(|e| io_err(&p, e))?;
+    if &h[0..4] != b"RIFF" || &h[8..12] != b"WAVE" || &h[36..40] != b"data" {
+        return Err(bad("not a WAV with its data at byte 44"));
+    }
+    let channels = u64::from(u16::from_le_bytes([h[22], h[23]]));
+    let block = channels * 2;
+    if block == 0 {
+        return Err(bad("no channels"));
+    }
+    let len = f.metadata().map_err(|e| io_err(&p, e))?.len();
+    let keep = frames.min(len.saturating_sub(44) / block);
+    let bytes = keep * block;
+    let res = (|| -> std::io::Result<()> {
+        f.set_len(44 + bytes)?;
+        f.seek(SeekFrom::Start(4))?;
+        f.write_all(&((36 + bytes) as u32).to_le_bytes())?;
+        f.seek(SeekFrom::Start(40))?;
+        f.write_all(&(bytes as u32).to_le_bytes())?;
+        f.flush()
+    })();
+    res.map_err(|e| io_err(&p, e))?;
+    Ok(keep)
+}
+
 pub struct WavData {
     pub channels: u16,
     pub rate: u32,
@@ -180,5 +216,22 @@ mod tests {
         assert!((r.rms(0) - 0.3535).abs() < 0.01);
         assert!(r.rms(1) < 1e-6);
         assert!((r.tone_hz(0) - 440.0).abs() < 2.0);
+    }
+
+    #[test]
+    fn truncate_keeps_the_first_frames_and_a_valid_header() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.wav");
+        let mut w = WavWriter::create(&p, 2, 48000).unwrap();
+        w.write(&vec![0.25; 2 * 48000]).unwrap();
+        w.finish().unwrap();
+        assert_eq!(truncate(&p, 12000).unwrap(), 12000);
+        let r = read(&p).unwrap();
+        assert_eq!((r.channels, r.frames()), (2, 12000));
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 44 + 12000 * 4);
+        // Past the end keeps everything there is.
+        assert_eq!(truncate(&p, 99999).unwrap(), 12000);
+        std::fs::write(&p, b"nope").unwrap();
+        assert!(truncate(&p, 1).is_err());
     }
 }

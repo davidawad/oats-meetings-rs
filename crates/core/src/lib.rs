@@ -1,6 +1,7 @@
 //! Engine: no UI. Single command grammar (Action) lands here in later beads.
 
 pub mod action;
+pub mod autorec;
 pub mod calendar;
 pub mod config;
 pub mod control;

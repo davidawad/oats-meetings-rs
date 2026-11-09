@@ -59,6 +59,8 @@ actions! {
     RecordStart, "record-start", "Start recording a session (system loopback + mic to one WAV).", "implemented", "control", { session: Option<String>, title: Option<String> };
     RecordStop, "record-stop", "Stop recording and save the session. by: who asks (the GUI sends window, menu or tray; ctl sends ctl), logged and in the recording-stopped event.", "implemented", "control", { by: Option<String> };
     RecordPause, "record-pause", "Pause or resume recording.", "implemented", "control", {};
+    RecordKeep, "record-keep", "Keep recording: cancel a pending auto-stop (record.auto_stop.*); the silence it counts starts over now. by: who asks, in the auto-stop-cancelled event.", "implemented", "control", { by: Option<String> };
+    RecordAutoStatus, "record-auto-status", "Auto-stop and auto-start as they stand: the recording's silence so far, where its last sound ended and whether an auto-stop is pending; how long each idle source (speaker, mic) has been active, and which is due to start a recording.", "implemented", "read", {};
     SessionImport, "session-import", "Import sessions from an OpenOats sessions root or one session dir.", "implemented", "write", { from: String, overwrite: Option<bool> };
     SessionExport, "session-export", "Write a session's OpenOats markdown export (openoats/v1: frontmatter, notes, [hh:mm:ss] **Speaker:** lines) into dir (default sessions.export_dir); re-exporting replaces that session's file.", "implemented", "write", { session: String, dir: Option<String> };
     SessionExportOpenoats, "session-export-openoats", "Copy a session into an OpenOats sessions folder (default: sessions/ in sessions.openoats_dir) in a form OpenOats lists and opens; overwrite=true replaces a different copy there.", "implemented", "write", { session: String, to: Option<String>, overwrite: Option<bool> };
@@ -111,7 +113,7 @@ actions! {
     TemplateExport, "template-export", "Merge the note templates into an OpenOats templates.json (default: templates.json in sessions.openoats_dir); same id or name is replaced, other OpenOats templates are kept.", "implemented", "write", { to: Option<String> };
     HookList, "hook-list", "The [[hooks]] entries (name, event, command, timeout, enabled, the last run) and the recent hook runs with exit code, timing and output, newest first.", "implemented", "read", {};
     HookTest, "hook-test", "Run one hook now (by name or 1-based position, enabled or not) as if its event (or event) happened for session (default: the newest), wait for it and return the run: exit code, timed_out, stdout and stderr.", "implemented", "control", { hook: String, session: Option<String>, event: Option<String> };
-    HookAdd, "hook-add", "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.", "implemented", "write", { name: String, event: String, command: Value, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
+    HookAdd, "hook-add", "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, record.auto_start, record.auto_stop, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.", "implemented", "write", { name: String, event: String, command: Value, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
     HookEdit, "hook-edit", "Change fields of a hook (by name or 1-based position); timeout \"\" goes back to app.hook_timeout.", "implemented", "write", { hook: String, name: Option<String>, event: Option<String>, command: Option<Value>, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
     HookRemove, "hook-remove", "Remove a hook (by name or 1-based position).", "implemented", "write", { hook: String };
     HookEnable, "hook-enable", "Turn a hook on (default) or off.", "implemented", "write", { hook: String, enabled: Option<bool> };
@@ -131,6 +133,10 @@ pub const EVENTS: &[&str] = &[
     "recording-paused",
     "recording-stopped",
     "recording-config-deferred",
+    "auto-stop-pending",
+    "auto-stop-cancelled",
+    "auto-stopped",
+    "auto-started",
     "segment",
     "model-download",
     "session-saved",

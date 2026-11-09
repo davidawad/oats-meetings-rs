@@ -14,6 +14,7 @@ use oats_audio::{
 };
 use serde_json::{json, Map, Value};
 
+use crate::autorec::{Activity, Silence, StartRule, StopCheck, StopRule};
 use crate::config::resolve::Flat;
 use crate::config::typed::Config;
 use crate::config::{ConfigError, Result};
@@ -39,6 +40,8 @@ struct Active {
     trans: Option<Transcriber>,
     /// Why there is no transcription ("off", or the reason it was unavailable).
     no_trans: Value,
+    /// The auto-stop detector, fed the audio as it is written (dot-4uzgol.110).
+    silence: Arc<Mutex<Silence>>,
 }
 
 /// How long a device listing may take and how long its result is reused (`audio.devices_timeout`,
@@ -141,6 +144,8 @@ pub struct Recorder {
     asr: Mutex<Option<AsrFactory>>,
     devices: Arc<(Mutex<DevCache>, Condvar)>,
     monitor: MonShared,
+    /// The auto-start detector over the idle monitor (dot-4uzgol.110).
+    activity: Arc<Mutex<Activity>>,
 }
 
 impl Default for Recorder {
@@ -151,6 +156,7 @@ impl Default for Recorder {
             asr: Mutex::new(None),
             devices: Arc::default(),
             monitor: Arc::default(),
+            activity: Arc::new(Mutex::new(Activity::new(StartRule::off()))),
         }
     }
 }
@@ -165,8 +171,9 @@ impl Drop for Recorder {
     }
 }
 
-/// The monitor worker: make `open` match `target()` until the recorder goes.
-fn monitor_worker(shared: MonShared, factory: Arc<Mutex<Factory>>) {
+/// The monitor worker: make `open` match `target()` until the recorder goes. Every monitor it
+/// opens feeds `activity` (auto-start), which starts over with each one.
+fn monitor_worker(shared: MonShared, factory: Arc<Mutex<Factory>>, activity: Arc<Mutex<Activity>>) {
     let (m, cv) = &*shared;
     let mut g = m.lock().expect("monitor");
     loop {
@@ -191,8 +198,12 @@ fn monitor_worker(shared: MonShared, factory: Arc<Mutex<Factory>>) {
                 let (t, epoch) = (t.clone(), g.epoch);
                 g.opening = true;
                 drop(g);
+                activity.lock().expect("activity").reset();
+                let feed = Arc::clone(&activity);
+                let tap: oats_audio::monitor::MonitorTap =
+                    Arc::new(move |src, samples| feed.lock().expect("activity").push(src, samples));
                 let opened = (factory.lock().expect("factory"))(&t)
-                    .and_then(|be| oats_audio::monitor::start(be.as_ref(), &t));
+                    .and_then(|be| oats_audio::monitor::start_tapped(be.as_ref(), &t, Some(tap)));
                 g = m.lock().expect("monitor");
                 g.opening = false;
                 match opened {
@@ -547,10 +558,14 @@ impl Recorder {
         }
         g.retry = retry;
         if let (Some(st), false) = (&want, g.worker) {
-            let (shared, factory) = (Arc::clone(&self.monitor), Arc::clone(&self.factory));
+            let (shared, factory, activity) = (
+                Arc::clone(&self.monitor),
+                Arc::clone(&self.factory),
+                Arc::clone(&self.activity),
+            );
             let spawned = std::thread::Builder::new()
                 .name("oats-monitor".into())
-                .spawn(move || monitor_worker(shared, factory));
+                .spawn(move || monitor_worker(shared, factory, activity));
             match spawned {
                 Ok(_) => g.worker = true,
                 Err(e) => {
@@ -568,6 +583,8 @@ impl Recorder {
         let (m, cv) = &*self.monitor;
         let mut g = m.lock().expect("monitor");
         g.suspended = on;
+        // What the monitor heard before a recording does not start the next one.
+        self.activity.lock().expect("activity").reset();
         // The worker drops the open monitor on this wake-up.
         cv.notify_all();
         while on && g.worker && (g.open.is_some() || g.opening) {
@@ -615,6 +632,7 @@ impl Recorder {
         g.as_ref().map(|a| a.rec.levels())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
         st: &AudioSettings,
@@ -623,6 +641,7 @@ impl Recorder {
         title: Option<&str>,
         plan: Option<Plan>,
         no_trans: Value,
+        rule: StopRule,
     ) -> Result<Value> {
         let mut slot = self.active.lock().expect("active");
         if let Some(a) = slot.as_ref() {
@@ -642,7 +661,9 @@ impl Recorder {
         // The recording opens the devices itself: the monitor lets go of them first, and has
         // them again if the start fails.
         self.suspend_monitor(true);
-        let out = self.start_locked(&mut slot, st, store, id, started, title, plan, no_trans);
+        let out = self.start_locked(
+            &mut slot, st, store, id, started, title, plan, no_trans, rule,
+        );
         if out.is_err() {
             self.suspend_monitor(false);
         }
@@ -660,6 +681,7 @@ impl Recorder {
         title: Option<&str>,
         plan: Option<Plan>,
         no_trans: Value,
+        rule: StopRule,
     ) -> Result<Value> {
         let be: Arc<dyn CaptureBackend> = Arc::from(self.backend(st)?);
         let plan = plan.filter(|p| p.settings.live_enabled || p.settings.final_enabled);
@@ -681,23 +703,31 @@ impl Recorder {
         }
         let wav = dir.join(AUDIO_FILE);
         let trans = plan.map(|p| Transcriber::start(p, store.sibling(), &id, started_dt));
+        let silence = Arc::new(Mutex::new(Silence::new(
+            rule,
+            st.mic_enabled,
+            st.system_enabled,
+        )));
         let rec = {
+            // Every source feeds the auto-stop detector, and the transcriber when there is one.
             let tapf = |src: oats_audio::Source| -> Box<dyn FnMut(&[f32]) + Send> {
-                match trans.as_ref() {
-                    Some(t) => t.tap(src),
-                    None => Box::new(|_: &[f32]| {}),
-                }
+                let mut inner = trans.as_ref().map(|t| t.tap(src));
+                let silence = Arc::clone(&silence);
+                Box::new(move |x: &[f32]| {
+                    silence.lock().expect("silence").push(src, x);
+                    if let Some(t) = inner.as_mut() {
+                        t(x);
+                    }
+                })
             };
-            let tap: Option<oats_audio::recorder::TapFactory> =
-                if trans.is_some() { Some(&tapf) } else { None };
-            oats_audio::recorder::start(Arc::clone(&be), st, &wav, tap)
+            oats_audio::recorder::start(Arc::clone(&be), st, &wav, Some(&tapf))
         };
         let rec = match rec {
             Ok(r) => r,
             Err(e) => {
                 // Leave no session folder behind a failed start.
                 if let Some(t) = trans {
-                    t.finish(&wav, false, Utc::now());
+                    t.finish(&wav, false, Utc::now(), None);
                 }
                 let _ = std::fs::remove_dir_all(&dir);
                 return Err(audio_err(e));
@@ -724,11 +754,15 @@ impl Recorder {
             rec,
             trans,
             no_trans,
+            silence,
         });
         Ok(out)
     }
 
-    pub fn stop(&self) -> Result<Value> {
+    /// Stop and save the recording. `cut_ms`: an auto-stop's cut (dot-4uzgol.110): the audio
+    /// from there on (the trailing silence) is dropped, and the live utterances in it, before the
+    /// final pass runs over what is kept; `session.json` records it as `autoStop`.
+    pub fn stop(&self, cut_ms: Option<u64>) -> Result<Value> {
         let a = self
             .active
             .lock()
@@ -748,9 +782,23 @@ impl Recorder {
         } = a;
         let summary = rec.stop().map_err(audio_err);
         self.suspend_monitor(false);
-        let summary = summary?;
+        let mut summary = summary?;
+        let cut = match cut_ms {
+            Some(ms) => {
+                let want = ms * u64::from(summary.rate) / 1000;
+                let kept = oats_audio::wav::truncate(&summary.path, want).map_err(audio_err)?;
+                let trimmed_ms = summary
+                    .duration_ms
+                    .saturating_sub(kept * 1000 / u64::from(summary.rate));
+                summary.frames = kept;
+                summary.duration_ms = kept * 1000 / u64::from(summary.rate);
+                Some((ms, trimmed_ms))
+            }
+            None => None,
+        };
+        let cut_secs = cut.map(|(ms, _)| ms as f64 / 1000.0);
         let transcription = match trans {
-            Some(t) => t.finish(&summary.path, layout == Layout::Split, ended),
+            Some(t) => t.finish(&summary.path, layout == Layout::Split, ended, cut_secs),
             None => {
                 let _ = store.finish(
                     &id,
@@ -760,8 +808,19 @@ impl Recorder {
             }
         };
         merge_audio_meta(&dir, summary.duration_ms, summary.channels)?;
+        let trimmed_ms = cut.map(|(_, t)| t);
+        if let Some((ms, trimmed)) = cut {
+            let mut m = read_meta(&dir).unwrap_or_default();
+            set_ext(
+                &mut m,
+                "autoStop",
+                json!({"cutAtMs": ms, "trimmedMs": trimmed}),
+            );
+            crate::sessions::write_meta(&dir, &m)?;
+        }
         Ok(
             json!({"session": id, "path": summary.path, "duration_ms": summary.duration_ms,
+            "trimmed_ms": trimmed_ms,
             "frames": summary.frames, "rate": summary.rate, "channels": summary.channels,
             "system_samples": summary.system_samples, "mic_samples": summary.mic_samples,
             "system_backend": summary.system_source, "echo_lag_ms": summary.echo_lag_ms,
@@ -777,7 +836,60 @@ impl Recorder {
             .ok_or_else(|| ConfigError::new("not_recording", "no recording is active"))?;
         let now = !a.rec.paused();
         a.rec.set_paused(now);
+        a.silence.lock().expect("silence").set_paused(now);
         Ok(json!({"session": a.id, "paused": now, "duration_ms": a.rec.duration_ms()}))
+    }
+
+    /// The auto-stop verdict on recording `id` under `rule` (which it adopts: config is live);
+    /// None when `id` is not recording or a start or stop holds the recorder.
+    pub fn auto_stop_check(&self, id: &str, rule: StopRule) -> Option<StopCheck> {
+        let g = self.active.try_lock().ok()?;
+        let a = g.as_ref().filter(|a| a.id == id)?;
+        let mut s = a.silence.lock().expect("silence");
+        s.set_rule(rule);
+        Some(s.check())
+    }
+
+    /// `record-keep`: the recording's silence starts over. `(session, whether a stop was pending)`.
+    pub fn keep(&self) -> Result<(String, bool)> {
+        let g = self.active.lock().expect("active");
+        let a = g
+            .as_ref()
+            .ok_or_else(|| ConfigError::new("not_recording", "no recording is active"))?;
+        let pending = a.silence.lock().expect("silence").keep();
+        Ok((a.id.clone(), pending))
+    }
+
+    /// Adopt the auto-start rule (config is live) and say which source is due, if any.
+    pub fn activity_due(&self, rule: StartRule) -> Option<oats_audio::Source> {
+        let mut a = self.activity.lock().expect("activity");
+        a.set_rule(rule);
+        a.due()
+    }
+
+    /// Forget the activity heard so far (a start was refused or skipped).
+    pub fn reset_activity(&self) {
+        self.activity.lock().expect("activity").reset();
+    }
+
+    /// `record-auto-status`: the detectors as they stand.
+    pub fn auto_status(&self) -> Value {
+        use crate::autorec::source_name;
+        use oats_audio::Source;
+        let recording = self.active.try_lock().ok().and_then(|g| {
+            g.as_ref().map(|a| {
+                let s = a.silence.lock().expect("silence");
+                json!({"session": a.id, "silence_ms": s.silence_ms(),
+                       "last_sound_ms": s.last_sound_ms(), "paused": s.paused(),
+                       "pending": s.pending()})
+            })
+        });
+        let act = self.activity.lock().expect("activity");
+        let mut active = Map::new();
+        for src in [Source::System, Source::Mic] {
+            active.insert(source_name(src).into(), json!(act.sustained_ms(src)));
+        }
+        json!({"recording": recording, "activity_ms": active, "due": act.due().map(source_name)})
     }
 
     /// Add recording facts to a `session-get` result: `state`, `duration_ms` and `audio_path`.

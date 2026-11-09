@@ -146,17 +146,31 @@ impl Transcriber {
 
     /// Flush the live pass, run the final pass over `wav_path`, stamp the session as ended.
     /// Transcription problems are reported in the result, never lost audio: the WAV is already saved.
-    pub fn finish(mut self, wav_path: &Path, split: bool, ended: DateTime<Utc>) -> Value {
+    /// `cut_secs`: the WAV was cut there (an auto-stop's trailing silence); the live utterances
+    /// from there on go too.
+    pub fn finish(
+        mut self,
+        wav_path: &Path,
+        split: bool,
+        ended: DateTime<Utc>,
+        cut_secs: Option<f64>,
+    ) -> Value {
         if let Some(tx) = self.tx.take() {
             let _ = tx.send(Msg::Stop);
         }
-        let live = self.worker.take().map(|w| {
+        let mut live = self.worker.take().map(|w| {
             w.join().unwrap_or(LiveOutcome {
                 utterances: 0,
                 error: Some(ConfigError::new("internal", "live worker panicked")),
                 stages: None,
             })
         });
+        if let (Some(cut), Some(l)) = (cut_secs, live.as_mut()) {
+            match self.store.trim_transcript(&self.id, "live", cut) {
+                Ok(n) => l.utterances = l.utterances.saturating_sub(n),
+                Err(e) => l.error = l.error.take().or(Some(e)),
+            }
+        }
         let s = &self.plan.settings;
         let (final_state, final_n, final_stages) = if !s.final_enabled {
             (json!("off"), 0, None)

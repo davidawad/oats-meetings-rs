@@ -92,7 +92,7 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
 /// The settings sections in order, each with the key path prefixes it holds; a key goes to the
 /// first section with a matching prefix (so `ui.theme` is Appearance, other `ui.*` Window).
 pub const SECTIONS: &[(&str, &[&str])] = &[
-    ("Recording", &["audio.", "ui.monitor"]),
+    ("Recording", &["audio.", "ui.monitor", "record."]),
     ("Transcription", &["stt."]),
     ("Speakers", &["speakers."]),
     ("Privacy", &["network.", "privacy.", "secrets."]),
@@ -131,6 +131,21 @@ const LABELS: &[(&str, &str)] = &[
         "Hide the window from screen capture",
     ),
     ("ui.monitor", "Input monitor"),
+    ("record.auto_stop.enabled", "Stop recording after silence"),
+    (
+        "record.auto_stop.silence_level",
+        "Silence below (per-mille)",
+    ),
+    ("record.auto_stop.after", "Stop after this much silence"),
+    ("record.auto_stop.warn_before", "Warn before stopping"),
+    ("record.auto_start.enabled", "Start recording on sound"),
+    ("record.auto_start.level", "Sound at or above (per-mille)"),
+    ("record.auto_start.after", "Start after this much sound"),
+    ("record.auto_start.sources", "Sound from"),
+    (
+        "record.auto_start.only_in_event",
+        "Start only during a calendar event",
+    ),
     ("speakers.mic.label", "Your label"),
     ("speakers.mic.diarize", "Split the microphone by voice"),
     ("speakers.mic.template", "Room speaker label"),
@@ -330,6 +345,17 @@ mod tests {
     fn keys_fall_into_the_design_sections_with_readable_labels() {
         assert_eq!(section_of("audio.mic.device"), "Recording");
         assert_eq!(section_of("ui.theme"), "Appearance");
+        // Auto-stop and auto-start (dot-4uzgol.110) sit with the recording settings.
+        assert_eq!(section_of("record.auto_stop.after"), "Recording");
+        assert_eq!(section_of("record.auto_start.sources"), "Recording");
+        assert_eq!(
+            label_of("record.auto_stop.enabled"),
+            "Stop recording after silence"
+        );
+        assert_eq!(
+            label_of("record.auto_start.enabled"),
+            "Start recording on sound"
+        );
         assert_eq!(section_of("ui.start_hidden"), "Window");
         assert_eq!(section_of("network.allow"), "Privacy");
         assert_eq!(section_of("ui.keys.record-toggle"), "Keyboard shortcuts");

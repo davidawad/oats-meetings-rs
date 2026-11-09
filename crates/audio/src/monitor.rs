@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 
 use crate::backend::{Capture, CaptureBackend, DeviceKind};
 use crate::error::{AudioError, Result};
-use crate::recorder::rms;
+use crate::recorder::{rms, Source};
 use crate::settings::AudioSettings;
 
 #[derive(Default)]
@@ -29,10 +29,23 @@ pub struct Monitor {
     captures: Vec<Box<dyn Capture>>,
 }
 
+/// Sees every block the monitor meters, per source, on the capture's thread (it must not block):
+/// the auto-start detector (dot-4uzgol.110).
+pub type MonitorTap = Arc<dyn Fn(Source, &[f32]) + Send + Sync>;
+
 /// Open the enabled sources of `settings` for metering. At least one must open: a source that
 /// fails beside one that opened is left out (its meter stays at zero), so a denied mic does not
 /// blank the system meter.
 pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings) -> Result<Monitor> {
+    start_tapped(backend, settings, None)
+}
+
+/// `start`, with every metered block also handed to `tap`.
+pub fn start_tapped(
+    backend: &dyn CaptureBackend,
+    settings: &AudioSettings,
+    tap: Option<MonitorTap>,
+) -> Result<Monitor> {
     let levels = Arc::new(Levels::default());
     let mut captures: Vec<Box<dyn Capture>> = vec![];
     let mut first_err = None;
@@ -55,6 +68,8 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings) -> Result<M
             continue;
         }
         let weak: Weak<Levels> = Arc::downgrade(&levels);
+        let tap = tap.clone();
+        let source = if is_sys { Source::System } else { Source::Mic };
         let opened = backend.open(
             kind,
             device,
@@ -70,6 +85,9 @@ pub fn start(backend: &dyn CaptureBackend, settings: &AudioSettings) -> Result<M
                 };
                 level.store(rms(samples).to_bits(), Ordering::SeqCst);
                 blocks.fetch_add(1, Ordering::SeqCst);
+                if let Some(t) = tap.as_ref() {
+                    t(source, samples);
+                }
             }),
         );
         match opened {

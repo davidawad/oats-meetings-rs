@@ -187,6 +187,26 @@
       "status": "implemented"
     },
     {
+      "doc": "Keep recording: cancel a pending auto-stop (record.auto_stop.*); the silence it counts starts over now. by: who asks, in the auto-stop-cancelled event.",
+      "effect": "control",
+      "name": "record-keep",
+      "params": [
+        {
+          "name": "by",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Auto-stop and auto-start as they stand: the recording's silence so far, where its last sound ended and whether an auto-stop is pending; how long each idle source (speaker, mic) has been active, and which is due to start a recording.",
+      "effect": "read",
+      "name": "record-auto-status",
+      "params": [],
+      "status": "implemented"
+    },
+    {
       "doc": "Import sessions from an OpenOats sessions root or one session dir.",
       "effect": "write",
       "name": "session-import",
@@ -1179,7 +1199,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.",
+      "doc": "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, record.auto_start, record.auto_stop, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.",
       "effect": "write",
       "name": "hook-add",
       "params": [
@@ -1373,6 +1393,10 @@
     "recording-paused",
     "recording-stopped",
     "recording-config-deferred",
+    "auto-stop-pending",
+    "auto-stop-cancelled",
+    "auto-stopped",
+    "auto-started",
     "segment",
     "model-download",
     "session-saved",

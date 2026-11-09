@@ -769,6 +769,31 @@ impl Store {
             .map_err(|e| io(&path, e))
     }
 
+    /// Drop the utterances of `live` or `final` that start at or after `cut_secs` into the
+    /// recording (`x_oats.startSeconds`; one without timing is kept): the trailing silence an
+    /// auto-stop cuts (dot-4uzgol.110). Returns how many it dropped; no file is no change.
+    pub fn trim_transcript(&self, id: &str, kind: &str, cut_secs: f64) -> Result<usize> {
+        let path = self.transcript_path(id, kind)?;
+        if !path.is_file() {
+            return Ok(0);
+        }
+        let all = read_jsonl(&path);
+        let kept: Vec<Value> = all
+            .iter()
+            .filter(|u| {
+                u["x_oats"]["startSeconds"]
+                    .as_f64()
+                    .is_none_or(|s| s < cut_secs)
+            })
+            .cloned()
+            .collect();
+        let dropped = all.len() - kept.len();
+        if dropped > 0 {
+            self.write_transcript(id, kind, &kept)?;
+        }
+        Ok(dropped)
+    }
+
     /// Append one utterance line to `live` or `final`.
     pub fn append_utterance(&self, id: &str, kind: &str, utterance: &Value) -> Result<()> {
         use std::io::Write;

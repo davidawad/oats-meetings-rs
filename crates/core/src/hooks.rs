@@ -30,6 +30,8 @@ pub const EVENTS: &[&str] = &[
     "record.start",
     "record.pause",
     "record.stop",
+    "record.auto_start",
+    "record.auto_stop",
     "transcript.final",
     "calendar.matched",
     "session.saved",
@@ -298,6 +300,8 @@ pub fn events_for(topic: &str, data: &Value) -> Vec<&'static str> {
             }
         }
         "recording-paused" => out.push("record.pause"),
+        "auto-started" => out.push("record.auto_start"),
+        "auto-stopped" => out.push("record.auto_stop"),
         "recording-stopped" => {
             out.push("record.stop");
             if data["transcription"]["final"] == "ok" {

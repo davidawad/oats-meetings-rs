@@ -50,6 +50,7 @@ pub struct Config {
     pub network: Network,
     pub notes: Notes,
     pub privacy: Privacy,
+    pub record: Record,
     pub secrets: Secrets,
     pub sessions: Sessions,
     pub speakers: Speakers,
@@ -254,6 +255,47 @@ pub enum Theme {
     System,
     Dark,
     Light,
+}
+
+/// `record.*`: recordings that stop and start by themselves (dot-4uzgol.110, `crate::autorec`).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Record {
+    pub auto_check: Dur,
+    pub auto_start: RecordAutoStart,
+    pub auto_stop: RecordAutoStop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordAutoStop {
+    pub after: Dur,
+    pub blip: Dur,
+    pub enabled: bool,
+    pub silence_level: u32,
+    pub tail: Dur,
+    pub warn_before: Dur,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordAutoStart {
+    pub after: Dur,
+    pub cooldown: Dur,
+    pub enabled: bool,
+    pub gap: Dur,
+    pub level: u32,
+    pub only_in_event: bool,
+    pub sources: AutoStartSources,
+}
+
+/// `record.auto_start.sources`: whose activity starts a recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoStartSources {
+    Speaker,
+    Mic,
+    Either,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

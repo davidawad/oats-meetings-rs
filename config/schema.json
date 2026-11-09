@@ -825,6 +825,8 @@
               "record.start",
               "record.pause",
               "record.stop",
+              "record.auto_start",
+              "record.auto_stop",
               "transcript.final",
               "calendar.matched",
               "session.saved",
@@ -1260,6 +1262,187 @@
           "type": "string",
           "x-reload": "live",
           "x-ui": false
+        }
+      },
+      "type": "object"
+    },
+    "record": {
+      "additionalProperties": false,
+      "properties": {
+        "auto_check": {
+          "default": "250ms",
+          "description": "How often the engine checks the auto-stop silence and the auto-start activity: the most an auto-stop or auto-start can be late by.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "10s",
+          "x-max-ms": 10000,
+          "x-min": "10ms",
+          "x-min-ms": 10,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "auto_start": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "default": "30s",
+              "description": "Auto-start: how long the activity must be sustained before a recording starts; shorter sound (a notification, a short clip) never starts one.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1h",
+              "x-max-ms": 3600000,
+              "x-min": "1s",
+              "x-min-ms": 1000,
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "cooldown": {
+              "default": "2m",
+              "description": "Auto-start: no recording starts by itself this soon after one stopped (a recording you stopped while audio still plays is not restarted at once).",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1d",
+              "x-max-ms": 86400000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "enabled": {
+              "default": false,
+              "description": "Start recording by itself when, while idle, record.auto_start.sources stay above record.auto_start.level for record.auto_start.after (a call that began without pressing Record). Listening keeps the input monitor open while the app runs, as ui.monitor = always does. Publishes auto-started and says so in the window.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "gap": {
+              "default": "2s",
+              "description": "Auto-start: a quiet dip shorter than this does not break sustained activity (the pauses between sentences); a longer one starts the count over.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1m",
+              "x-max-ms": 60000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "level": {
+              "default": 20,
+              "description": "Auto-start: per-mille of full scale; a 10 ms frame whose peak reaches this is activity (20 = 0.02).",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "only_in_event": {
+              "default": false,
+              "description": "Auto-start: only while a calendar event (calendar.sources) is on now; music outside meetings never starts a recording.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "sources": {
+              "default": "speaker",
+              "description": "Auto-start: which channel's activity counts: speaker (system audio, what the machine plays), mic, or either.",
+              "enum": [
+                "speaker",
+                "mic",
+                "either"
+              ],
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "auto_stop": {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "default": "5m",
+              "description": "Auto-stop: how long both channels must stay silent before the recording stops. Audio time: a paused recording does not count, and a resume starts the silence over.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "4h",
+              "x-max-ms": 14400000,
+              "x-min": "1s",
+              "x-min-ms": 1000,
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "blip": {
+              "default": "300ms",
+              "description": "Auto-stop: sound shorter than this does not end the silence (a notification ping or a click does not keep a finished meeting recording). 0s counts any frame above the level.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "10s",
+              "x-max-ms": 10000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "enabled": {
+              "default": true,
+              "description": "Stop a recording by itself once both system audio and the microphone have stayed below record.auto_stop.silence_level for record.auto_stop.after (a meeting that ended while the recording ran on). The silent stretch after the last sound (but record.auto_stop.tail) is cut from the saved audio and transcript, the window says why it stopped, and the auto-stopped event is published.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "silence_level": {
+              "default": 10,
+              "description": "Auto-stop: per-mille of full scale; a 10 ms frame whose peak is below this on a channel is silence there (10 = 0.01, like stt.speech_peak). Both channels must be silent for the silence to count.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "tail": {
+              "default": "2s",
+              "description": "Auto-stop: silence kept after the last sound when the trailing silence is cut, so the last word is not clipped.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1m",
+              "x-max-ms": 60000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": false
+            },
+            "warn_before": {
+              "default": "30s",
+              "description": "Auto-stop: warn this long before stopping (auto-stop-pending event, a window banner with Keep recording, which runs record-keep). 0s stops without a warning.",
+              "format": "duration",
+              "pattern": "^[0-9]+(ms|s|m|h|d)$",
+              "type": "string",
+              "x-kind": "duration",
+              "x-max": "1h",
+              "x-max-ms": 3600000,
+              "x-min": "0s",
+              "x-min-ms": 0,
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
         }
       },
       "type": "object"

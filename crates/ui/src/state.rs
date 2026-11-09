@@ -349,6 +349,12 @@ pub struct State {
     /// Why the engine stopped the last recording itself (a forced `recording-stopped`), as the
     /// banner says it, until the next recording starts (dot-4uzgol.99).
     pub stop_notice: Option<String>,
+    /// A recording that stopped or started by itself (`auto-stopped`, `auto-started`), as the
+    /// banner says it, until dismissed or the next recording event (dot-4uzgol.110).
+    pub auto_notice: Option<String>,
+    /// An auto-stop on its way (`auto-stop-pending`), with a Keep recording button, until it is
+    /// cancelled or the recording stops.
+    pub auto_pending: Option<String>,
     /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
     /// status line.
     pub model: Option<(String, String)>,
@@ -611,6 +617,8 @@ impl State {
         match v["event"].as_str() {
             Some("recording-started") => {
                 self.stop_notice = None;
+                self.auto_notice = None;
+                self.auto_pending = None;
                 self.live.clear();
                 self.live_names.clear();
                 self.live_session = Some(session.clone());
@@ -637,6 +645,8 @@ impl State {
             }
             Some("recording-stopped") => {
                 self.rec = Rec::Idle;
+                self.auto_pending = None;
+                self.auto_notice = None;
                 if d["forced"] == true {
                     self.stop_notice = Some(format!(
                         "Recording {session} was stopped: {}",
@@ -668,6 +678,13 @@ impl State {
                     self.transcript_names = names();
                 }
             }
+            Some("auto-stopped" | "auto-started") => {
+                self.auto_notice = d["message"].as_str().map(str::to_string);
+            }
+            Some("auto-stop-pending") => {
+                self.auto_pending = d["message"].as_str().map(str::to_string);
+            }
+            Some("auto-stop-cancelled") => self.auto_pending = None,
             Some("hook-finished") => {
                 // The Hooks panel re-reads its runs; a failure raises the banner.
                 self.hooks_ui.list = Value::Null;
@@ -1142,6 +1159,61 @@ mod tests {
         );
         st.on_event(&engine, &ev("recording-started", json!({"session": "c"})));
         assert_eq!(st.stop_notice, None);
+    }
+
+    #[test]
+    fn auto_stop_and_start_show_their_banners() {
+        // dot-4uzgol.110: a pending auto-stop until kept or stopped; then why it stopped.
+        let (engine, _d) = testutil::engine(&[]);
+        let mut st = State::default();
+        st.on_event(&engine, &ev("recording-started", json!({"session": "a"})));
+        let pending = "No sound for a while: recording stops in 30s unless you keep it";
+        st.on_event(
+            &engine,
+            &ev(
+                "auto-stop-pending",
+                json!({"session": "a", "message": pending}),
+            ),
+        );
+        assert_eq!(st.auto_pending.as_deref(), Some(pending));
+        st.on_event(
+            &engine,
+            &ev(
+                "auto-stop-cancelled",
+                json!({"session": "a", "by": "window"}),
+            ),
+        );
+        assert_eq!(st.auto_pending, None);
+        st.on_event(
+            &engine,
+            &ev(
+                "auto-stop-pending",
+                json!({"session": "a", "message": pending}),
+            ),
+        );
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-stopped",
+                json!({"session": "a", "by": "auto-stop", "forced": false}),
+            ),
+        );
+        let stopped = "Recording stopped after 5m of silence";
+        st.on_event(
+            &engine,
+            &ev("auto-stopped", json!({"session": "a", "message": stopped})),
+        );
+        assert_eq!(st.auto_pending, None);
+        assert_eq!(st.auto_notice.as_deref(), Some(stopped));
+        assert_eq!(st.stop_notice, None, "an auto-stop is not a forced stop");
+        st.on_event(&engine, &ev("recording-started", json!({"session": "b"})));
+        assert_eq!(st.auto_notice, None);
+        let started = "Recording started: speaker audio for 30s";
+        st.on_event(
+            &engine,
+            &ev("auto-started", json!({"session": "b", "message": started})),
+        );
+        assert_eq!(st.auto_notice.as_deref(), Some(started));
     }
 
     #[test]

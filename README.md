@@ -3,6 +3,13 @@ oats-meetings-rs: GPUI + Rust rewrite of openoats (private).
 Private; licence undecided (placeholder `LicenseRef-Undecided`). No cargo on carbon: build in pods.
 CI: none hosted. Pods are the CI: `bin/pod-run <repo> <ref> bash ci/linux-nix.sh` (add `env CROSS_TARGET=x86_64-pc-windows-msvc` for the Windows check).
 
+## Auto-stop and auto-start
+
+A recording stops by itself after `record.auto_stop.after` (default 5 minutes) of silence on both
+system audio and the mic, with the trailing silence cut from the saved audio and transcript; it
+warns first with a Keep recording button (`ctl record-keep`). Optionally (`record.auto_start.enabled`)
+sustained speaker or mic sound starts one. See [docs/auto-record.md](docs/auto-record.md).
+
 ## Calendar
 
 Recordings are titled from the calendar event that overlaps them. Events come from
