@@ -892,6 +892,7 @@ impl MainWindow {
                 "state": rec_state,
                 "session": st.rec.session(),
                 "badge": badge,
+                "clock": crate::state::fmt_clock(st.clock_ms(Instant::now())),
                 "start": controls.start,
                 "pause": controls.pause,
                 "pause_label": controls.pause_label,

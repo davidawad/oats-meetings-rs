@@ -328,6 +328,10 @@ pub struct State {
     pub rec: Rec,
     /// A recording button's action is running off the UI thread (a start loads the ASR model).
     pub pending: Option<Control>,
+    /// The record clock held where it stood when Stop or Pause was pressed, until the engine
+    /// answers (dot-4uzgol.109): a stop runs the final transcription before it returns, and the
+    /// clock must not count on through it.
+    pub held_ms: Option<u64>,
     pub settings: Vec<Group>,
     /// Number of capture devices the audio backend reports (0 when none or unavailable).
     pub devices: usize,
@@ -533,6 +537,25 @@ impl State {
                 }
             }
         }
+    }
+
+    /// What the record clock shows: the held reading while a Stop or Pause press runs, else the
+    /// recorder's elapsed time.
+    pub fn clock_ms(&self, now: Instant) -> u64 {
+        self.held_ms.unwrap_or_else(|| self.rec.elapsed_ms(now))
+    }
+
+    /// A recording button's action starts: the buttons are busy and, for Stop and Pause, the
+    /// clock holds still from this moment.
+    pub fn begin(&mut self, c: Control, now: Instant) {
+        self.pending = Some(c);
+        self.held_ms = (c != Control::Start).then(|| self.rec.elapsed_ms(now));
+    }
+
+    /// The pending action is over (or belonged to a window that is gone).
+    pub fn settle(&mut self) {
+        self.pending = None;
+        self.held_ms = None;
     }
 
     /// Whether New session applies: idle, nothing pending, and Live still shows a finished session.

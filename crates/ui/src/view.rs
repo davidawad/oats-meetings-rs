@@ -172,7 +172,7 @@ impl MainWindow {
     fn with_state(engine: Arc<Engine>, mut state: State) -> Self {
         // An open input or a pending press belonged to the old window (its focus, its task).
         state.cancel_edit();
-        state.pending = None;
+        state.settle();
         state.refresh(&engine);
         state.sync_rec(&engine);
         let mut trash = views::trash::Trash::default();
@@ -245,7 +245,9 @@ impl MainWindow {
     /// Per host tick: reconcile with the recorder and keep the elapsed clock and meters moving.
     pub fn tick(&mut self, cx: &mut Context<Self>) {
         let before = self.state.rec.clone();
-        if self.state.pending.is_none() {
+        // A start is not adopted before it answers; a stop or pause follows the recorder at once,
+        // so the badge is Not recording as soon as the engine has let the recording go.
+        if self.state.pending != Some(Control::Start) {
             self.state.sync_rec(&self.engine);
         }
         let was = (self.levels, self.meter_source);
@@ -302,7 +304,7 @@ impl MainWindow {
         let r = Reading {
             levels: self.levels,
             source: self.meter_source,
-            clock: self.state.rec.elapsed_ms(Instant::now()) / 1000,
+            clock: self.state.clock_ms(Instant::now()) / 1000,
             steps: ui.meter_steps,
             interval: ui.meter_interval.as_duration(),
         };
@@ -337,7 +339,7 @@ impl MainWindow {
         if !ok {
             return;
         }
-        self.state.pending = Some(c);
+        self.state.begin(c, Instant::now());
         cx.notify();
         let engine = Arc::clone(&self.engine);
         cx.spawn(async move |this, cx| {
@@ -347,7 +349,7 @@ impl MainWindow {
                 .spawn(async move { crate::model::dispatch_from(&eng, c.action(), "window") })
                 .await;
             let _ = this.update(cx, |v, cx| {
-                v.state.pending = None;
+                v.state.settle();
                 v.state.status = res.err().map(|e| e.to_string()).unwrap_or_default();
                 v.state.refresh(&v.engine);
                 v.state.sync_rec(&v.engine);
@@ -413,7 +415,7 @@ impl MainWindow {
         let idle = matches!(self.state.rec, Rec::Idle);
         // Idle, the meters show the input monitor (nothing recorded); recording, the recorded
         // streams.
-        let clock = fmt_clock(self.state.rec.elapsed_ms(Instant::now()));
+        let clock = fmt_clock(self.state.clock_ms(Instant::now()));
         // The bars are `Gauge`s drawn over these slots (dot-4uzgol.103).
         let meter = |label: &'static str, s: Slot| {
             div()
@@ -1380,6 +1382,162 @@ mod tests {
         press(Control::Stop, cx);
         assert!(engine.recording() == Some(None));
         view.read_with(cx, |v, _| assert_eq!(v.state.rec, Rec::Idle));
+    }
+
+    /// Tick and read `ui-state`'s `recording`.
+    fn rec_state(view: &Entity<MainWindow>, cx: &mut gpui::VisualTestContext) -> serde_json::Value {
+        view.update(cx, |v, cx| {
+            v.tick(cx);
+            v.dump(cx)["recording"].clone()
+        })
+    }
+
+    /// Tick until the window's recording state is `want` (5 s at most): a tick skips the recorder
+    /// while another engine thread (its guard) holds it, and the window syncs on its next tick.
+    fn settle_rec(
+        view: &Entity<MainWindow>,
+        want: &str,
+        cx: &mut gpui::VisualTestContext,
+    ) -> serde_json::Value {
+        let t = Instant::now();
+        loop {
+            let r = rec_state(view, cx);
+            if r["state"] == want || t.elapsed() > std::time::Duration::from_secs(5) {
+                return r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// A `FakeBackend` that counts the samples each capture it opened delivers.
+    struct Tally {
+        inner: oats_audio::fake::FakeBackend,
+        counts: Arc<std::sync::Mutex<Vec<Arc<std::sync::atomic::AtomicUsize>>>>,
+    }
+
+    impl oats_audio::backend::CaptureBackend for Tally {
+        fn name(&self) -> &'static str {
+            "tally"
+        }
+
+        fn list_devices(&self) -> oats_audio::error::Result<Vec<oats_audio::backend::DeviceInfo>> {
+            self.inner.list_devices()
+        }
+
+        fn open(
+            &self,
+            kind: oats_audio::backend::DeviceKind,
+            device: &str,
+            mut on: oats_audio::backend::OnSamples,
+        ) -> oats_audio::error::Result<Box<dyn oats_audio::backend::Capture>> {
+            let n = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            self.counts.lock().unwrap().push(Arc::clone(&n));
+            self.inner.open(
+                kind,
+                device,
+                Box::new(move |s: &[f32]| {
+                    n.fetch_add(s.len(), std::sync::atomic::Ordering::SeqCst);
+                    on(s)
+                }),
+            )
+        }
+    }
+
+    /// dot-4uzgol.109: the Stop button holds the elapsed clock the moment it is pressed, through
+    /// the stop's final transcription, and the window ends Not recording at 00:00:00 with the
+    /// engine's captures stopped; Pause holds it the same way and while paused.
+    #[test]
+    fn stop_and_pause_buttons_hold_the_elapsed_clock_and_the_engine_stops_capturing() {
+        use std::sync::atomic::Ordering;
+        let (engine, _d) = testutil::engine(&[]);
+        let counts: Arc<std::sync::Mutex<Vec<Arc<std::sync::atomic::AtomicUsize>>>> =
+            Arc::default();
+        let c2 = Arc::clone(&counts);
+        engine.set_audio_factory(Box::new(move |_| {
+            Ok(Box::new(Tally {
+                inner: oats_audio::fake::FakeBackend::default(),
+                counts: Arc::clone(&c2),
+            }))
+        }));
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        let rec = |cx: &mut gpui::VisualTestContext| rec_state(&view, cx);
+        let settle = |want: &str, cx: &mut gpui::VisualTestContext| settle_rec(&view, want, cx);
+        let second = || std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        view.update(cx, |v, cx| v.press(Control::Start, cx));
+        cx.run_until_parked();
+        let r0 = settle("recording", cx);
+        assert_eq!(r0["state"], "recording", "{r0}");
+        second();
+        let r1 = rec(cx);
+        assert_ne!(
+            r1["clock"], r0["clock"],
+            "the clock does not run while recording"
+        );
+
+        // Pause: held from the press, and while paused.
+        view.update(cx, |v, cx| v.press(Control::Pause, cx));
+        let held = rec(cx)["clock"].clone();
+        second();
+        assert_eq!(rec(cx)["clock"], held, "the clock ran on while pausing");
+        cx.run_until_parked();
+        let p = settle("paused", cx);
+        assert_eq!(p["state"], "paused", "{p}");
+        second();
+        assert_eq!(rec(cx)["clock"], p["clock"], "the clock ran while paused");
+        view.update(cx, |v, cx| v.press(Control::Pause, cx));
+        cx.run_until_parked();
+        assert_eq!(settle("recording", cx)["state"], "recording");
+        second();
+
+        // Stop: the press runs off the UI thread; before it answers the clock already holds.
+        view.update(cx, |v, cx| v.press(Control::Stop, cx));
+        let s0 = rec(cx);
+        assert_eq!(s0["badge"], Control::Stop.busy_label(), "{s0}");
+        second();
+        assert_eq!(rec(cx)["clock"], s0["clock"], "the clock ran on after Stop");
+        cx.run_until_parked();
+        let s1 = settle("idle", cx);
+        assert_eq!(s1["state"], "idle", "{s1}");
+        assert_eq!(s1["badge"], "Not recording", "{s1}");
+        assert_eq!(s1["clock"], "00:00:00", "{s1}");
+        assert!(engine.recording() == Some(None));
+
+        // The engine stopped: no capture opened for the recording delivers another sample.
+        let n = counts.lock().unwrap().len();
+        assert!(n >= 2, "the recording opened no captures");
+        let got = |k: usize| {
+            counts.lock().unwrap()[..k]
+                .iter()
+                .map(|c| c.load(Ordering::SeqCst))
+                .collect::<Vec<_>>()
+        };
+        let before = got(n);
+        second();
+        assert_eq!(got(n), before, "a recording capture delivered after stop");
+        assert_eq!(rec(cx)["clock"], "00:00:00");
+    }
+
+    /// dot-4uzgol.109: `ctl record.stop` (no button pending) leaves the window Not recording, its
+    /// clock at 00:00:00 and still, on the next tick.
+    #[test]
+    fn ctl_record_stop_stops_the_clock_on_the_next_tick() {
+        use oats_audio::fake::FakeBackend;
+        let (engine, _d) = testutil::engine(&[]);
+        engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        let rec = |cx: &mut gpui::VisualTestContext| rec_state(&view, cx);
+        let settle = |want: &str, cx: &mut gpui::VisualTestContext| settle_rec(&view, want, cx);
+        model::dispatch_from(&engine, "record-start", "ctl").unwrap();
+        assert_eq!(settle("recording", cx)["state"], "recording");
+        model::dispatch_from(&engine, "record-stop", "ctl").unwrap();
+        let r = settle("idle", cx);
+        assert_eq!(r["badge"], "Not recording", "{r}");
+        assert_eq!(r["clock"], "00:00:00", "{r}");
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert_eq!(rec(cx)["clock"], "00:00:00");
     }
 
     #[test]
