@@ -3,8 +3,9 @@
 //! Remove (first click arms), and its last run: exit code, time and output. Add / Edit open a form
 //! whose text boxes are the window's one editor (`State::edit`, Enter keeps the field); Save runs
 //! `hook-add` or `hook-edit`, its Match fields (title, attendees, calendar source, calendar
-//! only; for `transcript.phrase` phrases, speaker and cooldown, dot-4uzgol.111.6) as the `match`
-//! object (dot-4uzgol.111.4). A failed hook run also raises the window's hook banner
+//! only; for `transcript.phrase` phrases, speaker and cooldown, dot-4uzgol.111.6; for
+//! `calendar.ending` before end, dot-4uzgol.111.7) as the `match` object (dot-4uzgol.111.4), and
+//! on a `record.before_*` event its Blocking toggle (dot-4uzgol.111.7). A failed hook run also raises the window's hook banner
 //! (`State::hook_failure`), whatever started it.
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, FontWeight, SharedString, Window};
@@ -26,6 +27,7 @@ pub(crate) const MATCH_ATTENDEES: &str = "hooks:match_attendees";
 pub(crate) const MATCH_SOURCE: &str = "hooks:match_source";
 pub(crate) const MATCH_PHRASES: &str = "hooks:match_phrases";
 pub(crate) const MATCH_COOLDOWN: &str = "hooks:match_cooldown";
+pub(crate) const MATCH_BEFORE_END: &str = "hooks:match_before_end";
 
 /// What separates phrases in the Phrases box (a regex may hold a comma).
 pub(crate) const PHRASE_SEP: char = ';';
@@ -42,6 +44,8 @@ pub struct Draft {
     pub shell: bool,
     /// Empty: `app.hook_timeout`.
     pub timeout: String,
+    /// `blocking` (sent only on an event that may block).
+    pub blocking: bool,
     pub cwd: String,
     /// `match.title`, `match.attendees` (comma-separated), `match.source`, `match.calendar`.
     pub match_title: String,
@@ -53,6 +57,8 @@ pub struct Draft {
     pub match_phrases: String,
     pub match_speaker: String,
     pub match_cooldown: String,
+    /// `match.before_end` (empty: `app.hook_before_end`).
+    pub match_before_end: String,
     /// The hook's whole `match` as it was (the fields the form has no box for are kept).
     pub match_rest: Value,
     pub error: Option<String>,
@@ -85,6 +91,13 @@ impl Draft {
         };
         self.match_speaker = s("speaker");
         self.match_cooldown = s("cooldown");
+        self.match_before_end = s("before_end");
+    }
+
+    /// The `blocking` `hook-add` / `hook-edit` get: the toggle on an event that may block (a
+    /// `record.before_*`), else false (the toggle is hidden, and blocking elsewhere is refused).
+    pub fn blocking_value(&self) -> bool {
+        self.blocking && oats_core::hooks::events::may_block(&self.event)
     }
 
     /// The `match` object `hook-add` / `hook-edit` get: the old one with the form's fields over it.
@@ -116,6 +129,7 @@ impl Draft {
         put("phrases", (!phrases.is_empty()).then(|| json!(phrases)));
         put("speaker", text(&self.match_speaker).filter(|s| s != "any"));
         put("cooldown", text(&self.match_cooldown));
+        put("before_end", text(&self.match_before_end));
         Value::Object(m)
     }
 }
@@ -170,8 +184,8 @@ impl Ui {
             "arming": self.arming,
             "draft": self.draft.as_ref().map(|d| json!({
                 "editing": d.editing, "name": d.name, "event": d.event, "command": d.command,
-                "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd, "match": d.match_value(),
-                "error": d.error,
+                "shell": d.shell, "timeout": d.timeout, "blocking": d.blocking_value(),
+                "cwd": d.cwd, "match": d.match_value(), "error": d.error,
                 "event_doc": self.event_doc(&d.event),
             })),
         })
@@ -217,6 +231,7 @@ pub fn commit(st: &mut State) {
         MATCH_SOURCE => d.match_source = v,
         MATCH_PHRASES => d.match_phrases = v,
         MATCH_COOLDOWN => d.match_cooldown = v,
+        MATCH_BEFORE_END => d.match_before_end = v,
         _ => {}
     }
 }
@@ -255,6 +270,7 @@ pub fn open(st: &mut State, name: Option<&str>) {
                 command: words.join(" "),
                 shell: h["shell"] == true,
                 timeout: h["timeout"].as_str().unwrap_or_default().to_string(),
+                blocking: h["blocking"] == true,
                 cwd: h["cwd"].as_str().unwrap_or_default().to_string(),
                 match_rest: h["match"].clone(),
                 ..Draft::default()
@@ -282,13 +298,14 @@ pub fn save(st: &mut State, engine: &oats_core::control::engine::Engine) {
         None => (
             "hook-add",
             json!({"name": d.name, "event": d.event, "command": command, "shell": d.shell,
-                   "timeout": d.timeout, "cwd": d.cwd, "match": d.match_value()}),
+                   "timeout": d.timeout, "blocking": d.blocking_value(), "cwd": d.cwd,
+                   "match": d.match_value()}),
         ),
         Some(old) => (
             "hook-edit",
             json!({"hook": old, "name": d.name, "event": d.event, "command": command,
-                   "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd,
-                   "match": d.match_value()}),
+                   "shell": d.shell, "timeout": d.timeout, "blocking": d.blocking_value(),
+                   "cwd": d.cwd, "match": d.match_value()}),
         ),
     };
     match model::dispatch(engine, id, params) {
@@ -476,6 +493,13 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
         }
         cx.notify();
     }));
+    let blocking =
+        kit::toggle("hook-blocking", d.blocking).on_click(cx.listener(|this, _, _, cx| {
+            if let Some(d) = this.state.hooks_ui.draft.as_mut() {
+                d.blocking = !d.blocking;
+            }
+            cx.notify();
+        }));
     let calendar = div().flex().gap(px(6.)).children(
         [
             (None, "any session"),
@@ -603,6 +627,23 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
                 cx,
             ),
         ))
+        .when(oats_core::hooks::events::may_block(&d.event), |c| {
+            c.child(labelled(
+                "Blocking",
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(blocking)
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(t.dim))
+                            .child("the recorder waits for it up to its timeout, then goes on whatever happens"),
+                    )
+                    .into_any_element(),
+            ))
+        })
         .child(labelled(
             "Folder",
             text_box(w, CWD, &d.cwd, "the session folder", 360., cx),
@@ -666,6 +707,19 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
                     cx,
                 ),
             ));
+    }
+    if d.event == "calendar.ending" {
+        col = col.child(labelled(
+            "Before end",
+            text_box(
+                w,
+                MATCH_BEFORE_END,
+                &d.match_before_end,
+                "default (app.hook_before_end), e.g. 5m",
+                200.,
+                cx,
+            ),
+        ));
     }
     if let Some(e) = &d.error {
         col = col.child(
@@ -1010,6 +1064,49 @@ mod tests {
             assert!(err.contains("hook no-words") && err.contains("match.phrases"), "{err}");
             cancel(&mut v.state);
         });
+    }
+
+    /// A record.before_start hook added through the form keeps its Blocking toggle and a
+    /// calendar.ending hook its Before end (dot-4uzgol.111.7); the toggle is not sent for an
+    /// event that cannot block, and the engine refuses blocking there.
+    #[test]
+    fn the_hooks_panel_adds_a_blocking_and_a_calendar_ending_hook() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Settings;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            invoke(
+                v,
+                "settings.hook_add",
+                json!({"name": "vpn-up", "event": "record.before_start", "command": "true",
+                       "blocking": true, "timeout": "5s"}),
+                cx,
+            );
+            invoke(
+                v,
+                "settings.hook_add",
+                json!({"name": "wrap-up", "event": "calendar.ending", "command": "true",
+                       "blocking": true, "match": {"before_end": "2m"}}),
+                cx,
+            );
+            let d = v.dump(cx);
+            let hooks = &d["view"]["hooks"]["hooks"];
+            assert_eq!(hooks[0]["blocking"], true, "{d}");
+            assert_eq!(hooks[1]["blocking"], false, "{d}");
+            assert_eq!(hooks[1]["match"], json!({"before_end": "2m"}), "{d}");
+        });
+        let e = model::dispatch(
+            &engine,
+            "hook-edit",
+            json!({"hook": "wrap-up", "blocking": true}),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("blocking = true only on"), "{e}");
     }
 
     /// Add a hook through the form, test-run it, see the failed run on its row and as the banner,

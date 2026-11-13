@@ -96,8 +96,12 @@
       },
       "event": {
         "enum": [
+          "record.before_start",
           "record.start",
           "record.pause",
+          "calendar.ending",
+          "calendar.ended",
+          "record.before_stop",
           "record.stop",
           "record.auto_start",
           "record.auto_stop",
@@ -178,6 +182,77 @@
     "type": "object"
   },
   "events": [
+    {
+      "data": {
+        "properties": {
+          "calendar": {
+            "type": "object"
+          },
+          "reason": {
+            "enum": [
+              "manual",
+              "auto",
+              "calendar"
+            ]
+          },
+          "requested": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "dedup": "<session>:record.before_start:<seq> (no session yet: \"\")",
+      "description": "A recording is about to start (data.reason: manual for record-start or a shortcut, auto for auto-start, calendar for one a calendar event starts). The session does not exist yet: session.id is null, data.title and the envelope's calendar are what it will get. A hook with blocking = true holds the start until it ends or its timeout passes; then the recording starts whatever happened (fail open: a timeout, crash or non-zero exit is logged, never enforced). Blocking hooks run concurrently.",
+      "example": {
+        "at": "2026-11-13T15:15:04.120Z",
+        "calendar": {
+          "attendees": [
+            "ana@acme.com",
+            "Bo"
+          ],
+          "end": "2026-11-13T15:15:00Z",
+          "source": "work",
+          "start": "2026-11-13T15:00:00Z",
+          "title": "Standup"
+        },
+        "data": {
+          "calendar": {
+            "event": {
+              "id": "e1",
+              "source": "work",
+              "title": "Standup"
+            }
+          },
+          "reason": "manual",
+          "requested": null,
+          "title": "Standup"
+        },
+        "dedup": "2026-11-13-standup:record.before_start:3",
+        "event": "record.before_start",
+        "hook": "standup-sync",
+        "run_id": "20261113T151504120Z-3-standup-sync",
+        "schema": "oats.hook-event/1",
+        "seq": 3,
+        "session": {
+          "audio": "/home/me/oats/sessions/2026-11-13-standup/audio.wav",
+          "dir": "/home/me/oats/sessions/2026-11-13-standup",
+          "id": "2026-11-13-standup",
+          "title": "Standup",
+          "transcript": "/home/me/oats/sessions/2026-11-13-standup/transcript.final.jsonl"
+        }
+      },
+      "name": "record.before_start",
+      "topics": []
+    },
     {
       "data": {
         "properties": {
@@ -337,6 +412,197 @@
       "topics": [
         "recording-paused"
       ]
+    },
+    {
+      "data": {
+        "properties": {
+          "end": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "remaining": {
+            "type": "string"
+          },
+          "remaining_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "remaining_ms",
+          "end",
+          "event_id"
+        ],
+        "type": "object"
+      },
+      "dedup": "<session>:calendar.ending:<data.event_id>",
+      "description": "A recording matched to a calendar event is still going match.before_end (default app.hook_before_end) before the event's scheduled end; each hook fires at its own before_end, once per event (a hook not due yet gets no decision). data.remaining_ms is the time left.",
+      "example": {
+        "at": "2026-11-13T15:15:04.120Z",
+        "calendar": {
+          "attendees": [
+            "ana@acme.com",
+            "Bo"
+          ],
+          "end": "2026-11-13T15:15:00Z",
+          "source": "work",
+          "start": "2026-11-13T15:00:00Z",
+          "title": "Standup"
+        },
+        "data": {
+          "end": "2026-11-13T15:15:00.000Z",
+          "event_id": "e1",
+          "remaining": "4m59s",
+          "remaining_ms": 299500,
+          "session": "2026-11-13-standup"
+        },
+        "dedup": "2026-11-13-standup:calendar.ending:e1",
+        "event": "calendar.ending",
+        "hook": "standup-sync",
+        "run_id": "20261113T151504120Z-3-standup-sync",
+        "schema": "oats.hook-event/1",
+        "seq": 3,
+        "session": {
+          "audio": "/home/me/oats/sessions/2026-11-13-standup/audio.wav",
+          "dir": "/home/me/oats/sessions/2026-11-13-standup",
+          "id": "2026-11-13-standup",
+          "title": "Standup",
+          "transcript": "/home/me/oats/sessions/2026-11-13-standup/transcript.final.jsonl"
+        }
+      },
+      "name": "calendar.ending",
+      "topics": []
+    },
+    {
+      "data": {
+        "properties": {
+          "end": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "overrun": {
+            "type": "string"
+          },
+          "overrun_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "overrun_ms",
+          "end",
+          "event_id"
+        ],
+        "type": "object"
+      },
+      "dedup": "<session>:calendar.ended:<data.event_id>",
+      "description": "The scheduled end of the calendar event a recording matched passed while it was recording; fires once (data.overrun_ms: how far past the end the recording was when it fired; it keeps growing while the recording goes on).",
+      "example": {
+        "at": "2026-11-13T15:15:04.120Z",
+        "calendar": {
+          "attendees": [
+            "ana@acme.com",
+            "Bo"
+          ],
+          "end": "2026-11-13T15:15:00Z",
+          "source": "work",
+          "start": "2026-11-13T15:00:00Z",
+          "title": "Standup"
+        },
+        "data": {
+          "end": "2026-11-13T15:15:00.000Z",
+          "event_id": "e1",
+          "overrun": "250ms",
+          "overrun_ms": 250,
+          "session": "2026-11-13-standup"
+        },
+        "dedup": "2026-11-13-standup:calendar.ended:e1",
+        "event": "calendar.ended",
+        "hook": "standup-sync",
+        "run_id": "20261113T151504120Z-3-standup-sync",
+        "schema": "oats.hook-event/1",
+        "seq": 3,
+        "session": {
+          "audio": "/home/me/oats/sessions/2026-11-13-standup/audio.wav",
+          "dir": "/home/me/oats/sessions/2026-11-13-standup",
+          "id": "2026-11-13-standup",
+          "title": "Standup",
+          "transcript": "/home/me/oats/sessions/2026-11-13-standup/transcript.final.jsonl"
+        }
+      },
+      "name": "calendar.ended",
+      "topics": []
+    },
+    {
+      "data": {
+        "properties": {
+          "by": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "manual",
+              "auto",
+              "calendar"
+            ]
+          },
+          "session": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "dedup": "<session>:record.before_stop:<seq>",
+      "description": "A recording is about to stop (data.reason: manual for record-stop or a shortcut, auto for auto-stop, calendar for one a calendar event stops; data.by: who asked). Not for a forced stop (the recording can no longer write). A hook with blocking = true holds the stop (the recording goes on) until it ends or its timeout passes; then the recording stops whatever happened (fail open: a timeout, crash or non-zero exit is logged, never enforced). Blocking hooks run concurrently.",
+      "example": {
+        "at": "2026-11-13T15:15:04.120Z",
+        "calendar": {
+          "attendees": [
+            "ana@acme.com",
+            "Bo"
+          ],
+          "end": "2026-11-13T15:15:00Z",
+          "source": "work",
+          "start": "2026-11-13T15:00:00Z",
+          "title": "Standup"
+        },
+        "data": {
+          "by": "window",
+          "reason": "manual",
+          "session": "2026-11-13-standup"
+        },
+        "dedup": "2026-11-13-standup:record.before_stop:3",
+        "event": "record.before_stop",
+        "hook": "standup-sync",
+        "run_id": "20261113T151504120Z-3-standup-sync",
+        "schema": "oats.hook-event/1",
+        "seq": 3,
+        "session": {
+          "audio": "/home/me/oats/sessions/2026-11-13-standup/audio.wav",
+          "dir": "/home/me/oats/sessions/2026-11-13-standup",
+          "id": "2026-11-13-standup",
+          "title": "Standup",
+          "transcript": "/home/me/oats/sessions/2026-11-13-standup/transcript.final.jsonl"
+        }
+      },
+      "name": "record.before_stop",
+      "topics": []
     },
     {
       "data": {

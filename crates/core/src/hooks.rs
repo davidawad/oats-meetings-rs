@@ -10,10 +10,14 @@
 //! dot-4uzgol.111.4): every decision, fire or skip, comes with a reason, is kept for `hook-list`
 //! and published as `hook-decided`, and `hook-explain` shows them without running anything.
 //! `transcript.phrase` (dot-4uzgol.111.6, `phrase`) fires on what is said: the tap judges each
-//! final utterance against every phrase hook, in order, before it returns. Every run (exit
+//! final utterance against every phrase hook, in order, before it returns. The recorder fires
+//! `record.before_start` / `record.before_stop` itself (`fire_before`, dot-4uzgol.111.7) and waits
+//! for their `blocking` hooks up to their timeout, failing open; the recording's watcher fires
+//! `calendar.ending` / `calendar.ended` from the `ending` timer. Every run (exit
 //! code, timing, the first `app.hook_output` bytes of stdout and stderr) is kept for `hook-list` and published as `hook-finished`; a failure
 //! is logged and shown, never raised into the session.
 
+pub mod ending;
 pub mod events;
 pub mod phrase;
 
@@ -38,7 +42,7 @@ pub use events::names;
 
 /// A `[[hooks]]` table's fields in the order they are written to the user file.
 pub const FIELDS: &[&str] = &[
-    "name", "event", "command", "shell", "timeout", "enabled", "cwd", "match",
+    "name", "event", "command", "shell", "timeout", "blocking", "enabled", "cwd", "match",
 ];
 
 /// The `speaker` values a `match` may name (the phrase triggers read it, dot-4uzgol.111.6).
@@ -49,6 +53,9 @@ const TIMEOUT_KEY: &str = "app.hook_timeout";
 
 /// The key whose range bounds a hook's own `match.cooldown` (and whose value is the default).
 const COOLDOWN_KEY: &str = "app.hook_cooldown";
+
+/// The key whose range bounds a hook's own `match.before_end` (and whose value is the default).
+const BEFORE_END_KEY: &str = "app.hook_before_end";
 
 fn yes() -> bool {
     true
@@ -78,6 +85,10 @@ pub struct Hook {
     /// None: `app.hook_timeout`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Dur>,
+    /// Only on a `*.before_*` event (`events::may_block`): the recorder waits for the run, up to
+    /// its timeout, before it acts, and then acts whatever happened (fail open).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub blocking: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub enabled: bool,
     /// Working directory; empty means the session folder (or the app's own when there is none).
@@ -93,8 +104,8 @@ pub struct Hook {
 /// (`*`, `?`, `[abc]`, `[!abc]`; case-insensitive, the whole text), or after `re:` a regex
 /// (unanchored, as written). `speaker`, `phrases` and `cooldown` are the phrase triggers'
 /// (dot-4uzgol.111.6, `phrase`): `matches` judges `speaker` and `phrases` on `transcript.phrase`,
-/// the tap `cooldown`. `before_end` (`calendar.ending`, dot-4uzgol.111.7) is parsed and checked
-/// here; its event judges it.
+/// the tap `cooldown`. `before_end` is `calendar.ending`'s (dot-4uzgol.111.7, `ending`): the
+/// timer makes a hook due at it, and `matches` explains it against `data.remaining_ms`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Match {
@@ -119,6 +130,7 @@ pub struct Match {
     /// Per hook per session, in recording time; None: `app.hook_cooldown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<Dur>,
+    /// `calendar.ending`: how long before the scheduled end; None: `app.hook_before_end`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_end: Option<Dur>,
 }
@@ -306,6 +318,19 @@ pub fn matches(hook: &Hook, envelope: &Value) -> Verdict {
             ),
         }
     }
+    if event == ending::ENDING {
+        // The timer fires a hook when it is due; this says so (and judges a given remaining_ms).
+        if let (Some(b), Some(left)) = (m.before_end, envelope["data"]["remaining_ms"].as_u64()) {
+            judge(
+                left <= b.0,
+                format!(
+                    "match.before_end = {}: {} left before the scheduled end",
+                    keys::format_duration_ms(b.0),
+                    ending::span(left)
+                ),
+            );
+        }
+    }
     if event == phrase::EVENT {
         let u = &envelope["data"]["utterance"];
         let speaker = u["speaker"].as_str().unwrap_or_default();
@@ -409,6 +434,13 @@ fn check(hooks: &[Hook]) -> Result<()> {
                 )));
             }
         }
+        if h.blocking && !events::may_block(&h.event) {
+            return Err(bad(format!(
+                "hook {label}: blocking = true only on {} (the recorder waits for those, up to the timeout, then goes on); {} never waits for a hook",
+                events::blocking_events().join(" or "),
+                h.event
+            )));
+        }
         check_match(&label, &h.filter)?;
         if h.event == phrase::EVENT && h.filter.phrases.is_empty() {
             return Err(bad(format!(
@@ -442,6 +474,17 @@ fn check_match(label: &str, m: &Match) -> Result<()> {
         if !(min_ms..=max_ms).contains(&c.0) {
             return Err(bad(format!(
                 "hook {label}: match.cooldown must be from {} to {}",
+                keys::format_duration_ms(min_ms),
+                keys::format_duration_ms(max_ms)
+            )));
+        }
+    }
+    if let (Some(b), Some(Kind::Duration { min_ms, max_ms })) =
+        (m.before_end, keys::find(BEFORE_END_KEY).map(|k| k.kind))
+    {
+        if !(min_ms..=max_ms).contains(&b.0) {
+            return Err(bad(format!(
+                "hook {label}: match.before_end must be from {} to {}",
                 keys::format_duration_ms(min_ms),
                 keys::format_duration_ms(max_ms)
             )));
@@ -489,6 +532,7 @@ pub fn item_schema() -> Value {
             "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
             "shell": {"type": "boolean", "default": false},
             "timeout": {"type": "string", "format": "duration", "pattern": "^[0-9]+(ms|s|m|h|d)$"},
+            "blocking": {"type": "boolean", "default": false, "description": format!("only on {}: the recorder waits for the hook up to its timeout, then acts whatever happened (fail open)", events::blocking_events().join(", "))},
             "enabled": {"type": "boolean", "default": true},
             "cwd": {"type": "string"},
             "match": match_schema(),
@@ -731,13 +775,27 @@ pub fn on_event(engine: &Arc<Engine>, topic: &str, data: &Value) {
     let session = session_of(data);
     let seq = count(engine, session.as_deref(), topic, data);
     for spec in events::events_for(topic, data) {
-        start(engine, spec, topic, session.clone(), seq, data.clone());
+        start(
+            engine,
+            spec,
+            topic,
+            session.clone(),
+            seq,
+            data.clone(),
+            None,
+        );
     }
 }
 
 /// Start every enabled hook on `event` (an action's own event, not a bus message), each on its
 /// own thread. Returns at once.
 pub fn fire(engine: &Arc<Engine>, event: &str, data: Value) {
+    fire_for(engine, event, data, None);
+}
+
+/// `fire` for `only` the hooks it names (labels; None: every hook on the event): the
+/// `calendar.ending` timer fires each hook when it comes due (`ending`).
+pub fn fire_for(engine: &Arc<Engine>, event: &str, data: Value, only: Option<&[String]>) {
     let Some(spec) = events::find(event) else {
         crate::elog!("oats-meetings-rs: hooks: no event {event}");
         return;
@@ -745,7 +803,159 @@ pub fn fire(engine: &Arc<Engine>, event: &str, data: Value) {
     let session = session_of(&data);
     // No bus topic stands for it, so the raw log keeps it under its event name.
     let seq = count(engine, session.as_deref(), event, &data);
-    start(engine, spec, "", session, seq, data);
+    start(engine, spec, "", session, seq, data, only);
+}
+
+/// What the recorder heard from one `blocking` hook it waited for before it acted.
+#[derive(Debug, Clone, Serialize)]
+pub struct Waited {
+    pub hook: String,
+    pub event: String,
+    /// How long the recorder waited for it.
+    pub waited_ms: u64,
+    /// The run ended in time (whatever its exit); false: it was still running when the wait
+    /// ended, and runs on to its own timeout in the background.
+    pub finished: bool,
+    pub ok: bool,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub error: Option<String>,
+    pub run_id: Option<String>,
+}
+
+/// Fire a `*.before_*` event (`record.before_start`, `record.before_stop`) from the action about
+/// to act, on its thread, and wait for its `blocking` hooks: they run concurrently, each on its
+/// own thread (no lock or queue), and the wait ends when all have ended or at the longest of their
+/// timeouts (plus one `app.hook_poll` for a killed run to be reaped), whichever is first. Fail
+/// open: a timeout, a crash, a hook that cannot start or a non-zero exit is logged and returned,
+/// never raised; the caller acts whatever happened. Hooks that do not block start as with `fire`
+/// and are not waited for. Returns what each blocking hook did, in config order.
+pub fn fire_before(engine: &Arc<Engine>, event: &str, data: Value) -> Vec<Waited> {
+    let Some(spec) = events::find(event) else {
+        crate::elog!("oats-meetings-rs: hooks: no event {event}");
+        return Vec::new();
+    };
+    let session = session_of(&data);
+    let seq = count(engine, session.as_deref(), event, &data);
+    let cfg = engine.snapshot().config.clone();
+    let hooks = hooks_on(&cfg, spec.name, None);
+    if hooks.is_empty() {
+        return Vec::new();
+    }
+    let key = session.clone().unwrap_or_default();
+    let mut ctx = context(engine, spec.name, session.as_deref(), data);
+    ctx.seq = seq;
+    ctx.dedup = spec.dedup_key(&key, "", &ctx.data, seq);
+    let t0 = Instant::now();
+    let started = judge_and_start(engine, &key, hooks, &ctx);
+    let (wait, _background): (Vec<_>, Vec<_>) =
+        started.into_iter().partition(|(_, h, _)| h.blocking);
+    let Some(longest) = wait.iter().map(|(_, h, _)| h.timeout_of(&cfg).0).max() else {
+        return Vec::new();
+    };
+    let poll = cfg.app.hook_poll.as_duration();
+    let deadline = t0 + Dur(longest).as_duration() + poll;
+    while Instant::now() < deadline && !wait.iter().all(|(_, _, t)| t.is_finished()) {
+        std::thread::sleep(poll);
+    }
+    let waited_ms = t0.elapsed().as_millis() as u64;
+    wait.into_iter()
+        .map(|(label, _, t)| {
+            let mut w = Waited {
+                hook: label,
+                event: spec.name.to_string(),
+                waited_ms,
+                finished: t.is_finished(),
+                ok: false,
+                exit_code: None,
+                timed_out: false,
+                error: None,
+                run_id: None,
+            };
+            if !w.finished {
+                w.error = Some("still running when the wait ended".into());
+            } else {
+                match t.join() {
+                    Ok(run) => {
+                        w.ok = run.ok;
+                        w.exit_code = run.exit_code;
+                        w.timed_out = run.timed_out;
+                        w.error = run.error;
+                        w.run_id = Some(run.run_id);
+                    }
+                    Err(_) => w.error = Some("the hook's thread panicked".into()),
+                }
+            }
+            let what = match (&w.error, w.exit_code) {
+                (Some(e), _) => e.clone(),
+                (None, Some(0)) => "exit code 0".into(),
+                (None, Some(c)) => format!("exit code {c} (logged, not enforced)"),
+                (None, None) => "no exit code".into(),
+            };
+            crate::elog!(
+                "oats-meetings-rs: blocking hook {} on {}: {what}; waited {}, the recorder goes on",
+                w.hook,
+                w.event,
+                keys::format_duration_ms(w.waited_ms)
+            );
+            w
+        })
+        .collect()
+}
+
+/// The `[[hooks]]` entries on `event` (label, hook), `only` those named when given.
+fn hooks_on(cfg: &Config, event: &str, only: Option<&[String]>) -> Vec<(String, Hook)> {
+    cfg.hooks
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.event == event)
+        .map(|(i, h)| (h.label(i), h.clone()))
+        .filter(|(label, _)| only.is_none_or(|o| o.contains(label)))
+        .collect()
+}
+
+/// Judge `hooks` on `ctx` (then dedup: at most once per key), keep and publish every verdict and
+/// start each hook that fires on its own thread. Returns the started runs.
+fn judge_and_start(
+    engine: &Arc<Engine>,
+    key: &str,
+    hooks: Vec<(String, Hook)>,
+    ctx: &Ctx,
+) -> Vec<(String, Hook, std::thread::JoinHandle<Run>)> {
+    let envelope = ctx.envelope("", "");
+    let firing: Vec<(String, Hook)> = hooks
+        .into_iter()
+        .filter(|(label, hook)| {
+            let mut v = matches(hook, &envelope);
+            // At most once per dedup key: a message seen again (a replay, a stop that
+            // re-matches the calendar event of its start) does not run the hook again.
+            if v.fire && !engine.hooks.first(key, label, &ctx.dedup) {
+                v = Verdict {
+                    fire: false,
+                    reason: format!("already fired for {} ({})", ctx.dedup, v.reason),
+                };
+            }
+            decide(engine, label, ctx, &v);
+            v.fire
+        })
+        .collect();
+    firing
+        .into_iter()
+        .filter_map(|(label, hook)| {
+            let (engine, ctx, h, l) =
+                (Arc::clone(engine), ctx.clone(), hook.clone(), label.clone());
+            match std::thread::Builder::new()
+                .name(format!("oats-hook-{label}"))
+                .spawn(move || run_and_report(&engine, &l, &h, &ctx, false))
+            {
+                Ok(t) => Some((label, hook, t)),
+                Err(e) => {
+                    crate::elog!("oats-meetings-rs: hook {label}: cannot start a thread: {e}");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// The `seq` of one message of `session` (L0: also appended to its `events.jsonl`).
@@ -764,18 +974,11 @@ fn start(
     session: Option<String>,
     seq: u64,
     data: Value,
+    only: Option<&[String]>,
 ) {
     let key = session.clone().unwrap_or_default();
     let dedup = spec.dedup_key(&key, topic, &data, seq);
-    let snap = engine.snapshot();
-    let hooks: Vec<(String, Hook)> = snap
-        .config
-        .hooks
-        .iter()
-        .enumerate()
-        .filter(|(_, h)| h.event == spec.name)
-        .map(|(i, h)| (h.label(i), h.clone()))
-        .collect();
+    let hooks = hooks_on(&engine.snapshot().config, spec.name, only);
     if hooks.is_empty() {
         return;
     }
@@ -792,30 +995,7 @@ fn start(
             ctx.seq = seq;
             ctx.at = at;
             ctx.dedup = dedup;
-            let envelope = ctx.envelope("", "");
-            let threads: Vec<_> = hooks
-                .into_iter()
-                .filter(|(label, hook)| {
-                    let mut v = matches(hook, &envelope);
-                    // At most once per dedup key: a message seen again (a replay, a stop that
-                    // re-matches the calendar event of its start) does not run the hook again.
-                    if v.fire && !engine.hooks.first(&key, label, &ctx.dedup) {
-                        v = Verdict {
-                            fire: false,
-                            reason: format!("already fired for {} ({})", ctx.dedup, v.reason),
-                        };
-                    }
-                    decide(&engine, label, &ctx, &v);
-                    v.fire
-                })
-                .map(|(label, hook)| {
-                    let (engine, ctx) = (Arc::clone(&engine), ctx.clone());
-                    std::thread::Builder::new()
-                        .name(format!("oats-hook-{label}"))
-                        .spawn(move || run_and_report(&engine, &label, &hook, &ctx, false))
-                })
-                .collect();
-            for t in threads.into_iter().flatten() {
+            for (_, _, t) in judge_and_start(&engine, &key, hooks, &ctx) {
                 let _ = t.join();
             }
         });
@@ -1267,6 +1447,7 @@ fn view(engine: &Engine, i: usize, h: &Hook) -> Value {
         "command": h.command,
         "shell": h.shell,
         "timeout": keys::format_duration_ms(h.timeout_of(cfg).0),
+        "blocking": h.blocking,
         "enabled": h.enabled,
         "cwd": h.cwd,
         "match": h.filter,
@@ -1426,6 +1607,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             command,
             shell,
             timeout,
+            blocking,
             enabled,
             cwd,
             r#match,
@@ -1438,6 +1620,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 command: command_arg(command, shell)?,
                 shell,
                 timeout: timeout_arg(timeout.as_deref().unwrap_or_default())?,
+                blocking: blocking.unwrap_or(false),
                 enabled: enabled.unwrap_or(true),
                 cwd: cwd.clone().unwrap_or_default(),
                 filter: match_arg(r#match.as_ref().unwrap_or(&Value::Null))?,
@@ -1456,6 +1639,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             command,
             shell,
             timeout,
+            blocking,
             enabled,
             cwd,
             r#match,
@@ -1477,6 +1661,9 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             }
             if let Some(t) = timeout {
                 h.timeout = timeout_arg(t)?;
+            }
+            if let Some(b) = blocking {
+                h.blocking = *b;
             }
             if let Some(e) = enabled {
                 h.enabled = *e;

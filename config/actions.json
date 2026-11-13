@@ -1227,7 +1227,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a [[hooks]] entry: name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd, match (the [hooks.match] table as an object: title, attendees, source, calendar; a pattern is a glob or re:<regex>; for transcript.phrase phrases (required: literal phrases or re:<regex>), speaker (you, remote, any) and cooldown (e.g. \"2m\"; default app.hook_cooldown)).",
+      "doc": "Add a [[hooks]] entry: name, event (record.before_start, record.start, record.pause, calendar.ending, calendar.ended, record.before_stop, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), blocking (only on record.before_start / record.before_stop: the recorder waits for the hook up to its timeout, then acts whatever happened), enabled, cwd, match (the [hooks.match] table as an object: title, attendees, source, calendar; a pattern is a glob or re:<regex>; for transcript.phrase phrases (required: literal phrases or re:<regex>), speaker (you, remote, any) and cooldown (e.g. \"2m\"; default app.hook_cooldown); for calendar.ending before_end (e.g. \"5m\"; default app.hook_before_end)).",
       "effect": "write",
       "name": "hook-add",
       "params": [
@@ -1257,6 +1257,11 @@
           "type": "Option<String>"
         },
         {
+          "name": "blocking",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
           "name": "enabled",
           "required": false,
           "type": "Option<bool>"
@@ -1275,7 +1280,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd, match (an object that replaces the whole [hooks.match] table; {} clears it).",
+      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.before_start, record.start, record.pause, calendar.ending, calendar.ended, record.before_stop, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), blocking (only on a record.before_* event), enabled, cwd, match (an object that replaces the whole [hooks.match] table; {} clears it).",
       "effect": "write",
       "name": "hook-edit",
       "params": [
@@ -1310,6 +1315,11 @@
           "type": "Option<String>"
         },
         {
+          "name": "blocking",
+          "required": false,
+          "type": "Option<bool>"
+        },
+        {
           "name": "enabled",
           "required": false,
           "type": "Option<bool>"
@@ -1328,7 +1338,7 @@
       "status": "implemented"
     },
     {
-      "doc": "For a session (default: the newest) and an event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated), every hook and whether it would fire, with the reason either way (its event, enabled, each [hooks.match] field). For transcript.phrase, utterance is the one to judge ({text, speaker?, start_ms?, end_ms?}; speaker default remote_1). Nothing runs; no dedup or cooldown is consumed.",
+      "doc": "For a session (default: the newest) and an event (record.before_start, record.start, record.pause, calendar.ending, calendar.ended, record.before_stop, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated), every hook and whether it would fire, with the reason either way (its event, enabled, each [hooks.match] field). For transcript.phrase, utterance is the one to judge ({text, speaker?, start_ms?, end_ms?}; speaker default remote_1). Nothing runs; no dedup or cooldown is consumed.",
       "effect": "read",
       "name": "hook-explain",
       "params": [

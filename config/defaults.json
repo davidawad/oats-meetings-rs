@@ -1,5 +1,6 @@
 {
   "app": {
+    "hook_before_end": "5m",
     "hook_cooldown": "30s",
     "hook_history": 50,
     "hook_output": 65536,

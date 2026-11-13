@@ -136,8 +136,54 @@ fn stop_example() -> Value {
     })
 }
 
+/// Why the recorder is about to act (`record.before_start` / `record.before_stop` `data.reason`):
+/// someone asked (record-start / -stop, a shortcut, the window), auto-start or auto-stop, or a
+/// calendar event (no start or stop is the calendar's own yet: the value is reserved for one).
+pub const REASONS: &[&str] = &["manual", "auto", "calendar"];
+
+/// Whether a hook on `event` may set `blocking = true`: only a `*.before_*` event, which the
+/// recorder waits on (up to the hooks' timeout, failing open) before it acts.
+pub fn may_block(event: &str) -> bool {
+    event
+        .split_once('.')
+        .is_some_and(|(_, what)| what.starts_with("before_"))
+}
+
+/// The `[[hooks]]` events that may block, for the config error and docs.
+pub fn blocking_events() -> Vec<&'static str> {
+    TABLE
+        .iter()
+        .map(|s| s.name)
+        .filter(|n| may_block(n))
+        .collect()
+}
+
+/// The part of a calendar event's dedup key that names it: `data.event_id`.
+fn event_id(_: &str, d: &Value, _: u64) -> String {
+    d["event_id"].as_str().unwrap_or_default().to_string()
+}
+
 /// The table, in the order a recording meets the events.
 pub const TABLE: &[Spec] = &[
+    Spec {
+        name: "record.before_start",
+        description: "A recording is about to start (data.reason: manual for record-start or a shortcut, auto for auto-start, calendar for one a calendar event starts). The session does not exist yet: session.id is null, data.title and the envelope's calendar are what it will get. A hook with blocking = true holds the start until it ends or its timeout passes; then the recording starts whatever happened (fail open: a timeout, crash or non-zero exit is logged, never enforced). Blocking hooks run concurrently.",
+        topics: &[],
+        when: never,
+        dedup: "<session>:record.before_start:<seq> (no session yet: \"\")",
+        key: each,
+        data: || {
+            obj(
+                &["reason"],
+                json!({"reason": {"enum": REASONS}, "title": s(), "requested": s_or_null(),
+                       "calendar": {"type": "object"}}),
+            )
+        },
+        example: || {
+            json!({"reason": "manual", "title": "Standup", "requested": null,
+                   "calendar": {"event": {"id": "e1", "title": "Standup", "source": "work"}}})
+        },
+    },
     Spec {
         name: "record.start",
         description: "A recording started (record-start, a shortcut, auto-start).",
@@ -162,6 +208,59 @@ pub const TABLE: &[Spec] = &[
             )
         },
         example: || json!({"session": "2026-11-13-standup", "paused": true, "duration_ms": 61_000}),
+    },
+    Spec {
+        name: "calendar.ending",
+        description: "A recording matched to a calendar event is still going match.before_end (default app.hook_before_end) before the event's scheduled end; each hook fires at its own before_end, once per event (a hook not due yet gets no decision). data.remaining_ms is the time left.",
+        topics: &[],
+        when: never,
+        dedup: "<session>:calendar.ending:<data.event_id>",
+        key: event_id,
+        data: || {
+            obj(
+                &["session", "remaining_ms", "end", "event_id"],
+                json!({"session": s(), "remaining_ms": {"type": "integer", "minimum": 0},
+                       "remaining": s(), "end": s(), "event_id": s()}),
+            )
+        },
+        example: || {
+            json!({"session": "2026-11-13-standup", "remaining_ms": 299_500, "remaining": "4m59s",
+                   "end": "2026-11-13T15:15:00.000Z", "event_id": "e1"})
+        },
+    },
+    Spec {
+        name: "calendar.ended",
+        description: "The scheduled end of the calendar event a recording matched passed while it was recording; fires once (data.overrun_ms: how far past the end the recording was when it fired; it keeps growing while the recording goes on).",
+        topics: &[],
+        when: never,
+        dedup: "<session>:calendar.ended:<data.event_id>",
+        key: event_id,
+        data: || {
+            obj(
+                &["session", "overrun_ms", "end", "event_id"],
+                json!({"session": s(), "overrun_ms": {"type": "integer", "minimum": 0},
+                       "overrun": s(), "end": s(), "event_id": s()}),
+            )
+        },
+        example: || {
+            json!({"session": "2026-11-13-standup", "overrun_ms": 250, "overrun": "250ms",
+                   "end": "2026-11-13T15:15:00.000Z", "event_id": "e1"})
+        },
+    },
+    Spec {
+        name: "record.before_stop",
+        description: "A recording is about to stop (data.reason: manual for record-stop or a shortcut, auto for auto-stop, calendar for one a calendar event stops; data.by: who asked). Not for a forced stop (the recording can no longer write). A hook with blocking = true holds the stop (the recording goes on) until it ends or its timeout passes; then the recording stops whatever happened (fail open: a timeout, crash or non-zero exit is logged, never enforced). Blocking hooks run concurrently.",
+        topics: &[],
+        when: never,
+        dedup: "<session>:record.before_stop:<seq>",
+        key: each,
+        data: || {
+            obj(
+                &["session", "reason"],
+                json!({"session": s(), "reason": {"enum": REASONS}, "by": s()}),
+            )
+        },
+        example: || json!({"session": "2026-11-13-standup", "reason": "manual", "by": "window"}),
     },
     Spec {
         name: "record.stop",

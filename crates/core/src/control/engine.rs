@@ -975,6 +975,18 @@ impl Engine {
         cut_ms: Option<u64>,
     ) -> Result<Value> {
         let reason = forced.map(|(_, why)| why);
+        // record.before_stop (dot-4uzgol.111.7): not for a forced stop (the recording can no
+        // longer write), and only when there is a recording to stop. Its blocking hooks hold the
+        // stop up to their timeout, then it goes on whatever happened.
+        let waited = match (forced, self.recorder.active_id()) {
+            (None, Some(id)) => crate::hooks::fire_before(
+                &self.arc(),
+                "record.before_stop",
+                json!({"session": id, "by": by,
+                       "reason": if by == "auto-stop" { "auto" } else { "manual" }}),
+            ),
+            _ => Vec::new(),
+        };
         let stopped = self.recorder.stop(cut_ms);
         *self.last_stop.lock().expect("last stop") = Some(std::time::Instant::now());
         let mut v = match stopped {
@@ -1001,6 +1013,9 @@ impl Engine {
         v["by"] = json!(by);
         v["forced"] = json!(reason.is_some());
         v["reason"] = json!(reason);
+        if !waited.is_empty() {
+            v["before_hooks"] = json!(waited);
+        }
         if let Some(c) = crate::calendar::on_saved(self, &id) {
             v["calendar"] = c;
         }
@@ -1086,6 +1101,7 @@ impl Engine {
     fn guard_recording(&self, id: &str) {
         let me = Weak::clone(&self.me);
         let watched = id.to_string();
+        let mut ending = crate::hooks::ending::State::default();
         let spawned = std::thread::Builder::new()
             .name("oats-rec-guard".into())
             .spawn(move || loop {
@@ -1104,6 +1120,7 @@ impl Engine {
                                 return;
                             }
                         }
+                        e.calendar_tick(id, &mut ending, chrono::Utc::now());
                         if e.auto_stop_tick(id) {
                             return;
                         }
@@ -1121,6 +1138,65 @@ impl Engine {
             });
         if let Err(err) = spawned {
             crate::elog!("oats-meetings-rs: cannot watch recording {id}: {err}");
+        }
+    }
+
+    /// One calendar look at recording `id` at `now` (dot-4uzgol.111.7, `hooks::ending`): when a
+    /// hook listens for `calendar.ending` or `calendar.ended` and the session matched a calendar
+    /// event, fire `calendar.ending` for the hooks that came due and `calendar.ended` once the
+    /// event's scheduled end passed.
+    fn calendar_tick(
+        &self,
+        id: &str,
+        st: &mut crate::hooks::ending::State,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        use crate::hooks::ending::{self, Due};
+        let cfg = self.snapshot().config.clone();
+        if !ending::wanted(&cfg.hooks) || st.ended {
+            return;
+        }
+        let Ok(meta) = self.store().meta(id) else {
+            return;
+        };
+        let ev = meta.get("calendarEvent").unwrap_or(&Value::Null);
+        let Some(end) = ev["end"]
+            .as_str()
+            .and_then(|e| chrono::DateTime::parse_from_rfc3339(e).ok())
+            .map(|e| e.with_timezone(&chrono::Utc))
+        else {
+            return;
+        };
+        let hooks: Vec<(String, crate::hooks::Hook)> = cfg
+            .hooks
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (h.label(i), h.clone()))
+            .collect();
+        let event_id = ev["id"].as_str().unwrap_or_default();
+        let stamp = end.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let me = self.arc();
+        for due in ending::tick(st, &hooks, end, now, cfg.app.hook_before_end) {
+            match due {
+                Due::Ending {
+                    hooks,
+                    remaining_ms,
+                } => crate::hooks::fire_for(
+                    &me,
+                    ending::ENDING,
+                    json!({"session": id, "remaining_ms": remaining_ms,
+                           "remaining": ending::span(remaining_ms),
+                           "end": stamp, "event_id": event_id}),
+                    Some(&hooks),
+                ),
+                Due::Ended { overrun_ms } => crate::hooks::fire(
+                    &me,
+                    ending::ENDED,
+                    json!({"session": id, "overrun_ms": overrun_ms,
+                           "overrun": ending::span(overrun_ms),
+                           "end": stamp, "event_id": event_id}),
+                ),
+            }
         }
     }
 
@@ -1182,6 +1258,20 @@ impl Engine {
         let store = self.store();
         // The event overlapping now names the session unless a title was given.
         let cal = crate::calendar::for_start(self, chrono::Utc::now(), title);
+        // record.before_start (dot-4uzgol.111.7), unless a recording is already running (this
+        // start then fails): its blocking hooks hold the start up to their timeout, then it goes
+        // on whatever happened.
+        let waited = if self.recorder.active_id().is_none() {
+            crate::hooks::fire_before(
+                &self.arc(),
+                "record.before_start",
+                json!({"reason": if auto.is_some() { "auto" } else { "manual" },
+                       "title": cal.title.clone().unwrap_or_default(),
+                       "requested": session, "calendar": cal.report}),
+            )
+        } else {
+            Vec::new()
+        };
         let mut v = self.recorder.start(
             &self.audio_settings()?,
             &store,
@@ -1203,6 +1293,9 @@ impl Engine {
         v["calendar"] = cal.report;
         if let Some(a) = auto {
             v["auto_start"] = a;
+        }
+        if !waited.is_empty() {
+            v["before_hooks"] = json!(waited);
         }
         if let Some(id) = v["session"].as_str() {
             self.guard_recording(id);

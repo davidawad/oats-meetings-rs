@@ -399,6 +399,11 @@ impl Store {
         Ok(v)
     }
 
+    /// Session `id`'s `session.json` alone (no transcript read): cheap enough for a timer.
+    pub fn meta(&self, id: &str) -> Result<Map<String, Value>> {
+        self.find(id).map(|l| l.meta)
+    }
+
     pub fn transcript(&self, id: &str) -> Result<Value> {
         let l = self.find(id)?;
         let (source, utterances) = transcript(&l.dir);

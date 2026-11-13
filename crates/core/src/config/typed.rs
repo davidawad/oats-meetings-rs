@@ -62,6 +62,7 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct App {
+    pub hook_before_end: Dur,
     pub hook_cooldown: Dur,
     pub hook_history: u32,
     pub hook_output: u32,

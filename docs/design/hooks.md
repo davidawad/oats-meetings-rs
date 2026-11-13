@@ -134,17 +134,79 @@ none.
 
 | Event | Fires when | `data` adds |
 | --- | --- | --- |
-| `record.before_start` / `record.before_stop` | before the recorder acts; may be `blocking` | `reason` (manual, auto, calendar) |
+| `record.before_start` / `record.before_stop` | before the recorder acts; may be `blocking` | `reason` (manual, auto, calendar); `title`, `requested`, `calendar` / `by` |
 | `record.start` / `.pause` / `.stop` / `.auto_start` / `.auto_stop` | as today | `reason`, durations |
 | `calendar.matched` | as today | event |
-| `calendar.ending` | `match.before_end` before the matched event's scheduled end, while recording | `remaining` |
-| `calendar.ended` | the matched event's scheduled end passes while recording | `overrun` |
+| `calendar.ending` | `match.before_end` before the matched event's scheduled end, while recording | `remaining_ms`, `remaining`, `end`, `event_id` |
+| `calendar.ended` | the matched event's scheduled end passes while recording | `overrun_ms`, `overrun`, `end`, `event_id` |
 | `transcript.phrase` | a final (not partial) utterance matches a phrase | `utterance {id, text, speaker, start_ms, end_ms}`, `phrase`, `live`, `kind` |
 | `transcript.final` | the final pass is written | utterance count, mode |
 | `session.saved`, `notes.generated` | as today | as today |
 
 "Meeting ended" for one meeting is `record.stop` (or `calendar.ended`) plus
 `match.title`.
+
+### Before the recorder acts (dot-4uzgol.111.7)
+
+`record.before_start` and `record.before_stop` are fired by the action, not a
+bus topic (the raw log keeps them under their event name), on the action's
+own thread, before `Recorder::start` / `stop`:
+
+- **`data.reason`**: `manual` for `record-start` / `record-stop` (a shortcut,
+  the window, ctl), `auto` for auto-start / auto-stop. `calendar` is in the
+  enum for a start or stop a calendar event makes; nothing does that yet, so
+  no event carries it today. A forced stop (the recording can no longer
+  write) fires no `record.before_stop`: nobody asked for it and there is
+  nothing a hook could prepare. Neither fires when the action is bound to
+  fail (a start while recording, a stop while idle).
+- **No session yet at `before_start`.** The session directory does not exist,
+  so the event names no session (`session.id` is null, the dedup key is
+  `:record.before_start:<seq>`) and the session's raw log still starts with
+  `recording-started` at `seq` 1. `data.title` and the envelope's
+  `calendar` are what the recording will get (the calendar is matched
+  first), so `match.title` / `attendees` / `calendar` work on it;
+  `data.requested` is the session id asked for, if any. `before_stop`
+  names the session and adds `data.by`.
+- **`blocking = true`** is allowed only on these two events
+  (`events::may_block`: a `*.before_*` name); `config-check` and every write
+  refuse it elsewhere, naming the hook. The recorder judges every hook on the
+  event (with `hook-decided`, as the tap does), starts each that fires on its
+  own thread, then waits for the blocking ones: all at once (no lock, queue
+  or cap), until all have ended or the longest of their timeouts (plus one
+  `app.hook_poll` for a killed run to be reaped) has passed. Then it acts
+  whatever happened: a timeout, a crash, a missing program or a non-zero
+  exit is logged (`blocking hook X on record.before_start: exit code 3
+  (logged, not enforced); waited 120ms, the recorder goes on`) and returned
+  in the action's answer and its bus payload as `before_hooks`
+  (`[{hook, event, waited_ms, finished, ok, exit_code, timed_out, error,
+  run_id}]`, only when a blocking hook ran). Hooks that do not block are
+  never waited for. While a `before_stop` hook blocks, the recording goes on.
+
+### Calendar timers (dot-4uzgol.111.7, `hooks/ending.rs`)
+
+The recording's watcher (the thread that already runs auto-stop, every
+`record.auto_check`) also looks at the calendar, but only when some hook
+listens for `calendar.ending` or `calendar.ended`: it reads the session's
+`session.json` (not its transcript) for the matched `calendarEvent`, and the
+pure `ending::tick(state, hooks, end, now, default)` says what is due:
+
+- **`calendar.ending` is per hook.** A hook is due once the time left is at
+  most its `match.before_end` (default `app.hook_before_end`, 5m; the same
+  range bounds a hook's own), while the end is still ahead. One tick fires
+  the event once for the hooks that came due on it (the others get no
+  decision, as a phrase hook whose phrase was not said), each hook once per
+  recording; `data.remaining_ms` is the time left at that tick (a recording
+  that starts inside the window fires at once with what is left).
+  `matches` explains `before_end` against `data.remaining_ms`
+  (`match.before_end = 2m: 1m59s left before the scheduled end`).
+- **`calendar.ended` fires once**, at the first tick at or past the end, and
+  only if an earlier tick saw the end ahead (it passed while recording).
+  `data.overrun_ms` is how far past the end that tick was; the recording
+  going on does not fire it again. A tick that jumps the window (the machine
+  slept) says only `calendar.ended`.
+- Dedup keys are `<session>:calendar.ending:<event id>` and
+  `<session>:calendar.ended:<event id>`. The tests drive `tick` with a fake
+  clock; the engine passes the wall clock.
 
 ## L2: `match`
 
@@ -183,8 +245,7 @@ How the L2 fields read the envelope (dot-4uzgol.111.4):
   (email, else name). `source` reads `calendar.source`. `calendar = false`
   means only sessions with no calendar event.
 - `speaker`, `phrases` and `cooldown` are judged on `transcript.phrase`
-  (below); `before_end` is parsed and checked now and judged by
-  `calendar.ending` (.7).
+  (below); `before_end` by `calendar.ending` (below).
 - `matches` checks the event, then `enabled`, then `calendar`, `title`,
   `attendees`, `source`. A skip's reason lists every field that failed, a
   fire's every field that held (`no match filter: fires on every

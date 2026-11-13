@@ -532,6 +532,7 @@ mod engine {
             ]),
             shell: None,
             timeout: None,
+            blocking: None,
             enabled: None,
             cwd: None,
             r#match: Some(m),
