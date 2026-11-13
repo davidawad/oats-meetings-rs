@@ -701,6 +701,9 @@ mod engine {
             .unwrap();
             std::thread::sleep(Duration::from_millis(300));
             e.dispatch(&Action::RecordStop { by: None }).unwrap();
+            // started_at has whole seconds: start the next session in a later second, or the two
+            // tie and "newest" is ambiguous (dot-4uzgol.111.9: flaked on main).
+            std::thread::sleep(Duration::from_millis(1100));
         }
         // Let the stops' own hooks finish, then forget them: explain must add none.
         std::thread::sleep(Duration::from_millis(1000));

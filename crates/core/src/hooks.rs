@@ -1534,11 +1534,10 @@ pub(crate) fn newest_session(engine: &Engine) -> Option<String> {
     list["sessions"]
         .as_array()?
         .iter()
-        .max_by(|a, b| {
-            a["started_at"]
-                .as_str()
-                .unwrap_or_default()
-                .cmp(b["started_at"].as_str().unwrap_or_default())
+        // started_at has whole seconds; within one, the later end and then the later id win.
+        .max_by_key(|s| {
+            let k = |f: &str| s[f].as_str().unwrap_or_default().to_string();
+            (k("started_at"), k("ended_at"), k("id"))
         })
         .and_then(|s| s["id"].as_str().map(str::to_string))
 }
