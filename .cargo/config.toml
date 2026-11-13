@@ -4,3 +4,9 @@
 # A Windows host without bash: set RUSTC_WRAPPER="" (an empty value turns the wrapper off).
 [build]
 rustc-wrapper = "ci/rustc-wrapper.sh"
+
+# whisper-rs-sys must use Apple's clang when building on macOS. The nix clang-wrapper
+# does not see the matching SDK headers when targeting newer macOS deployment versions.
+[env]
+CC_aarch64-apple-darwin = "/usr/bin/clang"
+CXX_aarch64-apple-darwin = "/usr/bin/clang++"
