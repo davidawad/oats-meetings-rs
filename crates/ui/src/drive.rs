@@ -115,6 +115,7 @@ pub const OPS: &[(&str, &str, &str)] = &[
         "Delete (first call arms, second deletes)",
     ),
     ("calendar.add", "name, url", "fill the add-feed form, Add"),
+    ("calendar.select", "index? | session?", "select a calendar row for its preview; select it again to close"),
     ("calendar.remove", "name", "Remove a feed"),
     (
         "calendar.refresh",
@@ -457,6 +458,24 @@ impl MainWindow {
                 c.name = name.to_string();
                 c.url = url.to_string();
                 calendar::add(self, cx);
+            }
+            "calendar.select" => {
+                if let Some(id) = arg(args, "session") {
+                    if !calendar::select_session(self, id, cx) {
+                        return Err(bad(format!("calendar.select: no recorded session '{id}'")));
+                    }
+                } else {
+                    let index =
+                        args.get("index").and_then(Value::as_u64).ok_or_else(|| {
+                            bad("calendar.select needs args.index or args.session")
+                        })? as usize;
+                    if index >= cx.default_global::<calendar::Cal>().meetings.len() {
+                        return Err(bad(format!(
+                            "calendar.select: index {index} is out of range"
+                        )));
+                    }
+                    calendar::select_index(self, index, cx);
+                }
             }
             "calendar.remove" => {
                 let name = need(args, op, "name")?.to_string();
@@ -817,11 +836,18 @@ impl MainWindow {
                     })).collect::<Vec<_>>(),
                     "rows": c.meetings.iter().map(|m| json!({
                         "feed": m.feed,
+                        "id": m.id,
                         "summary": m.summary,
                         "location": m.location,
                         "day": m.day,
                         "time": calendar::time_label(m),
                     })).collect::<Vec<_>>(),
+                    "selected": c.selected.map(|index| json!({
+                        "index": index,
+                        "id": c.meetings.get(index).map(|m| m.id.as_str()),
+                        "session": c.meetings.get(index).map(|m| m.session_id.as_str()).filter(|id| !id.is_empty()),
+                    })),
+                    "preview": c.preview,
                     "from": c.from,
                     "to": c.to,
                     "refreshing": c.refreshing,

@@ -687,7 +687,7 @@ mod tests {
 
         // Calendar: fill the add-feed form, Add.
         let ics = d.path().join("team.ics");
-        std::fs::write(&ics, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n").unwrap();
+        std::fs::write(&ics, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:drive-test\r\nDTSTAMP:20200101T000000Z\r\nDTSTART:20200101T150000Z\r\nDTEND:20200101T160000Z\r\nRRULE:FREQ=DAILY\r\nSUMMARY:Drive preview\r\nLOCATION:Room 4\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n").unwrap();
         let url = format!("file://{}", ics.display());
         let v = invoke(&mut cx, "calendar.add", json!({"name": "team", "url": url}));
         assert_eq!(v["tab"], "Calendar");
@@ -697,6 +697,9 @@ mod tests {
             .iter()
             .any(|f| f["name"] == "team" && f["url"] == url.as_str()));
         assert!(v["status"].as_str().unwrap().contains("team"), "{v}");
+        let v = invoke(&mut cx, "calendar.select", json!({"index": 0}));
+        assert_eq!(v["view"]["selected"]["index"], 0, "{v}");
+        assert_eq!(v["view"]["preview"]["title"], "Drive preview", "{v}");
 
         // Settings: one row changed through the view.
         let v = invoke(

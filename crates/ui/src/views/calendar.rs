@@ -47,8 +47,14 @@ pub(crate) struct FeedRow {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Meeting {
     pub feed: String,
+    pub id: String,
+    pub source: String,
     pub summary: String,
     pub location: String,
+    pub end: String,
+    pub attendees: Vec<String>,
+    pub video_url: String,
+    pub session_id: String,
     /// `YYYY-MM-DD` in the display zone (all-day events: their own date).
     pub day: String,
     /// `HH:MM` in the display zone, empty for all-day events.
@@ -76,6 +82,8 @@ pub(crate) struct Cal {
     pub enabled: bool,
     pub feeds: Vec<FeedRow>,
     pub meetings: Vec<Meeting>,
+    pub selected: Option<usize>,
+    pub preview: Option<Value>,
     pub from: String,
     pub to: String,
     /// The zone the times are shown in (`ui.tz`, else the system zone).
@@ -170,8 +178,31 @@ pub(crate) fn meeting_of(v: &Value, tz: Tz) -> Meeting {
     };
     Meeting {
         feed: s(v, "feed"),
+        id: s(v, "id"),
+        source: s(v, "source"),
         summary: s(v, "summary"),
         location: s(v, "location"),
+        end: DateTime::parse_from_rfc3339(&s(v, "end"))
+            .ok()
+            .map(|at| at.with_timezone(&tz).format("%H:%M %Z").to_string())
+            .unwrap_or_default(),
+        attendees: v
+            .get("attendees")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|a| {
+                a.as_str().map(str::to_string).unwrap_or_else(|| {
+                    [s(a, "name"), s(a, "email")]
+                        .into_iter()
+                        .find(|x| !x.is_empty())
+                        .unwrap_or_default()
+                })
+            })
+            .filter(|a| !a.is_empty())
+            .collect(),
+        video_url: s(v, "video_url"),
+        session_id: String::new(),
         day,
         time,
         zone,
@@ -203,6 +234,8 @@ fn recorded_meeting(v: &Value, tz: Tz) -> Option<Meeting> {
         .unwrap_or_default();
     Some(Meeting {
         feed: "recorded".into(),
+        id: s(v, "id"),
+        source: "recorded".into(),
         summary: {
             let title = s(v, "title");
             if title.is_empty() {
@@ -212,11 +245,70 @@ fn recorded_meeting(v: &Value, tz: Tz) -> Option<Meeting> {
             }
         },
         location: String::new(),
+        end: DateTime::parse_from_rfc3339(&s(v, "ended_at"))
+            .ok()
+            .map(|at| at.with_timezone(&tz).format("%H:%M %Z").to_string())
+            .unwrap_or_default(),
+        attendees: vec![],
+        video_url: String::new(),
+        session_id: s(v, "id"),
         day: started.format("%Y-%m-%d").to_string(),
         time: started.format("%H:%M").to_string(),
         zone: started.format("%Z").to_string(),
         duration,
     })
+}
+
+fn select(w: &mut MainWindow, index: usize, cx: &mut Context<MainWindow>) {
+    let Some(m) = cx.default_global::<Cal>().meetings.get(index).cloned() else {
+        return;
+    };
+    let cal = cx.default_global::<Cal>();
+    if cal.selected == Some(index) {
+        cal.selected = None;
+        cal.preview = None;
+        return;
+    }
+    cal.selected = Some(index);
+    cal.preview = Some(if !m.session_id.is_empty() {
+        let id = &m.session_id;
+        let session = model::dispatch(&w.engine, "session-get", json!({"session": id}))
+            .unwrap_or(Value::Null);
+        let transcript = model::dispatch(&w.engine, "transcript-get", json!({"session": id}))
+            .unwrap_or(Value::Null);
+        let notes =
+            model::dispatch(&w.engine, "notes-get", json!({"session": id})).unwrap_or(Value::Null);
+        let utterances = transcript["utterances"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        json!({"kind":"recorded", "id":id, "title":session["title"], "started_at":session["started_at"],
+            "ended_at":session["ended_at"], "day":m.day, "time":m.time, "end_time":m.end, "duration":m.duration, "speakers":session["speaker_names"],
+            "utterance_count":session["utterance_count"], "tags":session["tags"],
+            "transcript":utterances.iter().enumerate().filter(|(i, _)| *i < 5).map(|(_, u)| json!({"speaker":u["speaker"],"text":u["text"]})).collect::<Vec<_>>(),
+            "notes":notes["notes"]})
+    } else {
+        json!({"kind":"event", "title":m.summary, "day":m.day, "start":time_label(&m), "end":m.end,
+            "location":m.location, "attendees":m.attendees, "video_url":m.video_url, "source":m.source})
+    });
+}
+
+pub(crate) fn select_session(w: &mut MainWindow, id: &str, cx: &mut Context<MainWindow>) -> bool {
+    let index = cx
+        .default_global::<Cal>()
+        .meetings
+        .iter()
+        .position(|m| m.session_id == id);
+    if let Some(index) = index {
+        select(w, index, cx);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn select_index(w: &mut MainWindow, index: usize, cx: &mut Context<MainWindow>) {
+    select(w, index, cx);
 }
 
 impl Cal {
@@ -411,6 +503,16 @@ pub(crate) fn key(
     cx: &mut Context<MainWindow>,
 ) -> bool {
     let cal = cx.default_global::<Cal>();
+    if key == "escape" {
+        if cal.field.is_some() || cal.selected.is_some() {
+            cal.field = None;
+            cal.selected = None;
+            cal.preview = None;
+        } else {
+            return false;
+        }
+        return true;
+    }
     let Some(f) = cal.field else { return false };
     match key {
         "enter" => {
@@ -667,7 +769,7 @@ fn grid_start(from: NaiveDate) -> NaiveDate {
     from.min(from.with_day(1).unwrap_or(from))
 }
 
-fn grid(cal: &Cal) -> impl IntoElement {
+fn grid(cal: &Cal, cx: &mut Context<MainWindow>) -> impl IntoElement {
     let th = theme::current();
     let tz = cal.tz.unwrap_or(Tz::UTC);
     let today = chrono::Utc::now().with_timezone(&tz).date_naive();
@@ -715,60 +817,74 @@ fn grid(cal: &Cal) -> impl IntoElement {
                 let key = day.format("%Y-%m-%d").to_string();
                 let is_today = *day == today;
                 let outside = *day < from || *day > to;
-                let events = cal.meetings.iter().filter(|m| m.day == key).map(|m| {
-                    let what = if m.summary.is_empty() {
-                        "(no title)".to_string()
-                    } else {
-                        m.summary.clone()
-                    };
-                    let label = if m.time.is_empty() {
-                        what
-                    } else {
-                        format!("{} {what}", m.time)
-                    };
-                    let mut tip = vec![m.feed.clone()];
-                    if !m.time.is_empty() {
-                        tip.push(time_label(m));
-                    }
-                    if !m.location.is_empty() {
-                        tip.push(m.location.clone());
-                    }
-                    if !m.duration.is_empty() {
-                        tip.push(format!("Duration: {}", m.duration));
-                    }
-                    let recorded = m.feed == "recorded";
-                    div()
-                        .id(format!(
-                            "meeting-{}-{}-{}-{}",
-                            m.feed, m.day, m.time, m.summary
-                        ))
-                        .tooltip(move |_, cx| cx.new(|_| MeetingTooltip(tip.join(" · "))).into())
-                        .mt(px(4.))
-                        .px(px(6.))
-                        .py(px(2.))
-                        .rounded(px(4.))
-                        .border_l(px(3.))
-                        .border_color(rgb(if recorded {
-                            th.line
-                        } else if m.time.is_empty() {
-                            th.remote[0]
+                let events = cal
+                    .meetings
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.day == key)
+                    .map(|(idx, m)| {
+                        let what = if m.summary.is_empty() {
+                            "(no title)".to_string()
                         } else {
-                            th.accent
-                        }))
-                        .bg(rgb(if recorded {
-                            th.raised
-                        } else if m.time.is_empty() {
-                            th.warn_soft
+                            m.summary.clone()
+                        };
+                        let label = if m.time.is_empty() {
+                            what
                         } else {
-                            th.accent_soft
-                        }))
-                        .text_size(px(11.))
-                        .text_color(rgb(th.text))
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .child(label)
-                });
+                            format!("{} {what}", m.time)
+                        };
+                        let mut tip = vec![m.feed.clone()];
+                        if !m.time.is_empty() {
+                            tip.push(time_label(m));
+                        }
+                        if !m.location.is_empty() {
+                            tip.push(m.location.clone());
+                        }
+                        if !m.duration.is_empty() {
+                            tip.push(format!("Duration: {}", m.duration));
+                        }
+                        let recorded = m.feed == "recorded";
+                        let selected = cal.selected == Some(idx);
+                        div()
+                            .id(format!(
+                                "meeting-{}-{}-{}-{}",
+                                m.feed, m.day, m.time, m.summary
+                            ))
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| MeetingTooltip(tip.join(" · "))).into()
+                            })
+                            .mt(px(4.))
+                            .px(px(6.))
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .border_l(px(3.))
+                            .border_color(rgb(if recorded {
+                                th.line
+                            } else if m.time.is_empty() {
+                                th.remote[0]
+                            } else {
+                                th.accent
+                            }))
+                            .bg(rgb(if selected {
+                                th.accent_soft
+                            } else if recorded {
+                                th.raised
+                            } else if m.time.is_empty() {
+                                th.warn_soft
+                            } else {
+                                th.accent_soft
+                            }))
+                            .text_size(px(11.))
+                            .text_color(rgb(th.text))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(label)
+                            .on_click(cx.listener(move |w, _, _, cx| {
+                                select(w, idx, cx);
+                                cx.notify();
+                            }))
+                    });
                 div()
                     .flex_1()
                     .min_w_0()
@@ -813,6 +929,203 @@ fn grid(cal: &Cal) -> impl IntoElement {
     col
 }
 
+fn preview(cal: &Cal, cx: &mut Context<MainWindow>) -> impl IntoElement {
+    let Some(p) = cal.preview.as_ref() else {
+        return div().into_any_element();
+    };
+    let th = theme::current();
+    let recorded = p["kind"] == "recorded";
+    let id = p["id"].as_str().unwrap_or_default().to_string();
+    let title = p["title"].as_str().unwrap_or("(untitled)").to_string();
+    let mut body = div().flex().flex_col().gap(px(5.)).child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .child(
+                div()
+                    .flex_1()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title.clone()),
+            )
+            .child(
+                kit::button(
+                    "calendar-preview-close",
+                    "Close",
+                    Kind::Secondary,
+                    Size::Sm,
+                    true,
+                )
+                .on_click(cx.listener(|_, _, _, cx| {
+                    let c = cx.default_global::<Cal>();
+                    c.selected = None;
+                    c.preview = None;
+                    cx.notify();
+                })),
+            ),
+    );
+    if recorded {
+        body = body
+            .child(kit::mono(format!(
+                "{}  ·  {}–{}  ·  {}",
+                p["day"].as_str().unwrap_or(""),
+                p["time"].as_str().unwrap_or(""),
+                p["end_time"].as_str().unwrap_or(""),
+                p["duration"].as_str().unwrap_or("")
+            )))
+            .child(div().text_size(px(12.)).child(format!(
+                    "{} utterances  ·  {}",
+                    p["utterance_count"].as_u64().unwrap_or(0),
+                    p["speakers"]
+                        .as_object()
+                        .map(|s| s
+                            .values()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", "))
+                        .unwrap_or_default()
+                )))
+            .child(
+                div().flex().gap(px(5.)).children(
+                    p["tags"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .map(|t| kit::tag(t, false)),
+                ),
+            )
+            .child(
+                div().flex().flex_col().gap(px(3.)).children(
+                    p["transcript"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|line| {
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(th.dim))
+                                .child(format!(
+                                    "{}: {}",
+                                    line["speaker"].as_str().unwrap_or(""),
+                                    line["text"].as_str().unwrap_or("")
+                                ))
+                        }),
+                ),
+            );
+        if let Some(notes) = p["notes"].as_str().filter(|n| !n.trim().is_empty()) {
+            body = body.child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(th.dim))
+                    .child(notes.to_string()),
+            );
+        }
+        let open_id = id.clone();
+        let rename_id = id.clone();
+        let rename_title = title.clone();
+        body = body.child(
+            div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    kit::button(
+                        "calendar-open-session",
+                        "Open session",
+                        Kind::Primary,
+                        Size::Sm,
+                        true,
+                    )
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        w.state.refresh(&w.engine);
+                        w.state.select(&w.engine, &open_id);
+                        w.switch_tab(crate::state::Tab::Sessions, cx);
+                    })),
+                )
+                .child(
+                    kit::button(
+                        "calendar-rename-session",
+                        "Rename",
+                        Kind::Secondary,
+                        Size::Sm,
+                        true,
+                    )
+                    .on_click(cx.listener(move |w, _, _, cx| {
+                        w.state.refresh(&w.engine);
+                        w.state.select(&w.engine, &rename_id);
+                        w.state
+                            .begin_edit(crate::views::sessions::RENAME, &rename_title);
+                        w.switch_tab(crate::state::Tab::Sessions, cx);
+                    })),
+                ),
+        );
+    } else {
+        body = body
+            .child(kit::mono(format!(
+                "{}  ·  {}–{}",
+                p["day"].as_str().unwrap_or(""),
+                p["start"].as_str().unwrap_or(""),
+                p["end"].as_str().unwrap_or("")
+            )))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .child(p["location"].as_str().unwrap_or("No location").to_string()),
+            )
+            .child(
+                div().text_size(px(12.)).child(
+                    p["attendees"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(rgb(th.dim))
+                    .child(p["source"].as_str().unwrap_or("").to_string()),
+            );
+        if let Some(url) = p["video_url"].as_str().filter(|u| !u.is_empty()) {
+            let url = url.to_string();
+            body = body.child(
+                kit::button(
+                    "calendar-video-link",
+                    "Open video link",
+                    Kind::Secondary,
+                    Size::Sm,
+                    true,
+                )
+                .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
+            );
+        }
+        body = body.child(
+            kit::button(
+                "calendar-start-recording",
+                "Start recording",
+                Kind::Primary,
+                Size::Sm,
+                true,
+            )
+            .on_click(cx.listener(move |w, _, _, cx| {
+                match model::dispatch(&w.engine, "record-start", json!({"title": title})) {
+                    Ok(_) => w.state.status = format!("Started recording {title}."),
+                    Err(e) => w.state.status = e.to_string(),
+                }
+                cx.notify();
+            })),
+        );
+    }
+    kit::panel()
+        .mt(px(12.))
+        .p(px(12.))
+        .child(body)
+        .into_any_element()
+}
+
 pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
     let th = theme::current();
     let focus = cx.focus_handle();
@@ -826,6 +1139,8 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         enabled: cal.enabled,
         feeds: cal.feeds.clone(),
         meetings: cal.meetings.clone(),
+        selected: cal.selected,
+        preview: cal.preview.clone(),
         from: cal.from.clone(),
         to: cal.to.clone(),
         tz: cal.tz,
@@ -897,8 +1212,16 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
             kit::pad()
                 .flex_row()
                 .gap(px(20.))
-                .child(grid(&snap))
-                .child(sources(&snap, cx)),
+                .child(grid(&snap, cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .w(px(300.))
+                        .flex_none()
+                        .child(sources(&snap, cx))
+                        .child(preview(&snap, cx)),
+                ),
         )
         .into_any_element()
 }
@@ -979,6 +1302,58 @@ DTEND:20260101T153000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Sync\r\nEND:VEVENT\r\nEND
             ),
             "Refreshed 1 of 2 feed(s); b: no"
         );
+    }
+
+    #[test]
+    fn selecting_events_populates_the_preview_and_escape_closes_it() {
+        let (engine, _) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |w, cx| {
+            let c = cx.default_global::<Cal>();
+            c.meetings.push(meeting_of(&json!({"id":"event-1", "source":"ics", "feed":"Team", "summary":"Planning",
+                "start":"2026-11-04T15:00:00Z", "end":"2026-11-04T16:00:00Z", "local_start":"2026-11-04T15:00:00",
+                "location":"Room 1", "video_url":"https://meet.example", "attendees":[{"name":"Dana","email":"d@example.test"}]}), Tz::UTC));
+            select_index(w, 0, cx);
+            let p = cx.global::<Cal>().preview.clone().unwrap();
+            assert_eq!(p["title"], "Planning");
+            assert_eq!(p["start"], "15:00 UTC");
+            assert_eq!(p["end"], "16:00 UTC");
+            assert_eq!(p["location"], "Room 1");
+            assert_eq!(p["video_url"], "https://meet.example");
+            assert_eq!(p["attendees"][0], "Dana");
+            assert!(key(w, "escape", None, false, cx));
+            assert!(cx.global::<Cal>().selected.is_none());
+            assert!(cx.global::<Cal>().preview.is_none());
+        });
+    }
+
+    #[test]
+    fn selecting_a_recording_loads_session_transcript_and_notes_actions() {
+        let (engine, dir) = testutil::engine(&[]);
+        let session = dir.path().join("sessions/s1");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::write(session.join("session.json"), json!({"id":"s1", "title":"Planning", "startedAt":"2026-11-04T15:00:00Z", "endedAt":"2026-11-04T15:35:00Z", "tags":["work"], "speakerNames":{"remote_1":"Dana"}}).to_string()).unwrap();
+        std::fs::write(
+            session.join("transcript.final.jsonl"),
+            "{\"speaker\":\"remote_1\",\"text\":\"Budget approved\"}\n",
+        )
+        .unwrap();
+        std::fs::write(session.join("notes.md"), "Summary: budget approved.").unwrap();
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |w, cx| {
+            let cal = cx.default_global::<Cal>();
+            cal.meetings = vec![recorded_meeting(&json!({"id":"s1", "title":"Planning", "started_at":"2026-11-04T15:00:00Z", "ended_at":"2026-11-04T15:35:00Z"}), Tz::UTC).unwrap()];
+            assert!(select_session(w, "s1", cx));
+            let p = cx.global::<Cal>().preview.clone().unwrap();
+            assert_eq!(p["title"], "Planning");
+            assert_eq!(p["utterance_count"], 1);
+            assert_eq!(p["tags"][0], "work");
+            assert_eq!(p["speakers"]["remote_1"], "Dana");
+            assert_eq!(p["transcript"][0]["text"], "Budget approved");
+            assert_eq!(p["notes"], "Summary: budget approved.");
+        });
     }
 
     #[test]
