@@ -263,6 +263,21 @@ fn set_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, value: &Value) -> Res
     Ok(())
 }
 
+/// `t` with no document positions on it or its sub-tables (a `[hooks.match]`), so each sub-table
+/// is written right after its own `[[hooks]]` entry: positions from the scratch document it was
+/// parsed in would sort it among the user file's tables instead.
+fn unplace(t: &toml_edit::Table) -> toml_edit::Table {
+    let mut n = toml_edit::Table::new();
+    for (k, item) in t.iter() {
+        let item = match item {
+            toml_edit::Item::Table(s) => toml_edit::Item::Table(unplace(s)),
+            other => other.clone(),
+        };
+        n.insert(k, item);
+    }
+    n
+}
+
 /// Set `key` to an array of tables (`[[hooks]]`), or remove it when `items` is empty.
 fn set_tables_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, items: &[Value]) -> Result<()> {
     use toml_edit::{ArrayOfTables, Item};
@@ -282,7 +297,7 @@ fn set_tables_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, items: &[Value
         let tv: toml::Value = serde_json::from_value(it.clone()).map_err(|e| bad(e.to_string()))?;
         let text = toml::to_string(&tv).map_err(|e| bad(e.to_string()))?;
         let one: toml_edit::DocumentMut = text.parse().map_err(|e| bad(format!("{e}")))?;
-        let mut t = one.as_table().clone();
+        let mut t = unplace(one.as_table());
         t.sort_values_by(|a, _, b, _| field_rank(a.get()).cmp(&field_rank(b.get())));
         aot.push(t);
     }
@@ -294,6 +309,30 @@ fn set_tables_in_doc(doc: &mut toml_edit::DocumentMut, key: &str, items: &[Value
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// dot-4uzgol.111.4: a hook's `[hooks.match]` is written under its own `[[hooks]]` entry,
+    /// reads back the same and a second write changes nothing.
+    #[test]
+    fn a_hooks_match_table_follows_its_own_hook() {
+        let base = "# mine\n[sessions]\nroot = \"x\"\n\n[stt.live]\nchunk = \"1s\"\n";
+        let hooks = json!([
+            {"name": "a", "event": "record.stop", "command": ["true"],
+             "match": {"title": "Standup*", "attendees": ["*@acme.com"], "calendar": true}},
+            {"name": "b", "event": "record.stop", "command": ["true"]},
+            {"name": "c", "event": "session.saved", "command": ["true"], "match": {"source": "work"}},
+        ]);
+        let once = set(base, Format::Toml, "hooks", &hooks).unwrap();
+        let at = |s: &str| once.find(s).unwrap_or_else(|| panic!("{s} in {once}"));
+        assert!(at("[stt.live]") < at("name = \"a\""), "{once}");
+        assert!(at("name = \"a\"") < at("[hooks.match]"), "{once}");
+        assert!(at("[hooks.match]") < at("name = \"b\""), "{once}");
+        assert!(
+            once.rfind("[hooks.match]").unwrap() > at("name = \"c\""),
+            "{once}"
+        );
+        assert_eq!(parse(&once, Format::Toml).unwrap()["hooks"], hooks);
+        assert_eq!(set(&once, Format::Toml, "hooks", &hooks).unwrap(), once);
+    }
 
     #[test]
     fn format_by_extension_and_name() {

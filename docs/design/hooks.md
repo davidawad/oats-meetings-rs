@@ -169,7 +169,38 @@ speaker = "remote"            # you | remote | any
 cooldown = "2m"               # per hook per session
 ```
 
-Every `match` field is optional, and all present fields must hold. Phrase
+Every `match` field is optional, and all present fields must hold.
+
+How the L2 fields read the envelope (dot-4uzgol.111.4):
+
+- A pattern is a glob (`*`, `?`, `[abc]`, `[!abc]`), case-insensitive and
+  over the whole text, or after `re:` a regex as written (unanchored,
+  case-sensitive unless it says `(?i)`). `source` is a pattern too, so a
+  plain name is an exact (case-insensitive) match.
+- `title` matches `session.title` or, when it differs, `calendar.title`.
+  `attendees` holds when any pattern matches any `calendar.attendees` entry
+  (email, else name). `source` reads `calendar.source`. `calendar = false`
+  means only sessions with no calendar event.
+- `speaker`, `phrases`, `cooldown` and `before_end` are parsed and checked
+  now (patterns compile, `speaker` is `you`, `remote` or `any`) and judged by
+  the events they belong to (`transcript.phrase`, `calendar.ending`).
+- `matches` checks the event, then `enabled`, then `calendar`, `title`,
+  `attendees`, `source`. A skip's reason lists every field that failed, a
+  fire's every field that held (`no match filter: fires on every
+  record.stop` for none), joined with `; `.
+- The bus tap judges every hook on the event, disabled ones too, then dedup
+  (`already fired for <dedup> (<reason>)`). Each verdict is published as
+  `hook-decided` (`{at, hook, event, session, event_seq, dedup, fire,
+  reason}`) and kept, newest first and `app.hook_history` long, in
+  `hook-list`'s `decisions` and as each hook's `last_decision`.
+- `hook-explain` judges every hook (any event) against the envelope of a
+  session (default the newest) and event built from the session store; it
+  runs nothing and consumes no dedup key.
+- `config-check` (and every write) refuses a pattern that does not compile
+  or an unknown `match` key, naming the hook: `hook standup: match.title:
+  bad glob "[x": [ is never closed`.
+
+Phrase
 matching runs on normalized text (case-folded, punctuation stripped) of
 final utterances that survived echo removal. It never matches partials, so
 one spoken word fires once.

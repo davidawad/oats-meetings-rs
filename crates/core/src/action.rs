@@ -16,6 +16,14 @@ const fn is_option(t: &str) -> bool {
         && b[5] == b'n'
 }
 
+/// A param's wire name: a raw identifier (`r#match`) without its `r#`, as serde names it.
+const fn unraw(f: &str) -> &str {
+    match f.as_bytes() {
+        [b'r', b'#', ..] => f.split_at(2).1,
+        _ => f,
+    }
+}
+
 macro_rules! actions {
     ($(
         $name:ident, $wire:literal, $doc:literal, $status:literal, $effect:literal,
@@ -30,7 +38,7 @@ macro_rules! actions {
         /// (wire name, doc, status, effect, [(param, type, required)])
         #[allow(clippy::type_complexity)]
         pub const SPECS: &[(&str, &str, &str, &str, &[(&str, &str, bool)])] = &[
-            $( ($wire, $doc, $status, $effect, &[ $( (stringify!($f), stringify!($t), !is_option(stringify!($t))) ),* ]) ),*
+            $( ($wire, $doc, $status, $effect, &[ $( (unraw(stringify!($f)), stringify!($t), !is_option(stringify!($t))) ),* ]) ),*
         ];
     };
 }
@@ -114,8 +122,9 @@ actions! {
     TemplateExport, "template-export", "Merge the note templates into an OpenOats templates.json (default: templates.json in sessions.openoats_dir); same id or name is replaced, other OpenOats templates are kept.", "implemented", "write", { to: Option<String> };
     HookList, "hook-list", "The [[hooks]] entries (name, event, command, timeout, enabled, the last run) and the recent hook runs with exit code, timing and output, newest first.", "implemented", "read", {};
     HookTest, "hook-test", "Run one hook now (by name or 1-based position, enabled or not) as if its event (or event) happened for session (default: the newest), wait for it and return the run: exit code, timed_out, stdout and stderr.", "implemented", "control", { hook: String, session: Option<String>, event: Option<String> };
-    HookAdd, "hook-add", "Add a [[hooks]] entry: name, event ({hook-events}; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.", "implemented", "write", { name: String, event: String, command: Value, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
-    HookEdit, "hook-edit", "Change fields of a hook (by name or 1-based position): name, event ({hook-events}), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd.", "implemented", "write", { hook: String, name: Option<String>, event: Option<String>, command: Option<Value>, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String> };
+    HookAdd, "hook-add", "Add a [[hooks]] entry: name, event ({hook-events}; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd, match (the [hooks.match] table as an object: title, attendees, source, calendar; a pattern is a glob or re:<regex>).", "implemented", "write", { name: String, event: String, command: Value, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String>, r#match: Option<Value> };
+    HookEdit, "hook-edit", "Change fields of a hook (by name or 1-based position): name, event ({hook-events}), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd, match (an object that replaces the whole [hooks.match] table; {} clears it).", "implemented", "write", { hook: String, name: Option<String>, event: Option<String>, command: Option<Value>, shell: Option<bool>, timeout: Option<String>, enabled: Option<bool>, cwd: Option<String>, r#match: Option<Value> };
+    HookExplain, "hook-explain", "For a session (default: the newest) and an event ({hook-events}), every hook and whether it would fire, with the reason either way (its event, enabled, each [hooks.match] field). Nothing runs; no dedup is consumed.", "implemented", "read", { session: Option<String>, event: String };
     HookEvents, "hook-events", "The hook event contract (oats.hook-event/1): every event a hook can name with its description, the bus topics that produce it, how its dedup key is formed, the JSON Schema of its data and an example envelope; the envelope schema; the OATS_* environment a run gets. event: just that one. The same as config/hook-events.json.", "implemented", "read", { event: Option<String> };
     HookRemove, "hook-remove", "Remove a hook (by name or 1-based position).", "implemented", "write", { hook: String };
     HookEnable, "hook-enable", "Turn a hook on (default) or off.", "implemented", "write", { hook: String, enabled: Option<bool> };
@@ -146,6 +155,7 @@ pub const EVENTS: &[&str] = &[
     "session-deleted",
     "ics-updated",
     "hook-finished",
+    "hook-decided",
     "quit",
 ];
 

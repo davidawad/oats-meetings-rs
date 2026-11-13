@@ -320,6 +320,7 @@ fn notes_generated_fires_after_notes_are_written() {
             timeout: None,
             enabled: None,
             cwd: None,
+            r#match: None,
         })
         .unwrap();
     record(&r, "noted", "Noted");
@@ -370,6 +371,7 @@ fn a_hook_past_its_timeout_is_killed_with_its_children() {
             timeout: Some("300ms".into()),
             enabled: None,
             cwd: None,
+            r#match: None,
         })
         .unwrap();
     let t = Instant::now();
@@ -406,6 +408,7 @@ fn a_hook_past_its_timeout_is_killed_with_its_children() {
             timeout: Some("2h".into()),
             enabled: None,
             cwd: None,
+            r#match: None,
         })
         .unwrap_err();
     assert_eq!(e.code, "invalid_value", "{e}");
@@ -478,6 +481,7 @@ fn hook_actions_edit_the_hooks_tables_in_the_user_file() {
             timeout: Some("10s".into()),
             enabled: None,
             cwd: None,
+            r#match: None,
         })
     };
     let v = add("ping", "record.stop").unwrap();
@@ -519,6 +523,7 @@ fn hook_actions_edit_the_hooks_tables_in_the_user_file() {
             timeout: Some(String::new()),
             enabled: None,
             cwd: Some("/tmp".into()),
+            r#match: None,
         })
         .unwrap();
     let hooks = r.engine.snapshot().config.hooks.clone();
@@ -769,6 +774,7 @@ fn a_hook_fires_at_most_once_per_dedup_key() {
         timeout: None,
         enabled: None,
         cwd: None,
+        r#match: None,
     };
     r.engine
         .dispatch(&log("cal-a", "calendar.matched"))

@@ -1694,6 +1694,7 @@ impl Engine {
             Action::HookList {}
             | Action::HookTest { .. }
             | Action::HookEvents { .. }
+            | Action::HookExplain { .. }
             | Action::HookAdd { .. }
             | Action::HookEdit { .. }
             | Action::HookRemove { .. }

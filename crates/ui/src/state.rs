@@ -733,6 +733,8 @@ impl State {
                 self.auto_pending = d["message"].as_str().map(str::to_string);
             }
             Some("auto-stop-cancelled") => self.auto_pending = None,
+            // A hook decided to fire or skip: its row's last decision is re-read.
+            Some("hook-decided") => self.hooks_ui.list = Value::Null,
             Some("hook-finished") => {
                 // The Hooks panel re-reads its runs; a failure raises the banner.
                 self.hooks_ui.list = Value::Null;

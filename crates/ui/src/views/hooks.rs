@@ -2,7 +2,8 @@
 //! with its on/off toggle, Test (runs it now, off the UI thread, as `ctl hook-test`), Edit and
 //! Remove (first click arms), and its last run: exit code, time and output. Add / Edit open a form
 //! whose text boxes are the window's one editor (`State::edit`, Enter keeps the field); Save runs
-//! `hook-add` or `hook-edit`. A failed hook run also raises the window's hook banner
+//! `hook-add` or `hook-edit`, its Match fields (title, attendees, calendar source, calendar
+//! only) as the `match` object (dot-4uzgol.111.4). A failed hook run also raises the window's hook banner
 //! (`State::hook_failure`), whatever started it.
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, FontWeight, SharedString, Window};
@@ -19,6 +20,9 @@ pub(crate) const NAME: &str = "hooks:name";
 pub(crate) const COMMAND: &str = "hooks:command";
 pub(crate) const TIMEOUT: &str = "hooks:timeout";
 pub(crate) const CWD: &str = "hooks:cwd";
+pub(crate) const MATCH_TITLE: &str = "hooks:match_title";
+pub(crate) const MATCH_ATTENDEES: &str = "hooks:match_attendees";
+pub(crate) const MATCH_SOURCE: &str = "hooks:match_source";
 
 /// The Add / Edit form.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -33,7 +37,56 @@ pub struct Draft {
     /// Empty: `app.hook_timeout`.
     pub timeout: String,
     pub cwd: String,
+    /// `match.title`, `match.attendees` (comma-separated), `match.source`, `match.calendar`.
+    pub match_title: String,
+    pub match_attendees: String,
+    pub match_source: String,
+    pub match_calendar: Option<bool>,
+    /// The hook's whole `match` as it was (the fields the form has no box for are kept).
+    pub match_rest: Value,
     pub error: Option<String>,
+}
+
+impl Draft {
+    /// Fill the Match fields from a `match` object.
+    pub fn set_match(&mut self, m: &Value) {
+        let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+        self.match_title = s("title");
+        self.match_source = s("source");
+        self.match_attendees = match &m["attendees"] {
+            Value::Array(a) => a
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+            Value::String(a) => a.clone(),
+            _ => String::new(),
+        };
+        self.match_calendar = m["calendar"].as_bool();
+    }
+
+    /// The `match` object `hook-add` / `hook-edit` get: the old one with the form's fields over it.
+    pub fn match_value(&self) -> Value {
+        let mut m = self.match_rest.as_object().cloned().unwrap_or_default();
+        let mut put = |k: &str, v: Option<Value>| {
+            match v {
+                Some(v) => m.insert(k.into(), v),
+                None => m.remove(k),
+            };
+        };
+        let text = |s: &str| Some(s.trim()).filter(|s| !s.is_empty()).map(|s| json!(s));
+        put("title", text(&self.match_title));
+        put("source", text(&self.match_source));
+        let people: Vec<&str> = self
+            .match_attendees
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        put("attendees", (!people.is_empty()).then(|| json!(people)));
+        put("calendar", self.match_calendar.map(Value::Bool));
+        Value::Object(m)
+    }
 }
 
 /// Hooks-panel state.
@@ -85,7 +138,8 @@ impl Ui {
             "arming": self.arming,
             "draft": self.draft.as_ref().map(|d| json!({
                 "editing": d.editing, "name": d.name, "event": d.event, "command": d.command,
-                "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd, "error": d.error,
+                "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd, "match": d.match_value(),
+                "error": d.error,
                 "event_doc": self.event_doc(&d.event),
             })),
         })
@@ -126,6 +180,9 @@ pub fn commit(st: &mut State) {
         COMMAND => d.command = v,
         TIMEOUT => d.timeout = v,
         CWD => d.cwd = v,
+        MATCH_TITLE => d.match_title = v,
+        MATCH_ATTENDEES => d.match_attendees = v,
+        MATCH_SOURCE => d.match_source = v,
         _ => {}
     }
 }
@@ -157,7 +214,7 @@ pub fn open(st: &mut State, name: Option<&str>) {
                 .flatten()
                 .filter_map(|x| x.as_str().map(str::to_string))
                 .collect();
-            Draft {
+            let mut d = Draft {
                 editing: Some(n.to_string()),
                 name: n.to_string(),
                 event: h["event"].as_str().unwrap_or(&first).to_string(),
@@ -165,8 +222,11 @@ pub fn open(st: &mut State, name: Option<&str>) {
                 shell: h["shell"] == true,
                 timeout: h["timeout"].as_str().unwrap_or_default().to_string(),
                 cwd: h["cwd"].as_str().unwrap_or_default().to_string(),
-                error: None,
-            }
+                match_rest: h["match"].clone(),
+                ..Draft::default()
+            };
+            d.set_match(&h["match"]);
+            d
         }
     });
 }
@@ -188,12 +248,13 @@ pub fn save(st: &mut State, engine: &oats_core::control::engine::Engine) {
         None => (
             "hook-add",
             json!({"name": d.name, "event": d.event, "command": command, "shell": d.shell,
-                   "timeout": d.timeout, "cwd": d.cwd}),
+                   "timeout": d.timeout, "cwd": d.cwd, "match": d.match_value()}),
         ),
         Some(old) => (
             "hook-edit",
             json!({"hook": old, "name": d.name, "event": d.event, "command": command,
-                   "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd}),
+                   "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd,
+                   "match": d.match_value()}),
         ),
     };
     match model::dispatch(engine, id, params) {
@@ -381,6 +442,38 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
         }
         cx.notify();
     }));
+    let calendar = div().flex().gap(px(6.)).children(
+        [
+            (None, "any session"),
+            (Some(true), "calendar-matched only"),
+            (Some(false), "no calendar event"),
+        ]
+        .into_iter()
+        .map(|(v, label)| {
+            let id = match v {
+                None => "hook-match-calendar-any",
+                Some(true) => "hook-match-calendar-yes",
+                Some(false) => "hook-match-calendar-no",
+            };
+            kit::button(
+                id,
+                label,
+                if d.match_calendar == v {
+                    Kind::Primary
+                } else {
+                    Kind::Secondary
+                },
+                Size::Sm,
+                true,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(d) = this.state.hooks_ui.draft.as_mut() {
+                    d.match_calendar = v;
+                }
+                cx.notify();
+            }))
+        }),
+    );
     let can_save =
         !d.name.trim().is_empty() || w.state.edit.as_ref().is_some_and(|e| e.path == NAME);
     let mut save_btn = kit::button("hook-save", "Save", Kind::Primary, Size::Sm, can_save);
@@ -452,7 +545,41 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
         .child(labelled(
             "Folder",
             text_box(w, CWD, &d.cwd, "the session folder", 360., cx),
-        ));
+        ))
+        .child(labelled(
+            "Match title",
+            text_box(
+                w,
+                MATCH_TITLE,
+                &d.match_title,
+                "any title; a glob like Standup* or re:<regex>",
+                360.,
+                cx,
+            ),
+        ))
+        .child(labelled(
+            "Attendees",
+            text_box(
+                w,
+                MATCH_ATTENDEES,
+                &d.match_attendees,
+                "anyone; globs, comma-separated, e.g. *@acme.com",
+                360.,
+                cx,
+            ),
+        ))
+        .child(labelled(
+            "Cal. source",
+            text_box(
+                w,
+                MATCH_SOURCE,
+                &d.match_source,
+                "any calendar source",
+                260.,
+                cx,
+            ),
+        ))
+        .child(labelled("Calendar", calendar.into_any_element()));
     if let Some(e) = &d.error {
         col = col.child(
             div()
@@ -578,6 +705,31 @@ fn hook_row(w: &MainWindow, h: &Value, last: bool, cx: &mut Context<MainWindow>)
                 .text_ellipsis()
                 .whitespace_nowrap(),
         );
+    if let Some(m) = h["match"].as_object().filter(|m| !m.is_empty()) {
+        col = col.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(t.dim))
+                .child(format!("Match: {}", Value::Object(m.clone()))),
+        );
+    }
+    let dec = &h["last_decision"];
+    if dec.is_object() {
+        col = col.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(t.faint))
+                .child(format!(
+                    "Last decision: {} ({})",
+                    if dec["fire"] == true {
+                        "fired"
+                    } else {
+                        "skipped"
+                    },
+                    dec["reason"].as_str().unwrap_or_default()
+                )),
+        );
+    }
     let r = &h["last_run"];
     if r.is_object() {
         col = col.child(
@@ -684,6 +836,27 @@ mod tests {
         assert_eq!(ui.event_doc("record.explode"), "");
     }
 
+    /// The Match fields go out as the `match` object over the fields the form has no box for, and
+    /// an emptied field leaves it.
+    #[test]
+    fn the_match_fields_round_trip_through_the_draft() {
+        let old = json!({"title": "Standup*", "phrases": ["pricing"], "calendar": false});
+        let mut d = Draft {
+            match_rest: old.clone(),
+            ..Draft::default()
+        };
+        d.set_match(&old);
+        assert_eq!(d.match_value(), old);
+        d.match_title = String::new();
+        d.match_attendees = " *@acme.com, bo@x.org ,".into();
+        d.match_source = "work".into();
+        d.match_calendar = None;
+        assert_eq!(
+            d.match_value(),
+            json!({"phrases": ["pricing"], "attendees": ["*@acme.com", "bo@x.org"], "source": "work"})
+        );
+    }
+
     /// Add a hook through the form, test-run it, see the failed run on its row and as the banner,
     /// fix it with Edit, turn it off, and remove it (two clicks), all as ui-invoke clicks.
     #[test]
@@ -781,9 +954,27 @@ mod tests {
             invoke(
                 v,
                 "settings.hook_add",
-                json!({"name": "ok", "event": "session.saved", "command": "true"}),
+                json!({"name": "ok", "event": "session.saved", "command": "true",
+                       "match": {"title": "Standup*", "attendees": ["*@acme.com"], "calendar": true}}),
                 cx,
             );
+            let d = v.dump(cx);
+            assert_eq!(
+                d["view"]["hooks"]["hooks"][0]["match"],
+                json!({"title": "Standup*", "attendees": ["*@acme.com"], "calendar": true}),
+                "{d}"
+            );
+            // A bad glob is refused with the hook's name, the form stays open.
+            invoke(
+                v,
+                "settings.hook_edit",
+                json!({"hook": "ok", "match": {"title": "[oops"}}),
+                cx,
+            );
+            let d = v.dump(cx);
+            let err = d["view"]["hooks"]["draft"]["error"].as_str().unwrap();
+            assert!(err.contains("hook ok") && err.contains("match.title"), "{err}");
+            cancel(&mut v.state);
             open(&mut v.state, Some("ok"));
             v.state.begin_edit(COMMAND, "true");
             cx.notify();

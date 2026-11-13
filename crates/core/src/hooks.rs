@@ -6,7 +6,10 @@
 //! never blocks a recording, the control socket or the UI. A hook gets the session as `OATS_*`
 //! environment variables and the `oats.hook-event/1` envelope as JSON on stdin and in the file
 //! `OATS_EVENT_FILE`; it is killed (its whole process group on unix) past its timeout. A hook
-//! fires at most once per dedup key. Every run (exit code, timing, the first `app.hook_output`
+//! fires at most once per dedup key, and only when its `[hooks.match]` filter holds (`matches`,
+//! dot-4uzgol.111.4): every decision, fire or skip, comes with a reason, is kept for `hook-list`
+//! and published as `hook-decided`, and `hook-explain` shows them without running anything. Every
+//! run (exit code, timing, the first `app.hook_output`
 //! bytes of stdout and stderr) is kept for `hook-list` and published as `hook-finished`; a failure
 //! is logged and shown, never raised into the session.
 
@@ -33,8 +36,11 @@ pub use events::names;
 
 /// A `[[hooks]]` table's fields in the order they are written to the user file.
 pub const FIELDS: &[&str] = &[
-    "name", "event", "command", "shell", "timeout", "enabled", "cwd",
+    "name", "event", "command", "shell", "timeout", "enabled", "cwd", "match",
 ];
+
+/// The `speaker` values a `match` may name (the phrase triggers read it, dot-4uzgol.111.6).
+pub const SPEAKERS: &[&str] = &["you", "remote", "any"];
 
 /// The key whose range bounds a hook's own `timeout` (and whose value is the default).
 const TIMEOUT_KEY: &str = "app.hook_timeout";
@@ -72,6 +78,239 @@ pub struct Hook {
     /// Working directory; empty means the session folder (or the app's own when there is none).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cwd: String,
+    /// `[hooks.match]`: when the event fires the hook (empty: every time).
+    #[serde(default, rename = "match", skip_serializing_if = "Match::is_empty")]
+    pub filter: Match,
+}
+
+/// A hook's `[hooks.match]` table (docs/design/hooks.md L2). Every field is optional, and all
+/// present fields must hold. `title`, each of `attendees` and `source` are patterns: a glob
+/// (`*`, `?`, `[abc]`, `[!abc]`; case-insensitive, the whole text), or after `re:` a regex
+/// (unanchored, as written). `speaker`, `phrases` and `cooldown` (the phrase triggers,
+/// dot-4uzgol.111.6) and `before_end` (`calendar.ending`, dot-4uzgol.111.7) are parsed and checked
+/// here; the events they apply to judge them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Match {
+    /// The session title (or its calendar event's title).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// Any one pattern matching any one attendee (email, else name) of the calendar event.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attendees: Vec<String>,
+    /// The calendar source name of the session's calendar event.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// true: only sessions matched to a calendar event; false: only sessions with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<bool>,
+    /// you | remote | any (empty: any).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub speaker: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phrases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown: Option<Dur>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_end: Option<Dur>,
+}
+
+impl Match {
+    pub fn is_empty(&self) -> bool {
+        *self == Match::default()
+    }
+}
+
+/// Compile a `match` pattern: `re:<regex>`, else a glob (case-insensitive, anchored at both
+/// ends). Err says what is wrong with it.
+pub fn pattern(src: &str) -> std::result::Result<regex::Regex, String> {
+    if let Some(re) = src.strip_prefix("re:") {
+        return regex::Regex::new(re).map_err(|e| format!("bad regex \"{re}\": {e}"));
+    }
+    let mut body = String::new();
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => body.push_str(".*"),
+            '?' => body.push('.'),
+            '[' => {
+                body.push('[');
+                if chars.next_if_eq(&'!').is_some() {
+                    body.push('^');
+                }
+                // A `]` first in the class is one of its members.
+                let mut first = true;
+                loop {
+                    match chars.next() {
+                        None => return Err(format!("bad glob \"{src}\": [ is never closed")),
+                        Some(']') if !first => break,
+                        Some(c @ ('-' | 'a'..='z' | 'A'..='Z' | '0'..='9')) => body.push(c),
+                        Some(c) => body.push_str(&regex::escape(&c.to_string())),
+                    }
+                    first = false;
+                }
+                body.push(']');
+            }
+            c => body.push_str(&regex::escape(&c.to_string())),
+        }
+    }
+    regex::Regex::new(&format!("(?i)^(?:{body})$")).map_err(|e| format!("bad glob \"{src}\": {e}"))
+}
+
+/// Whether a hook fires on an event, and why (or why not).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Verdict {
+    pub fire: bool,
+    pub reason: String,
+}
+
+fn quoted(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|s| format!("{s:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether `hook` fires on `envelope` (an `oats.hook-event/1` envelope, or as much of one as
+/// `event`, `session.title` and `calendar`), with a reason either way: the event it listens for,
+/// whether it is on, then each `match` field (every failing one when it does not fire, every one
+/// that held when it does). Pure: no dedup, nothing run.
+pub fn matches(hook: &Hook, envelope: &Value) -> Verdict {
+    let event = envelope["event"].as_str().unwrap_or_default();
+    let no = |reason: String| Verdict {
+        fire: false,
+        reason,
+    };
+    if hook.event != event {
+        return no(format!("listens for {}, not {event}", hook.event));
+    }
+    if !hook.enabled {
+        return no("the hook is off (enabled = false)".into());
+    }
+    let m = &hook.filter;
+    let cal = &envelope["calendar"];
+    let cal_title = cal["title"].as_str().unwrap_or_default();
+    let (mut held, mut failed) = (Vec::new(), Vec::new());
+    let mut judge = |ok: bool, why: String| if ok { held.push(why) } else { failed.push(why) };
+    if let Some(want) = m.calendar {
+        let has = cal.is_object();
+        let what = if has {
+            format!("the session matched calendar event {cal_title:?}")
+        } else {
+            "the session matched no calendar event".to_string()
+        };
+        judge(has == want, format!("match.calendar = {want}: {what}"));
+    }
+    if !m.title.is_empty() {
+        let mut titles = vec![envelope["session"]["title"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()];
+        if !cal_title.is_empty() && cal_title != titles[0] {
+            titles.push(cal_title.to_string());
+        }
+        titles.retain(|t| !t.is_empty());
+        match pattern(&m.title) {
+            Err(e) => judge(false, format!("match.title: {e}")),
+            Ok(re) => match titles.iter().find(|t| re.is_match(t)) {
+                Some(t) => judge(true, format!("match.title: {:?} matched {t:?}", m.title)),
+                None if titles.is_empty() => judge(
+                    false,
+                    format!("match.title: {:?}: the session has no title", m.title),
+                ),
+                None => judge(
+                    false,
+                    format!(
+                        "match.title: {:?} did not match {}",
+                        m.title,
+                        titles
+                            .iter()
+                            .map(|t| format!("{t:?}"))
+                            .collect::<Vec<_>>()
+                            .join(" or ")
+                    ),
+                ),
+            },
+        }
+    }
+    if !m.attendees.is_empty() {
+        let people: Vec<String> = cal["attendees"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p.as_str().map(str::to_string))
+            .collect();
+        let mut hit = None;
+        let mut errors = Vec::new();
+        for p in &m.attendees {
+            match pattern(p) {
+                Err(e) => errors.push(e),
+                Ok(re) => {
+                    if let Some(a) = people.iter().find(|a| re.is_match(a)) {
+                        hit = hit.or(Some((p, a)));
+                    }
+                }
+            }
+        }
+        match (hit, errors.is_empty()) {
+            (_, false) => judge(false, format!("match.attendees: {}", errors.join("; "))),
+            (Some((p, a)), true) => judge(true, format!("match.attendees: {p:?} matched {a:?}")),
+            (None, true) if people.is_empty() => judge(
+                false,
+                format!(
+                    "match.attendees: {}: the session has no attendees",
+                    quoted(&m.attendees)
+                ),
+            ),
+            (None, true) => judge(
+                false,
+                format!(
+                    "match.attendees: none of {} matched {}",
+                    quoted(&m.attendees),
+                    quoted(&people)
+                ),
+            ),
+        }
+    }
+    if !m.source.is_empty() {
+        let source = cal["source"].as_str().unwrap_or_default();
+        match pattern(&m.source) {
+            Err(e) => judge(false, format!("match.source: {e}")),
+            Ok(_) if !cal.is_object() => judge(
+                false,
+                format!(
+                    "match.source: {:?}: the session matched no calendar event",
+                    m.source
+                ),
+            ),
+            Ok(re) => judge(
+                re.is_match(source),
+                format!(
+                    "match.source: {:?} {} calendar source {source:?}",
+                    m.source,
+                    if re.is_match(source) {
+                        "matched"
+                    } else {
+                        "did not match"
+                    }
+                ),
+            ),
+        }
+    }
+    if !failed.is_empty() {
+        return no(failed.join("; "));
+    }
+    Verdict {
+        fire: true,
+        reason: if m.is_empty() {
+            format!("no match filter: fires on every {event}")
+        } else if held.is_empty() {
+            format!("nothing in match filters {event}: fires on every one")
+        } else {
+            held.join("; ")
+        },
+    }
 }
 
 impl Hook {
@@ -131,11 +370,52 @@ fn check(hooks: &[Hook]) -> Result<()> {
                 )));
             }
         }
+        check_match(&label, &h.filter)?;
         if !seen.insert(label.clone()) {
             return Err(bad(format!("hook name {label} is used twice")));
         }
     }
     Ok(())
+}
+
+/// A `match` table's patterns compile and its `speaker` is one of `SPEAKERS`; Err names the hook.
+fn check_match(label: &str, m: &Match) -> Result<()> {
+    let fields = [("title", &m.title), ("source", &m.source)]
+        .into_iter()
+        .filter(|(_, p)| !p.is_empty())
+        .chain(m.attendees.iter().map(|p| ("attendees", p)))
+        .chain(m.phrases.iter().map(|p| ("phrases", p)));
+    for (field, p) in fields {
+        pattern(p).map_err(|e| bad(format!("hook {label}: match.{field}: {e}")))?;
+    }
+    if !m.speaker.is_empty() && !SPEAKERS.contains(&m.speaker.as_str()) {
+        return Err(bad(format!(
+            "hook {label}: match.speaker \"{}\" is not one of {}",
+            m.speaker,
+            SPEAKERS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// The JSON schema of a `[hooks.match]` table.
+pub fn match_schema() -> Value {
+    let pat = json!({"type": "string", "description": "a glob (*, ?, [abc]; case-insensitive) or re:<regex>"});
+    let dur = json!({"type": "string", "format": "duration", "pattern": "^[0-9]+(ms|s|m|h|d)$"});
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "title": pat,
+            "attendees": {"type": "array", "items": pat},
+            "source": pat,
+            "calendar": {"type": "boolean"},
+            "speaker": {"type": "string", "enum": SPEAKERS},
+            "phrases": {"type": "array", "items": pat},
+            "cooldown": dur,
+            "before_end": dur,
+        },
+    })
 }
 
 /// The JSON schema of one `[[hooks]]` entry (for `schema.json`).
@@ -152,6 +432,7 @@ pub fn item_schema() -> Value {
             "timeout": {"type": "string", "format": "duration", "pattern": "^[0-9]+(ms|s|m|h|d)$"},
             "enabled": {"type": "boolean", "default": true},
             "cwd": {"type": "string"},
+            "match": match_schema(),
         },
     })
 }
@@ -182,11 +463,26 @@ pub struct Run {
     pub truncated: bool,
 }
 
-/// The engine's record of hook runs, newest first, each session's envelope `seq` (the counter of
-/// its raw event log) and the (hook, dedup key) pairs that already fired.
+/// One decision on whether a hook fires on an event (the `hook-decided` event).
+#[derive(Debug, Clone, Serialize)]
+pub struct Decision {
+    pub at: String,
+    pub hook: String,
+    pub event: String,
+    pub session: Option<String>,
+    /// The envelope's `seq` and `dedup`.
+    pub event_seq: u64,
+    pub dedup: String,
+    pub fire: bool,
+    pub reason: String,
+}
+
+/// The engine's record of hook runs and decisions, newest first, each session's envelope `seq`
+/// (the counter of its raw event log) and the (hook, dedup key) pairs that already fired.
 #[derive(Default)]
 pub struct Runner {
     runs: Mutex<VecDeque<Run>>,
+    decisions: Mutex<VecDeque<Decision>>,
     seq: AtomicU64,
     /// Bus messages seen per session ("" for none), each logged to `<session>/events.jsonl`:
     /// the next envelope's `seq`.
@@ -199,6 +495,21 @@ impl Runner {
         let mut runs = self.runs.lock().expect("hook runs");
         runs.push_front(run.clone());
         runs.truncate(max.max(1));
+    }
+
+    fn decided(&self, d: &Decision, max: usize) {
+        let mut ds = self.decisions.lock().expect("hook decisions");
+        ds.push_front(d.clone());
+        ds.truncate(max.max(1));
+    }
+
+    pub fn decisions(&self) -> Vec<Decision> {
+        self.decisions
+            .lock()
+            .expect("hook decisions")
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub fn runs(&self) -> Vec<Run> {
@@ -299,6 +610,8 @@ impl Ctx {
 pub fn context(engine: &Engine, event: &str, session: Option<&str>, data: Value) -> Ctx {
     let mut c = Ctx {
         event: event.to_string(),
+        // The payload's title until the session's own is read (a session not stored yet).
+        title: data["title"].as_str().unwrap_or_default().to_string(),
         session: session.filter(|s| !s.is_empty()).map(str::to_string),
         at: now_stamp(),
         calendar: events::calendar_of(&data["calendar"]["event"], &Value::Null),
@@ -312,7 +625,9 @@ pub fn context(engine: &Engine, event: &str, session: Option<&str>, data: Value)
         return c;
     };
     let dir = v["path"].as_str().map(PathBuf::from);
-    c.title = v["title"].as_str().unwrap_or_default().to_string();
+    if let Some(t) = v["title"].as_str().filter(|t| !t.is_empty()) {
+        c.title = t.to_string();
+    }
     let meta = v["metadata"].as_object().cloned().unwrap_or_default();
     if let Some(ev) = meta.get("calendarEvent").filter(|e| e.is_object()) {
         c.calendar = events::calendar_of(ev, meta.get("attendees").unwrap_or(&Value::Null));
@@ -397,11 +712,8 @@ fn start(
         .hooks
         .iter()
         .enumerate()
-        .filter(|(_, h)| h.enabled && h.event == spec.name)
+        .filter(|(_, h)| h.event == spec.name)
         .map(|(i, h)| (h.label(i), h.clone()))
-        // At most once per dedup key: a message seen again (a replay, a stop that re-matches the
-        // calendar event of its start) does not run the hook again.
-        .filter(|(label, _)| engine.hooks.first(&key, label, &dedup))
         .collect();
     if hooks.is_empty() {
         return;
@@ -416,8 +728,22 @@ fn start(
             ctx.seq = seq;
             ctx.at = at;
             ctx.dedup = dedup;
+            let envelope = ctx.envelope("", "");
             let threads: Vec<_> = hooks
                 .into_iter()
+                .filter(|(label, hook)| {
+                    let mut v = matches(hook, &envelope);
+                    // At most once per dedup key: a message seen again (a replay, a stop that
+                    // re-matches the calendar event of its start) does not run the hook again.
+                    if v.fire && !engine.hooks.first(&key, label, &ctx.dedup) {
+                        v = Verdict {
+                            fire: false,
+                            reason: format!("already fired for {} ({})", ctx.dedup, v.reason),
+                        };
+                    }
+                    decide(&engine, label, &ctx, &v);
+                    v.fire
+                })
                 .map(|(label, hook)| {
                     let (engine, ctx) = (Arc::clone(&engine), ctx.clone());
                     std::thread::Builder::new()
@@ -432,6 +758,26 @@ fn start(
     if let Err(e) = spawned {
         crate::elog!("oats-meetings-rs: hooks for {event}: cannot start a thread: {e}");
     }
+}
+
+/// Keep a decision and publish it as `hook-decided`.
+fn decide(engine: &Engine, label: &str, ctx: &Ctx, v: &Verdict) {
+    let d = Decision {
+        at: now_stamp(),
+        hook: label.to_string(),
+        event: ctx.event.clone(),
+        session: ctx.session.clone(),
+        event_seq: ctx.seq,
+        dedup: ctx.dedup.clone(),
+        fire: v.fire,
+        reason: v.reason.clone(),
+    };
+    let max = engine.snapshot().config.app.hook_history as usize;
+    engine.hooks.decided(&d, max);
+    engine.bus.publish(
+        "hook-decided",
+        serde_json::to_value(&d).unwrap_or(Value::Null),
+    );
 }
 
 /// Run `hook`, keep the run, log a failure and publish `hook-finished`.
@@ -743,10 +1089,23 @@ fn timeout_arg(t: &str) -> Result<Option<Dur>> {
         .ok_or_else(|| bad(format!("timeout \"{t}\" is not a duration like \"30s\"")))
 }
 
+/// A `match` argument: an object of `[hooks.match]` fields; null or `{}` for none.
+fn match_arg(v: &Value) -> Result<Match> {
+    if v.is_null() {
+        return Ok(Match::default());
+    }
+    serde_json::from_value(v.clone()).map_err(|e| bad(format!("match: {e}")))
+}
+
 fn view(engine: &Engine, i: usize, h: &Hook) -> Value {
     let cfg = &engine.snapshot().config;
     let label = h.label(i);
     let last = engine.hooks.runs().into_iter().find(|r| r.hook == label);
+    let decided = engine
+        .hooks
+        .decisions()
+        .into_iter()
+        .find(|d| d.hook == label);
     json!({
         "index": i + 1,
         "name": label,
@@ -756,7 +1115,9 @@ fn view(engine: &Engine, i: usize, h: &Hook) -> Value {
         "timeout": keys::format_duration_ms(h.timeout_of(cfg).0),
         "enabled": h.enabled,
         "cwd": h.cwd,
+        "match": h.filter,
         "last_run": last,
+        "last_decision": decided,
     })
 }
 
@@ -782,6 +1143,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             Ok(json!({
                 "hooks": hooks.iter().enumerate().map(|(i, h)| view(engine, i, h)).collect::<Vec<_>>(),
                 "runs": engine.hooks.runs(),
+                "decisions": engine.hooks.decisions(),
                 "events": names(),
                 "event_docs": events::TABLE.iter()
                     .map(|s| json!({"name": s.name, "description": s.description}))
@@ -802,6 +1164,41 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 }
             }
             Ok(v)
+        }
+        Action::HookExplain { session, event } => {
+            if events::find(event).is_none() {
+                return Err(ConfigError::new(
+                    "not_found",
+                    format!("no hook event \"{event}\"; events: {}", names().join(", ")),
+                ));
+            }
+            let session = match session {
+                Some(s) => {
+                    engine.store().get(s)?;
+                    Some(s.clone())
+                }
+                None => newest_session(engine),
+            };
+            let ctx = context(
+                engine,
+                event,
+                session.as_deref(),
+                json!({"session": session}),
+            );
+            let envelope = ctx.envelope("", "");
+            let hooks: Vec<Value> = hooks_of(engine)
+                .iter()
+                .enumerate()
+                .map(|(i, h)| {
+                    let v = matches(h, &envelope);
+                    json!({"name": h.label(i), "event": h.event, "enabled": h.enabled,
+                           "match": h.filter, "fire": v.fire, "reason": v.reason})
+                })
+                .collect();
+            Ok(json!({
+                "session": session, "event": event, "title": ctx.title,
+                "calendar": ctx.calendar, "hooks": hooks,
+            }))
         }
         Action::HookTest {
             hook,
@@ -849,6 +1246,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             timeout,
             enabled,
             cwd,
+            r#match,
         } => {
             let mut hooks = hooks_of(engine);
             let shell = shell.unwrap_or(false);
@@ -860,6 +1258,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 timeout: timeout_arg(timeout.as_deref().unwrap_or_default())?,
                 enabled: enabled.unwrap_or(true),
                 cwd: cwd.clone().unwrap_or_default(),
+                filter: match_arg(r#match.as_ref().unwrap_or(&Value::Null))?,
             };
             if name.trim().is_empty() {
                 return Err(bad("hook-add needs a name"));
@@ -877,6 +1276,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             timeout,
             enabled,
             cwd,
+            r#match,
         } => {
             let mut hooks = hooks_of(engine);
             let i = find(&hooks, hook)?;
@@ -901,6 +1301,9 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             }
             if let Some(c) = cwd {
                 h.cwd = c.clone();
+            }
+            if let Some(m) = r#match {
+                h.filter = match_arg(m)?;
             }
             save(engine, &hooks, "hook-edit")?;
             Ok(view(engine, i, &hooks[i]))

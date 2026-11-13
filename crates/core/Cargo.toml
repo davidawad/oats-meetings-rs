@@ -21,6 +21,8 @@ rrule.workspace = true
 chrono-tz.workspace = true
 hound.workspace = true
 sha2.workspace = true
+# Hook match filters (dot-4uzgol.111.4): `re:` patterns, and globs compiled to regexes.
+regex = "1"
 # The system zone for export timestamps (ui.tz empty), as OpenOats uses the system zone.
 iana-time-zone = "0.1"
 # Calendar providers (dot-4uzgol.100): PKCE / HTTP Basic encodings and the PKCE verifier's randomness.

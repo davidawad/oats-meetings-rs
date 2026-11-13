@@ -1227,7 +1227,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a [[hooks]] entry: name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.",
+      "doc": "Add a [[hooks]] entry: name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd, match (the [hooks.match] table as an object: title, attendees, source, calendar; a pattern is a glob or re:<regex>).",
       "effect": "write",
       "name": "hook-add",
       "params": [
@@ -1265,12 +1265,17 @@
           "name": "cwd",
           "required": false,
           "type": "Option<String>"
+        },
+        {
+          "name": "match",
+          "required": false,
+          "type": "Option<Value>"
         }
       ],
       "status": "implemented"
     },
     {
-      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd.",
+      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd, match (an object that replaces the whole [hooks.match] table; {} clears it).",
       "effect": "write",
       "name": "hook-edit",
       "params": [
@@ -1313,6 +1318,29 @@
           "name": "cwd",
           "required": false,
           "type": "Option<String>"
+        },
+        {
+          "name": "match",
+          "required": false,
+          "type": "Option<Value>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "For a session (default: the newest) and an event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated), every hook and whether it would fire, with the reason either way (its event, enabled, each [hooks.match] field). Nothing runs; no dedup is consumed.",
+      "effect": "read",
+      "name": "hook-explain",
+      "params": [
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "event",
+          "required": true,
+          "type": "String"
         }
       ],
       "status": "implemented"
@@ -1445,6 +1473,7 @@
     "session-deleted",
     "ics-updated",
     "hook-finished",
+    "hook-decided",
     "quit"
   ],
   "schema_version": 1

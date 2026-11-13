@@ -4245,6 +4245,7 @@ dependencies = [
  "objc2-core-ml",
  "objc2-event-kit",
  "objc2-foundation 0.3.2",
+ "regex",
  "rrule",
  "rusqlite",
  "serde",
