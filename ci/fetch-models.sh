@@ -41,22 +41,34 @@ done
 if [ "${OATS_FETCH_DIARIZE:-1}" = 1 ]; then
   _ami=$_dir/diarize-ami
   mkdir -p "$_ami/speakers"
+  _ami_fetch_failed=0
   _rows=$(grep -v '^#' "$(dirname "${BASH_SOURCE[0]}")/../tests/fixtures/diarize-ami/manifest.tsv" | cut -f1-3 | sed 's|^\([^\t]*\)\t|\1.Array1-01.wav\t|')
   while IFS=$'\t' read -r _f _url _sha; do
     test -n "$_f" || continue
     _f=$_ami/$_f
     if ! { [ -f "$_f" ] && echo "$_sha  $_f" | sha256sum -c --status -; }; then
-      env -u LD_LIBRARY_PATH /usr/bin/curl -fL --retry 3 --retry-delay 5 -o "$_f.part" "$_url"
-      echo "$_sha  $_f.part" | sha256sum -c -
-      mv "$_f.part" "$_f"
+      if ! {
+        env -u LD_LIBRARY_PATH /usr/bin/curl -fL --retry 3 --retry-delay 5 -o "$_f.part" "$_url" &&
+          echo "$_sha  $_f.part" | sha256sum -c - &&
+          mv "$_f.part" "$_f"
+      }; then
+        echo "WARNING: AMI diarization fixture fetch failed for $_url; skipping the optional DER test. Required speech-recognition model fetches are unaffected." >&2
+        rm -f "$_f.part"
+        _ami_fetch_failed=1
+        break
+      fi
     fi
     echo "diarize fixture: $_f (sha256 ok)"
   done <<< "$_rows"
-  for _m in $_speaker_ids; do
-    _fetch_catalog "$_data/speaker-models.json" "$_m" "$_ami/speakers" || return 1 2> /dev/null || exit 1
-  done
-  export OATS_DIARIZE_AMI_DIR=$_ami
-  export OATS_DIARIZE_MODELS_DIR=$_ami/speakers
+  if [ "$_ami_fetch_failed" = 1 ]; then
+    unset OATS_DIARIZE_AMI_DIR OATS_DIARIZE_MODELS_DIR
+  else
+    for _m in $_speaker_ids; do
+      _fetch_catalog "$_data/speaker-models.json" "$_m" "$_ami/speakers" || return 1 2> /dev/null || exit 1
+    done
+    export OATS_DIARIZE_AMI_DIR=$_ami
+    export OATS_DIARIZE_MODELS_DIR=$_ami/speakers
+  fi
 fi
 export OATS_WHISPER_MODELS_DIR=$_dir
 export OATS_WHISPER_MODEL=$_dir/ggml-tiny.en.bin
