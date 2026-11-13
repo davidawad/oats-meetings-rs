@@ -13,6 +13,7 @@ fn main() {
     }
     match mode {
         Mode::Ctl => std::process::exit(oats_ctl::run(&args[1..])),
+        Mode::Mcp => std::process::exit(oats_ctl::mcp::run(&args[1..])),
         Mode::Config => std::process::exit(oats_core::config::cli::run_env(&args[1..])),
         Mode::Version => oats_core::log::out(oats_core::version_line()),
         Mode::Help => oats_core::log::out(cli::USAGE),

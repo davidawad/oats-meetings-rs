@@ -179,6 +179,14 @@ pub fn actions_json() -> String {
     s
 }
 
+/// The MCP tool list (`oats-meetings-rs mcp`, `tools/list`).
+pub fn mcp_tools_json() -> String {
+    let mut s = serde_json::to_string_pretty(&sorted(&crate::action::mcp_tools_json()))
+        .expect("serializable");
+    s.push('\n');
+    s
+}
+
 /// The hook event table (`hook-events`).
 pub fn hook_events_json() -> String {
     let mut s = serde_json::to_string_pretty(&sorted(&crate::hooks::events::table_json()))
@@ -193,6 +201,7 @@ pub fn projections() -> Vec<(&'static str, String)> {
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
         ("actions.json", actions_json()),
+        ("mcp-tools.json", mcp_tools_json()),
         ("hook-events.json", hook_events_json()),
         (
             "template.schema.json",

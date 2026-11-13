@@ -198,6 +198,71 @@ pub fn manifest_json() -> Value {
     })
 }
 
+/// The MCP tool name of an action: `session-list` -> `session_list`.
+pub fn tool_name(wire: &str) -> String {
+    wire.replace('-', "_")
+}
+
+/// The action an MCP tool name stands for.
+pub fn from_tool_name(tool: &str) -> Option<&'static str> {
+    SPECS.iter().map(|s| s.0).find(|w| tool_name(w) == tool)
+}
+
+/// JSON Schema of one param type (an `Option` is the type it wraps; required is the caller's).
+fn type_schema(t: &str) -> Value {
+    let t = t.replace(' ', "");
+    let inner = t
+        .strip_prefix("Option<")
+        .and_then(|r| r.strip_suffix('>'))
+        .unwrap_or(&t);
+    match inner {
+        "String" => json!({"type": "string"}),
+        "bool" => json!({"type": "boolean"}),
+        "u64" => json!({"type": "integer", "minimum": 0}),
+        "Vec<String>" => json!({"type": "array", "items": {"type": "string"}}),
+        _ => json!({"description": "any JSON value"}),
+    }
+}
+
+/// The MCP `tools/list` entries, one per action (dot-4uzgol.114): name with `_`, the manifest
+/// doc, the params as an object schema (`Option` params are not required), and hints from the
+/// effect (read is read-only; a delete, remove or trash-empty is destructive).
+pub fn mcp_tools() -> Vec<Value> {
+    SPECS
+        .iter()
+        .map(|(name, doc, _, effect, params)| {
+            let props: serde_json::Map<String, Value> = params
+                .iter()
+                .map(|(n, t, _)| ((*n).to_string(), type_schema(t)))
+                .collect();
+            let required: Vec<&str> = params.iter().filter(|p| p.2).map(|p| p.0).collect();
+            let read = *effect == "read";
+            let destructive = !read
+                && (name.contains("delete") || name.contains("remove") || *name == "trash-empty");
+            json!({
+                "name": tool_name(name),
+                "title": name,
+                "description": self::doc(doc),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": props,
+                    "required": required,
+                    "additionalProperties": false,
+                },
+                "annotations": {
+                    "readOnlyHint": read,
+                    "destructiveHint": destructive,
+                },
+            })
+        })
+        .collect()
+}
+
+/// `config/mcp-tools.json`: what `oats-meetings-rs mcp` answers to `tools/list`.
+pub fn mcp_tools_json() -> Value {
+    json!({"$comment": MARKER, "tools": mcp_tools()})
+}
+
 /// Parameter names in declaration order, for positional CLI arguments.
 pub fn param_names(wire: &str) -> Vec<&'static str> {
     SPECS

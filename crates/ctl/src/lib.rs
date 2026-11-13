@@ -11,6 +11,8 @@
 //! Exit codes: 0 ok, 1 error response, 2 usage, 3 engine not running. A reader that closes stdout
 //! early (`ctl list-actions | head`, EPIPE) is a normal early exit: 0, no panic (dot-4uzgol.47).
 
+pub mod mcp;
+
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;

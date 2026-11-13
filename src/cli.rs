@@ -4,6 +4,7 @@
 pub const USAGE: &str = "usage: oats-meetings-rs [--headless | --version | --help]
        oats-meetings-rs ctl <action words> [params]   control a running app (try: ctl list-actions)
        oats-meetings-rs config <subcommand>           inspect or edit the config file
+       oats-meetings-rs mcp [--runtime-dir D]         MCP server on stdio: every action is a tool
 
 With no arguments the app opens its window and serves the control socket.
   --headless   run the engine and control socket without a window
@@ -14,6 +15,8 @@ With no arguments the app opens its window and serves the control socket.
 pub enum Mode {
     Ctl,
     Config,
+    /// The MCP stdio server (`oats_ctl::mcp`).
+    Mcp,
     Version,
     Help,
     Headless,
@@ -28,6 +31,7 @@ pub fn mode(args: &[String]) -> Mode {
     match args.first().map(String::as_str) {
         Some("ctl") => return Mode::Ctl,
         Some("config") => return Mode::Config,
+        Some("mcp") => return Mode::Mcp,
         Some("stt-worker") => return Mode::SttWorker,
         _ => {}
     }
@@ -60,6 +64,8 @@ mod tests {
         assert_eq!(m(&["--headless", "--version"]), Mode::Version);
         assert_eq!(m(&["ctl", "ping"]), Mode::Ctl);
         assert_eq!(m(&["config", "--help"]), Mode::Config);
+        assert_eq!(m(&["mcp"]), Mode::Mcp);
+        assert_eq!(m(&["mcp", "--runtime-dir", "d"]), Mode::Mcp);
         assert_eq!(m(&["stt-worker"]), Mode::SttWorker);
         for h in ["--help", "-h"] {
             assert_eq!(m(&[h]), Mode::Help);

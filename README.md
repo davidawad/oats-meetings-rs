@@ -7,6 +7,11 @@ Builds go through `ci/rustc-wrapper.sh` (`.cargo/config.toml`): kache when it is
 (`RUST_CACHE=sccache` for sccache, `RUST_CACHE=none` for neither), plain rustc otherwise. On Windows
 without `sh`, build with `RUSTC_WRAPPER=""`. See [AGENTS.md](AGENTS.md#build-cache-kache-through-cirustc-wrappersh).
 
+## Control
+
+Every action is reachable from `oats-meetings-rs ctl` and, as MCP tools, from `oats-meetings-rs mcp`
+(stdio). See [docs/control.md](docs/control.md).
+
 ## Auto-stop and auto-start
 
 A recording stops by itself after `record.auto_stop.after` (default 5 minutes) of silence on both
