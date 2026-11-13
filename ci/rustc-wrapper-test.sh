@@ -3,6 +3,8 @@
 # Usage: sh ci/rustc-wrapper-test.sh   (ci/linux-nix.sh runs it before the build)
 set -u
 wrapper="$(cd "$(dirname "$0")" && pwd)/rustc-wrapper.sh"
+# The wrapper is a bash script; the checks run it with bash so their PATH can hold fake tools only.
+bash=$(command -v bash)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/none" "$tmp/k" "$tmp/kbad" "$tmp/s" "$tmp/sbad"
@@ -34,7 +36,7 @@ chmod +x "$tmp/rustc" "$tmp"/*/* "$tmp/kbin"
 check() {
   name=$1 want=$2 want_rc=$3
   shift 3
-  got=$(env -i "$@" "$wrapper" "$tmp/rustc" --crate-name demo --edition 2021 2>&1)
+  got=$(env -i "$@" "$bash" "$wrapper" "$tmp/rustc" --crate-name demo --edition 2021 2>&1)
   rc=$?
   if [ "$got" = "$want" ] && [ "$rc" = "$want_rc" ]; then
     echo "ok   $name"
@@ -67,8 +69,18 @@ check "RUST_CACHE=sccache uses sccache" "sccache local=unset
 $plain" 0 PATH="$tmp/s:$tmp/k" RUST_CACHE=sccache
 check "sccache that cannot start: plain rustc" "$plain" 0 PATH="$tmp/sbad" RUST_CACHE=sccache
 
-got=$(env -i PATH="$tmp/none" "$wrapper" 2>&1)
+got=$(env -i PATH="$tmp/none" "$bash" "$wrapper" 2>&1)
 if [ $? = 2 ]; then echo "ok   no arguments: usage, rc 2"; else echo "FAIL no arguments: $got"; fails=$((fails + 1)); fi
+
+# Run by its own shebang, a variable whose name has a hyphen (cargo's CARGO_BIN_EXE_<bin-name>)
+# reaches rustc: dash drops such variables, which broke env!("CARGO_BIN_EXE_oats-meetings-rs").
+got=$(env -i PATH="$tmp/none:$(dirname "$bash")" RUST_CACHE=none 'CARGO_BIN_EXE_demo-bin=ok' "$wrapper" "$(command -v env)" 2>&1 | grep '^CARGO_BIN_EXE_demo-bin=')
+if [ "$got" = "CARGO_BIN_EXE_demo-bin=ok" ]; then
+  echo "ok   a hyphenated env var (CARGO_BIN_EXE_<bin>) reaches rustc"
+else
+  echo "FAIL a hyphenated env var (CARGO_BIN_EXE_<bin>) reaches rustc: got [$got]"
+  fails=$((fails + 1))
+fi
 
 if [ "$fails" -ne 0 ]; then
   echo "rustc-wrapper-test: $fails failed"

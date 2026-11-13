@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # cargo's rustc-wrapper (.cargo/config.toml, dot-4uzgol.111.1): runs rustc through a build cache.
 # cargo calls it as `ci/rustc-wrapper.sh <rustc> <args>...`.
 #   RUST_CACHE=kache (default): kache ($KACHE_BIN, else on PATH), local cache only unless
@@ -7,7 +7,10 @@
 #   RUST_CACHE=none:            plain rustc.
 # Fail open: an unknown RUST_CACHE, a missing tool or one that cannot start runs plain "$@", so
 # the cache never fails a build. No lock, no jobs cap: cargo's own parallelism applies.
-# POSIX sh on purpose: bare nix images and macOS have /bin/sh, not always bash 4.
+# bash, not sh: cargo passes CARGO_BIN_EXE_<bin-name> to rustc, and bin names have hyphens
+# (CARGO_BIN_EXE_oats-meetings-rs). dash (/bin/sh on Debian images) drops such variables on exec,
+# which broke every env!("CARGO_BIN_EXE_...") test. bash keeps them. The body stays POSIX, so
+# macOS's bash 3.2 runs it.
 if [ "$#" -eq 0 ]; then
   echo "rustc-wrapper.sh: usage: rustc-wrapper.sh <rustc> [args...]" >&2
   exit 2
