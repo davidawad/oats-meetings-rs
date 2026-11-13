@@ -1215,7 +1215,8 @@ impl Engine {
                     "auto-stop-pending",
                     json!({"session": id, "silence_ms": silence_ms, "stop_in_ms": stop_in_ms,
                            "after": after,
-                           "message": format!("No sound for a while: recording stops in {} unless you keep it",
+                           "message": format!("No sound for {}: recording stops in {} unless you keep it (record.auto_stop.after = {after})",
+                               crate::hooks::ending::span(silence_ms),
                                keys::format_duration_ms(stop_in_ms.div_ceil(1000) * 1000))}),
                 );
                 false

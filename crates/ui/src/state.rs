@@ -1274,7 +1274,7 @@ mod tests {
         let (engine, _d) = testutil::engine(&[]);
         let mut st = State::default();
         st.on_event(&engine, &ev("recording-started", json!({"session": "a"})));
-        let pending = "No sound for a while: recording stops in 30s unless you keep it";
+        let pending = "No sound for 4m30s: recording stops in 30s unless you keep it (record.auto_stop.after = 5m)";
         st.on_event(
             &engine,
             &ev(

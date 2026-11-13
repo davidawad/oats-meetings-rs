@@ -4,7 +4,7 @@
 {"seq":4,"at":"2026-11-12T10:00:12.000Z","topic":"recording-paused","data":{"session":"2026-11-12-manual","paused":false,"duration_ms":10000}}
 {"seq":5,"at":"2026-11-12T10:00:23.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"live","speaker":"remote_1","text":"Next steps: I send the doc.","start":20.0,"end":23.0}}
 {"seq":6,"at":"2026-11-12T10:01:02.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"live","speaker":"you","text":"Next steps are clear.","start":60.0,"end":62.0}}
-{"seq":7,"at":"2026-11-12T10:05:00.000Z","topic":"auto-stop-pending","data":{"session":"2026-11-12-manual","silence_ms":240000,"stop_in_ms":60000,"after":"5m","message":"No sound for a while: recording stops in 1m unless you keep it"}}
+{"seq":7,"at":"2026-11-12T10:05:00.000Z","topic":"auto-stop-pending","data":{"session":"2026-11-12-manual","silence_ms":240000,"stop_in_ms":60000,"after":"5m","message":"No sound for 4m0s: recording stops in 1m unless you keep it (record.auto_stop.after = 5m)"}}
 {"seq":8,"at":"2026-11-12T10:06:02.000Z","topic":"record.before_stop","data":{"session":"2026-11-12-manual","reason":"auto","by":"auto-stop"}}
 {"seq":9,"at":"2026-11-12T10:06:03.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"final","speaker":"you","text":"Let's agree on next steps.","start":5.1,"end":7.0}}
 {"seq":10,"at":"2026-11-12T10:06:03.000Z","topic":"recording-stopped","data":{"session":"2026-11-12-manual","path":"/home/me/oats/sessions/2026-11-12-manual/audio.wav","duration_ms":362000,"trimmed_ms":62000,"by":"auto-stop","forced":false,"reason":null,"transcription":{"final":"ok"}}}
