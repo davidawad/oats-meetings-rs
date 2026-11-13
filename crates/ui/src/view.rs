@@ -20,7 +20,7 @@ use serde_json::json;
 
 use crate::kit::{self, Icon, Kind, Size};
 use crate::meters::{self, Gauge, Meters, Reading, Slot, Slots};
-use crate::state::{fmt_clock, Control, Controls, Dot, Edit, Line, Rec, State, Tab};
+use crate::state::{fmt_clock, AfterStop, Control, Controls, Dot, Edit, Line, Rec, State, Tab};
 use crate::theme::{self, Theme, MONO, SANS};
 use crate::views;
 
@@ -894,12 +894,25 @@ impl MainWindow {
         let t = self.theme;
         let w = self.speaker_width();
         let body = if self.state.live.is_empty() {
-            let (h, s) = match self.state.rec {
-                Rec::Idle if self.state.live_session.is_some() => (
+            let (h, s) = match (&self.state.rec, &self.state.after_stop) {
+                (Rec::Idle, Some(AfterStop::Running)) => (
+                    "Transcribing the recording",
+                    "audio.transcribe is deferred: the final pass is running now, and the \
+                     transcript appears here when it is done."
+                        .to_string(),
+                ),
+                (Rec::Idle, Some(AfterStop::Failed(why))) => ("Not transcribed", why.clone()),
+                (Rec::Recording { .. } | Rec::Paused { .. }, Some(AfterStop::Waiting)) => (
+                    "Recording audio only",
+                    "audio.transcribe is deferred: no live transcript, to save CPU during the \
+                     call. Transcription runs after you stop."
+                        .to_string(),
+                ),
+                (Rec::Idle, _) if self.state.live_session.is_some() => (
                     "Empty transcript",
                     "The last recording has no lines. Start recording to try again.".to_string(),
                 ),
-                Rec::Idle => {
+                (Rec::Idle, _) => {
                     let map = self.keymap();
                     let k = |c: &str| crate::shortcuts::shown(map.keys(c));
                     let cfg = self.engine.snapshot();

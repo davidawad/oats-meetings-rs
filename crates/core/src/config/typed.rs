@@ -101,6 +101,8 @@ pub enum AudioTranscribe {
     Auto,
     On,
     Off,
+    /// Audio only while recording; the final pass runs when it stops (dot-4uzgol.111.5).
+    Deferred,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

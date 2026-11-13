@@ -68,7 +68,7 @@ restart_wait = "2s"
 silence_warning = "5s"
 # macOS system-audio source: auto is a Core Audio process tap on macOS 14.2+ (System Audio Recording permission), falling back to ScreenCaptureKit (Screen Recording) on older macOS or a failed tap; tap or screencapturekit force one. Ignored on other OSes.
 system_backend = "auto"
-# Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.
+# Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes. deferred records audio only (no ASR loaded, no live segments, so CPU stays near capture-only) and runs the final pass over the whole recording when it stops, then transcript.final; if the model is unavailable then, the session is kept as audio, marked pending, and session-transcribe runs it later.
 transcribe = "auto"
 
 [audio.mic]

@@ -405,11 +405,12 @@
         },
         "transcribe": {
           "default": "auto",
-          "description": "Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.",
+          "description": "Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes. deferred records audio only (no ASR loaded, no live segments, so CPU stays near capture-only) and runs the final pass over the whole recording when it stops, then transcript.final; if the model is unavailable then, the session is kept as audio, marked pending, and session-transcribe runs it later.",
           "enum": [
             "auto",
             "on",
-            "off"
+            "off",
+            "deferred"
           ],
           "type": "string",
           "x-reload": "live",

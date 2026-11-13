@@ -302,6 +302,27 @@ pub struct Problem {
     pub fix: Option<String>,
 }
 
+/// A deferred recording's transcription (`audio.transcribe = deferred`), as the Live view says it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AfterStop {
+    /// Recording audio only: the final pass runs when it stops.
+    Waiting,
+    /// Stopped: the final pass is running (`transcribe-progress` running).
+    Running,
+    /// The final pass failed (`transcribe-progress` failed), with its message.
+    Failed(String),
+}
+
+impl AfterStop {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AfterStop::Waiting => "waiting",
+            AfterStop::Running => "running",
+            AfterStop::Failed(_) => "failed",
+        }
+    }
+}
+
 /// `devices_note` while the backend is still listing its devices.
 pub const DEVICES_PENDING: &str = "listing audio devices...";
 /// `devices_note` when the backend did not list them within `audio.devices_timeout`, or failed.
@@ -355,6 +376,8 @@ pub struct State {
     /// An auto-stop on its way (`auto-stop-pending`), with a Keep recording button, until it is
     /// cancelled or the recording stops.
     pub auto_pending: Option<String>,
+    /// The Live session's deferred transcription, while it waits for stop, runs or has failed.
+    pub after_stop: Option<AfterStop>,
     /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
     /// status line.
     pub model: Option<(String, String)>,
@@ -623,6 +646,8 @@ impl State {
                 self.live_names.clear();
                 self.live_session = Some(session.clone());
                 self.status.clear();
+                self.after_stop =
+                    (d["transcription"]["state"] == "deferred").then_some(AfterStop::Waiting);
                 self.rec = Rec::Recording {
                     session,
                     base_ms: 0,
@@ -662,6 +687,29 @@ impl State {
                 }
                 self.live_session = Some(session.clone());
                 self.status = format!("Saved session {session}");
+                self.after_stop =
+                    (d["transcription"]["final"] == "running").then_some(AfterStop::Running);
+            }
+            Some("transcribe-progress") if self.live_session.as_deref() == Some(&session) => {
+                match d["state"].as_str() {
+                    Some("running") => self.after_stop = Some(AfterStop::Running),
+                    Some("done") => {
+                        self.after_stop = None;
+                        if let Some((lines, names)) = self.saved_lines(engine, &session) {
+                            self.live = lines;
+                            self.live_names = names;
+                        }
+                    }
+                    Some("failed") => {
+                        self.after_stop = Some(AfterStop::Failed(
+                            d["error"]["message"]
+                                .as_str()
+                                .unwrap_or("transcription failed")
+                                .to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
             }
             Some("session-saved") if d["change"] == "speaker-name" => {
                 // A speaker named in this session: re-read its names (the lines keep their ids).
@@ -1159,6 +1207,63 @@ mod tests {
         );
         st.on_event(&engine, &ev("recording-started", json!({"session": "c"})));
         assert_eq!(st.stop_notice, None);
+    }
+
+    #[test]
+    fn a_deferred_recording_says_it_transcribes_after_stop_then_shows_progress() {
+        // dot-4uzgol.111.5: audio only while recording, the final pass's progress after stop.
+        let (engine, _d) = testutil::engine(&[]);
+        let mut st = State::default();
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-started",
+                json!({"session": "a", "transcription": {"state": "deferred"}}),
+            ),
+        );
+        assert_eq!(st.after_stop, Some(AfterStop::Waiting));
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-stopped",
+                json!({"session": "a", "transcription": {"state": "deferred", "final": "running"}}),
+            ),
+        );
+        assert_eq!(st.after_stop, Some(AfterStop::Running));
+        // Another session's progress is not this one's.
+        st.on_event(
+            &engine,
+            &ev(
+                "transcribe-progress",
+                json!({"session": "z", "state": "done"}),
+            ),
+        );
+        assert_eq!(st.after_stop, Some(AfterStop::Running));
+        st.on_event(
+            &engine,
+            &ev(
+                "transcribe-progress",
+                json!({"session": "a", "state": "failed", "error": {"message": "no model"}}),
+            ),
+        );
+        assert_eq!(st.after_stop, Some(AfterStop::Failed("no model".into())));
+        st.on_event(
+            &engine,
+            &ev(
+                "transcribe-progress",
+                json!({"session": "a", "state": "done"}),
+            ),
+        );
+        assert_eq!(st.after_stop, None);
+        // A recording that is not deferred says nothing of it.
+        st.on_event(
+            &engine,
+            &ev(
+                "recording-started",
+                json!({"session": "b", "transcription": {"state": "on"}}),
+            ),
+        );
+        assert_eq!(st.after_stop, None);
     }
 
     #[test]

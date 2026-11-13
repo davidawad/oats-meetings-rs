@@ -1067,3 +1067,183 @@ fn a_recording_that_cannot_write_is_stopped_with_a_reason() {
     assert!(d["reason"].as_str().is_some_and(|w| !w.is_empty()), "{d}");
     wait_until("idle", || r.engine.recording() == Some(None));
 }
+
+/// An ASR factory that counts the ASRs it builds (each one is a model load), failing with
+/// `model_not_found` until `present` is set.
+fn counting(
+    builds: &Arc<std::sync::atomic::AtomicUsize>,
+    present: &Arc<std::sync::atomic::AtomicBool>,
+) -> oats_core::record::AsrFactory {
+    let (builds, present) = (Arc::clone(builds), Arc::clone(present));
+    Box::new(move |_| {
+        builds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if present.load(std::sync::atomic::Ordering::SeqCst) {
+            Ok(Arc::new(ToneAsr) as Arc<dyn Asr>)
+        } else {
+            Err(oats_core::config::ConfigError::new(
+                "model_not_found",
+                "no model",
+            ))
+        }
+    })
+}
+
+/// Every hook event the events on `rx` so far stand for (`hooks::events_for`), with the topics.
+fn hook_events(rx: &std::sync::mpsc::Receiver<String>) -> (Vec<String>, Vec<&'static str>) {
+    let mut topics = vec![];
+    let mut evs = vec![];
+    while let Ok(l) = rx.recv_timeout(Duration::from_millis(300)) {
+        let v: Value = serde_json::from_str(&l).unwrap();
+        let topic = v["event"].as_str().unwrap().to_string();
+        evs.extend(oats_core::hooks::events_for(&topic, &v["data"]));
+        topics.push(topic);
+    }
+    (topics, evs)
+}
+
+/// dot-4uzgol.111.5: audio.transcribe = deferred parses into the typed config, and a value it
+/// does not know is refused.
+#[test]
+fn deferred_is_an_audio_transcribe_value() {
+    use oats_core::config::typed::AudioTranscribe;
+    assert!(keys::AUDIO_TRANSCRIBE.contains(&"deferred"));
+    let r = rig();
+    r.engine
+        .set("audio.transcribe", &json!("deferred"), "test")
+        .unwrap();
+    assert_eq!(
+        r.engine.snapshot().config.audio.transcribe,
+        AudioTranscribe::Deferred
+    );
+    let e = r
+        .engine
+        .set("audio.transcribe", &json!("later"), "test")
+        .unwrap_err();
+    assert_eq!(e.code, "invalid_value");
+    assert_eq!(
+        r.engine.snapshot().config.audio.transcribe,
+        AudioTranscribe::Deferred
+    );
+}
+
+/// dot-4uzgol.111.5: a deferred recording loads no ASR and writes no live segment while it
+/// records; its stop runs exactly one final pass (one ASR build) and the hooks see exactly one
+/// transcript.final, after record.stop.
+#[test]
+fn a_deferred_recording_transcribes_once_at_stop_and_never_while_recording() {
+    let r = rig();
+    r.engine
+        .set("audio.transcribe", &json!("deferred"), "test")
+        .unwrap();
+    let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let present = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    r.engine.set_asr_factory(counting(&builds, &present));
+    let rx = r.engine.bus.subscribe(vec![]);
+    let s = start(&r, "d");
+    assert_eq!(s["transcription"]["state"], "deferred", "{s}");
+    // Pending from the start: a recording the app quits during is transcribed at next launch.
+    assert_eq!(
+        meta(&r, "d")["metadata"]["x_oats"]["transcribePending"],
+        true
+    );
+    wait_until("a few seconds of audio", || {
+        meta(&r, "d")["duration_ms"].as_u64().unwrap_or(0) >= 2500
+    });
+    assert_eq!(
+        builds.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "no ASR while recording"
+    );
+    assert!(lines(&r, "d", "live").is_empty());
+    let (topics, _) = hook_events(&rx);
+    assert!(!topics.iter().any(|t| t == "segment"), "{topics:?}");
+
+    let done = stop(&r);
+    let t = &done["transcription"];
+    assert_eq!(
+        (t["final"].as_str(), t["live"].as_str()),
+        (Some("ok"), Some("off")),
+        "{t}"
+    );
+    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!lines(&r, "d", "final").is_empty());
+    assert!(lines(&r, "d", "live").is_empty());
+    let m = meta(&r, "d");
+    assert!(m["utterance_count"].as_u64().unwrap() > 0, "{m}");
+    assert!(
+        m["metadata"]["x_oats"].get("transcribePending").is_none(),
+        "{m}"
+    );
+    let (topics, evs) = hook_events(&rx);
+    assert_eq!(
+        evs.iter().filter(|e| **e == "transcript.final").count(),
+        1,
+        "{evs:?}"
+    );
+    let at = |e: &str| evs.iter().position(|x| *x == e).unwrap();
+    assert!(at("record.stop") < at("transcript.final"), "{evs:?}");
+    let progress: Vec<&String> = topics
+        .iter()
+        .filter(|t| *t == "transcribe-progress")
+        .collect();
+    assert_eq!(progress.len(), 2, "running then done: {topics:?}");
+    // Nothing else transcribes it again.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.engine.transcribe_pending()["transcribed"], json!([]));
+}
+
+/// dot-4uzgol.111.5: the model is missing when a deferred recording stops: the session keeps its
+/// audio, record-stop and transcribe-progress say why, it stays pending, and session-transcribe
+/// runs it once the model is there.
+#[test]
+fn a_deferred_stop_without_the_model_keeps_the_audio_and_is_transcribed_later() {
+    let r = rig();
+    r.engine
+        .set("audio.transcribe", &json!("deferred"), "test")
+        .unwrap();
+    r.engine
+        .set("stt.local.auto_download", &json!(false), "test")
+        .unwrap();
+    let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let present = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.engine.set_asr_factory(counting(&builds, &present));
+    let rx = r.engine.bus.subscribe(vec!["transcribe-progress".into()]);
+    start(&r, "nm");
+    std::thread::sleep(Duration::from_millis(2500));
+    let done = stop(&r);
+    let t = &done["transcription"];
+    assert_eq!(t["final"]["error"]["code"], "model_not_found", "{t}");
+    assert!(
+        t["final"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("session-transcribe"),
+        "{t}"
+    );
+    assert!(r.dir.path().join("rec/nm/audio.wav").is_file());
+    let m = meta(&r, "nm");
+    assert_eq!(m["metadata"]["x_oats"]["transcribePending"], true, "{m}");
+    assert!(m["ended_at"].is_string());
+    let states: Vec<Value> = events(&rx, "transcribe-progress", Duration::from_millis(300))
+        .into_iter()
+        .map(|d| d["state"].clone())
+        .collect();
+    assert_eq!(states, [json!("running"), json!("failed")]);
+    present.store(true, std::sync::atomic::Ordering::SeqCst);
+    let v = r
+        .engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "nm".into(),
+            overwrite: None,
+        })
+        .unwrap();
+    assert!(v["final_utterances"].as_u64().unwrap() > 0, "{v}");
+    assert_eq!(
+        v["live_utterances"], 0,
+        "deferred is the final pass only: {v}"
+    );
+    assert!(meta(&r, "nm")["metadata"]["x_oats"]
+        .get("transcribePending")
+        .is_none());
+}

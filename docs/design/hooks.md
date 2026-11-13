@@ -141,11 +141,32 @@ one spoken word fires once.
 
 ## Transcription mode
 
-`record.transcribe` gains `deferred`: no live STT while recording, so CPU
-stays near capture-only. The final pass runs by itself at stop, then
-`transcript.final` fires. In `deferred` mode `transcript.phrase` hooks fire
-during the final pass with `live = false`. `config-check` warns that they
-cannot fire mid-meeting.
+`audio.transcribe` (the key is `audio.transcribe`, not `record.transcribe`)
+gains `deferred`: no live STT while recording (no ASR is built or loaded, no
+live segments), so CPU stays near capture-only. The final pass runs by itself
+at stop, then `transcript.final` fires:
+
+- `recording-started` carries `transcription.state = "deferred"`, and the
+  session is marked `transcribePending` from its start, so a recording the
+  app quits during is transcribed at the next launch.
+- `record-stop` saves the audio and publishes `recording-stopped`
+  (`transcription.final = "running"`, so no `transcript.final` from it) and
+  `session-saved` (`record`), then runs the final pass on the stopping thread
+  (the same place `auto` runs its own) through `session-transcribe`, final
+  pass only. Its `session-saved` (`transcribed`) is the one `transcript.final`.
+  `record-stop` returns the pass's result in `transcription`.
+- `transcribe-progress` (`{session, mode, state}`) says `running`, then
+  `done` or `failed` (with `error`). The Live view says transcription runs
+  after stop while recording, and the pass's state after it.
+- A failed pass (say the model is missing) keeps the audio and the pending
+  mark and says why; a missing model is downloaded per
+  `stt.local.auto_download` and the session transcribed when it arrives, and
+  `session-transcribe` runs it any time.
+- `notes-generate` for a session whose pass is running waits for it.
+
+In `deferred` mode `transcript.phrase` hooks fire during the final pass with
+`live = false`. `config-check` warns that they cannot fire mid-meeting (both
+land with the phrase triggers).
 
 ## Agent surface (all in `config/actions.json`)
 

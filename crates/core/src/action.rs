@@ -138,6 +138,7 @@ pub const EVENTS: &[&str] = &[
     "auto-stop-cancelled",
     "auto-stopped",
     "auto-started",
+    "transcribe-progress",
     "segment",
     "model-download",
     "session-saved",

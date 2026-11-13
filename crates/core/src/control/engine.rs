@@ -136,6 +136,9 @@ pub struct Engine {
     me: Weak<Engine>,
     // One session-transcribe at a time (ctl, the GUI and the model-arrived pass).
     transcribe_lock: Mutex<()>,
+    /// Sessions whose deferred final pass (`audio.transcribe = deferred`) is running; notes for
+    /// one wait until it is done (`wait_final_pass`).
+    final_passes: (Mutex<std::collections::HashSet<String>>, std::sync::Condvar),
     ui: RwLock<Option<Arc<dyn UiPort>>>,
     event_store: crate::calendar::StoreSlot,
     /// The calendar providers, one per source kind (tests inject fakes).
@@ -299,6 +302,7 @@ impl Engine {
             recorder: Arc::new(Recorder::default()),
             me: me.clone(),
             transcribe_lock: Mutex::new(()),
+            final_passes: Default::default(),
             ui: RwLock::new(None),
             event_store: crate::calendar::StoreSlot::default(),
             calendar_providers: Default::default(),
@@ -401,6 +405,14 @@ impl Engine {
             return Ok((
                 None,
                 json!({"state": "off", "reason": "audio.transcribe = off"}),
+            ));
+        }
+        if cfg.audio.transcribe == AudioTranscribe::Deferred {
+            // No ASR is built (or loaded) while recording: the final pass builds it at stop.
+            return Ok((
+                None,
+                json!({"state": "deferred",
+                       "reason": "audio.transcribe = deferred: transcribed when the recording stops"}),
             ));
         }
         let mut note = None;
@@ -565,7 +577,12 @@ impl Engine {
         }
         let chans = crate::stt::wav::read(&audio)?;
         let cfg = self.snapshot().config.clone();
-        let settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
+        let mut settings = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir())?;
+        if cfg.audio.transcribe == crate::config::typed::AudioTranscribe::Deferred {
+            // Deferred mode is the final pass alone: no live pass replayed over the recording.
+            settings.live_enabled = false;
+            settings.final_enabled = true;
+        }
         let secrets = self.secret_store(&cfg);
         let asr = self
             .recorder
@@ -987,13 +1004,80 @@ impl Engine {
         if let Some(c) = crate::calendar::on_saved(self, &id) {
             v["calendar"] = c;
         }
+        let deferred = v["transcription"]["state"] == "deferred";
+        if deferred {
+            v["transcription"]["final"] = json!("running");
+            self.final_passes
+                .0
+                .lock()
+                .expect("final passes")
+                .insert(id.clone());
+        }
         self.bus.publish("recording-stopped", v.clone());
         self.session_saved(&v["session"]);
-        // The model may have arrived while this pending recording was running.
-        if self.store().pending().contains(&id) {
+        if deferred {
+            v["transcription"] = self.deferred_pass(&id);
+        } else if self.store().pending().contains(&id) {
+            // The model may have arrived while this pending recording was running.
             self.model_arrived();
         }
         Ok(v)
+    }
+
+    /// The final pass of a deferred recording (`audio.transcribe = deferred`), once it stopped:
+    /// `session-transcribe` over its audio, final pass only. Its `session-saved` (`transcribed`)
+    /// is the `transcript.final` hook event. `transcribe-progress` says `running`, then `done` or
+    /// `failed`; a failed one stays pending (a missing model is downloaded per
+    /// `stt.local.auto_download` and the session transcribed when it arrives; `session-transcribe`
+    /// runs it any time). Returns record-stop's `transcription`.
+    fn deferred_pass(&self, id: &str) -> Value {
+        let progress = |state: &str, extra: Value| {
+            let mut d = json!({"session": id, "mode": "deferred", "state": state});
+            if let (Some(d), Value::Object(x)) = (d.as_object_mut(), extra) {
+                d.extend(x);
+            }
+            self.bus.publish("transcribe-progress", d);
+        };
+        progress("running", json!({}));
+        let out = self.session_transcribe(id, false, true);
+        {
+            let (set, cv) = &self.final_passes;
+            set.lock().expect("final passes").remove(id);
+            cv.notify_all();
+        }
+        match out {
+            Ok(r) => {
+                progress(
+                    "done",
+                    json!({"final_utterances": r["final_utterances"], "backend": r["backend"]}),
+                );
+                json!({"state": "done", "mode": "deferred", "backend": r["backend"],
+                       "live": "off", "live_utterances": 0, "final": "ok",
+                       "final_utterances": r["final_utterances"], "mic_stages": r["mic_stages"]})
+            }
+            Err(e) => {
+                crate::elog!("oats-meetings-rs: deferred transcription of {id}: {e}");
+                let _ = self.store().set_pending(id, true);
+                let message = format!(
+                    "Transcription after stop failed: {}. The audio is saved; session-transcribe runs it again",
+                    e.message
+                );
+                let error = json!({"code": e.code, "message": message});
+                progress("failed", json!({"error": error.clone()}));
+                json!({"state": "deferred", "mode": "deferred", "live": "off",
+                       "final": {"error": error}, "final_utterances": 0})
+            }
+        }
+    }
+
+    /// Block until session `id`'s deferred final pass (if one is running) is done, so notes read
+    /// the final transcript as they do after an `auto` stop.
+    fn wait_final_pass(&self, id: &str) {
+        let (set, cv) = &self.final_passes;
+        let mut g = set.lock().expect("final passes");
+        while g.contains(id) {
+            g = cv.wait(g).expect("final passes");
+        }
     }
 
     /// Watch the recording `id` until it ends: a lost capture is the recorder's to reopen (the
@@ -1092,8 +1176,9 @@ impl Engine {
     ) -> Result<Value> {
         let cfg = self.snapshot().config.clone();
         let (plan, why) = self.transcribe_plan(&cfg)?;
-        // Saved as audio only for want of the model: transcribed once it is present.
-        let pending = why["code"] == "model_not_found";
+        // Saved as audio only for want of the model: transcribed once it is present. A deferred
+        // recording is pending from its start, so one the app quit during is transcribed later.
+        let pending = why["code"] == "model_not_found" || why["state"] == "deferred";
         let store = self.store();
         // The event overlapping now names the session unless a title was given.
         let cal = crate::calendar::for_start(self, chrono::Utc::now(), title);
@@ -1418,6 +1503,7 @@ impl Engine {
                 template,
                 dry_run,
             } => {
+                self.wait_final_pass(session);
                 let snap = self.snapshot();
                 let (store, secrets, tdir) = (
                     self.store(),

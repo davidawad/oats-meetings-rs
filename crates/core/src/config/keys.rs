@@ -165,7 +165,7 @@ pub const LLM_BACKENDS: &[&str] = &["ollama", "openrouter", "openai-compatible"]
 pub const AUDIO_BACKENDS: &[&str] = &["auto", "pulse", "pipewire", "cpal", "screencapturekit"];
 pub const AUDIO_LAYOUTS: &[&str] = &["split", "mix"];
 pub const AUDIO_SYSTEM_BACKENDS: &[&str] = &["auto", "tap", "screencapturekit"];
-pub const AUDIO_TRANSCRIBE: &[&str] = &["auto", "on", "off"];
+pub const AUDIO_TRANSCRIBE: &[&str] = &["auto", "on", "off", "deferred"];
 pub const KB_EMBEDDERS: &[&str] = &["hash", "ollama", "openai-compatible"];
 pub const ICS_WEBCAL_SCHEMES: &[&str] = &["https", "http"];
 pub const ICS_CANCELLED: &[&str] = &["hide", "show"];
@@ -1161,7 +1161,7 @@ pub const KEYS: &[Key] = &[
         path: "audio.transcribe",
         kind: Kind::Enum(AUDIO_TRANSCRIBE),
         default: Def::S("auto"),
-        doc: "Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes.",
+        doc: "Transcribe while recording (stt.* settings): on fails record-start if the ASR is unavailable, auto records audio only then, off never transcribes. deferred records audio only (no ASR loaded, no live segments, so CPU stays near capture-only) and runs the final pass over the whole recording when it stops, then transcript.final; if the model is unavailable then, the session is kept as audio, marked pending, and session-transcribe runs it later.",
         ui: true,
         reload: Reload::Live,
     },

@@ -890,6 +890,8 @@ impl MainWindow {
             "stop_banner": st.stop_notice,
             "auto_banner": st.auto_notice,
             "auto_stop_pending": st.auto_pending,
+            "transcribe_after_stop": st.after_stop.as_ref().map(|a| json!({"state": a.label(),
+                "error": match a { crate::state::AfterStop::Failed(m) => json!(m), _ => Value::Null }})),
             "recording": {
                 "state": rec_state,
                 "session": st.rec.session(),
