@@ -594,6 +594,144 @@ fn a_disabled_hook_stays_quiet_and_hook_test_runs_it_for_a_session() {
     assert_eq!(e.code, "not_found", "{e}");
 }
 
+/// The raw log as `session-events` returns it: (seq, topic, data) per line.
+fn session_events(
+    r: &Rig,
+    session: Option<&str>,
+    topic: Option<&str>,
+) -> Vec<(u64, String, Value)> {
+    let v = r
+        .engine
+        .dispatch(&Action::SessionEvents {
+            session: session.map(str::to_string),
+            topic: topic.map(str::to_string),
+            from: None,
+            to: None,
+        })
+        .unwrap();
+    assert_eq!(v["skipped"], 0, "{v}");
+    v["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["seq"].as_u64().unwrap(),
+                e["topic"].as_str().unwrap().to_string(),
+                e["data"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_recording_logs_every_message_naming_it_in_seq_order_and_session_events_reads_it() {
+    let r = rig("");
+    let out = r.out.clone();
+    std::fs::write(
+        &r.cfg,
+        std::fs::read_to_string(&r.cfg).unwrap()
+            + &format!(
+                "[[hooks]]\nname = \"spy-record.stop\"\nevent = \"record.stop\"\nshell = true\ncommand = [{SPY:?}, {:?}]\n",
+                out.to_str().unwrap()
+            ),
+    )
+    .unwrap();
+    r.engine.reload("test").unwrap();
+    let e = &r.engine;
+    e.dispatch(&Action::RecordStart {
+        session: Some("logged".into()),
+        title: Some("Logged call".into()),
+    })
+    .unwrap();
+    // A live transcript segment, as the live worker publishes it, and a message naming no session.
+    e.bus.publish(
+        "segment",
+        json!({"session": "logged", "kind": "live", "speaker": "you", "text": "pricing", "start": 0.0, "end": 1.0}),
+    );
+    e.bus.publish("setting-changed", json!({"key": "ui.theme"}));
+    e.dispatch(&Action::RecordPause {}).unwrap();
+    e.dispatch(&Action::RecordPause {}).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    e.dispatch(&Action::RecordStop { by: None }).unwrap();
+    let (_, stop) = seen(&out, "record.stop");
+    // The hook's own hook-finished names the session too: wait for it to be logged.
+    wait_until("hook-finished in the log", || {
+        session_events(&r, Some("logged"), Some("hook-finished")).len() == 1
+    });
+    let log = session_events(&r, Some("logged"), None);
+    assert!(
+        r.root.join("rec/logged/events.jsonl").is_file(),
+        "the log is a file of the session"
+    );
+    // Ordered and gap-free from 1.
+    let seqs: Vec<u64> = log.iter().map(|l| l.0).collect();
+    assert_eq!(seqs, (1..=log.len() as u64).collect::<Vec<_>>(), "{log:?}");
+    let topics: Vec<&str> = log.iter().map(|l| l.1.as_str()).collect();
+    assert_eq!(topics[0], "recording-started", "{topics:?}");
+    assert!(
+        log.iter()
+            .any(|l| l.1 == "segment" && l.2["text"] == "pricing"),
+        "the live segment is logged: {log:?}"
+    );
+    for t in [
+        "recording-paused",
+        "recording-stopped",
+        "session-saved",
+        "hook-finished",
+    ] {
+        assert!(topics.contains(&t), "{t} missing: {topics:?}");
+    }
+    assert!(!topics.contains(&"setting-changed"), "{topics:?}");
+    // seq is the hook envelope's: record.stop stands for the logged recording-stopped.
+    let stopped = log.iter().find(|l| l.1 == "recording-stopped").unwrap();
+    assert_eq!(stop["seq"], stopped.0, "{stop}");
+    assert_eq!(stop["data"], stopped.2);
+    // Filters; the newest session is the default.
+    assert_eq!(session_events(&r, None, None).len(), log.len());
+    let segs = session_events(&r, None, Some("segment"));
+    assert!(!segs.is_empty() && segs.iter().all(|l| l.1 == "segment"));
+    let v = e
+        .dispatch(&Action::SessionEvents {
+            session: Some("logged".into()),
+            topic: None,
+            from: Some(2),
+            to: Some(3),
+        })
+        .unwrap();
+    assert_eq!(v["session"], "logged");
+    let got: Vec<u64> = v["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(got, vec![2, 3]);
+    // hook-test is no bus message: it takes the last seq and leaves no gap.
+    let last = log.len() as u64;
+    let run = e
+        .dispatch(&Action::HookTest {
+            hook: "spy-record.stop".into(),
+            session: Some("logged".into()),
+            event: None,
+        })
+        .unwrap();
+    assert_eq!(run["event_seq"], last, "{run}");
+    let after = session_events(&r, Some("logged"), None);
+    let seqs: Vec<u64> = after.iter().map(|l| l.0).collect();
+    assert_eq!(seqs, (1..=after.len() as u64).collect::<Vec<_>>());
+    // An unknown session is refused.
+    let err = e
+        .dispatch(&Action::SessionEvents {
+            session: Some("nope".into()),
+            topic: None,
+            from: None,
+            to: None,
+        })
+        .unwrap_err();
+    assert_eq!(err.code, "not_found", "{err}");
+}
+
 #[test]
 fn bad_hooks_tables_veto_the_config() {
     let r = rig("");

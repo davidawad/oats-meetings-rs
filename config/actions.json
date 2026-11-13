@@ -849,6 +849,34 @@
       "status": "implemented"
     },
     {
+      "doc": "The raw event log of a session (default: the newest), its events.jsonl: every bus message that named it (live transcript segments included) and every hook event an action fired for it (notes.generated), as {seq, at, topic, data} in seq order, from its recording on; seq is the hook envelope's. topic: only that topic; from / to: only seq from..=to. skipped counts lines that are not whole JSON (a torn last line after a crash).",
+      "effect": "read",
+      "name": "session-events",
+      "params": [
+        {
+          "name": "session",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "topic",
+          "required": false,
+          "type": "Option<String>"
+        },
+        {
+          "name": "from",
+          "required": false,
+          "type": "Option<u64>"
+        },
+        {
+          "name": "to",
+          "required": false,
+          "type": "Option<u64>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
       "doc": "Rename (retitle) a session.",
       "effect": "write",
       "name": "session-rename",

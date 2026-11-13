@@ -7,6 +7,11 @@
 //!   <root>/<id>/transcript.live.jsonl   live transcript
 //!
 //!   <root>/<id>/notes.md, notes.meta.json  notes and the OpenOats `NotesMeta` it needs to show them
+//!   <root>/<id>/events.jsonl            the raw event log (`events`: every bus message naming
+//!                                       the session, `{seq, at, topic, data}`, append-only)
+//!
+//! Every file of a session lives in its directory, so trash, restore, delete, import and the
+//! OpenOats copy carry `events.jsonl` with the rest (OpenOats ignores files it does not know).
 //!
 //! Keys only oats-rs writes live in one `x_oats` object in `session.json` (and in each utterance),
 //! which the OpenOats reader ignores: `schemaVersion` (this store's layout version),
@@ -22,6 +27,8 @@ use serde_json::{json, Map, Value};
 use crate::config::typed::DeleteMode;
 use crate::config::{ConfigError, Result};
 use crate::openoats;
+
+pub mod events;
 
 pub const SCHEMA_VERSION: u64 = 1;
 const TRANSCRIPTS: [(&str, &str); 2] = [
@@ -368,6 +375,21 @@ impl Store {
             .map(summary)
             .collect();
         Ok(json!({"count": sessions.len(), "sessions": sessions}))
+    }
+
+    /// The directory of session `id` when the id is valid and the directory exists (a session
+    /// being recorded, before its `session.json` is complete, included).
+    pub fn session_dir(&self, id: &str) -> Option<PathBuf> {
+        let dir = self.root.join(id);
+        (self.valid_id(id) && dir.is_dir()).then_some(dir)
+    }
+
+    /// `session-events`: the raw event log of session `id` (`events::read`), with its `session`.
+    pub fn events(&self, id: &str, filter: &events::Filter) -> Result<Value> {
+        let l = self.find(id)?;
+        let mut v = events::read(&l.dir, filter).map_err(|e| io(&l.dir.join(events::FILE), e))?;
+        v["session"] = json!(id_of(&l));
+        Ok(v)
     }
 
     pub fn get(&self, id: &str) -> Result<Value> {

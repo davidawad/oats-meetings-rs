@@ -52,6 +52,40 @@ Rules that hold across layers:
    `*.before_*` event. That hook is bounded by its timeout and fails open:
    a timeout or crash lets the action proceed and is logged.
 
+## L0: the raw log
+
+`<session>/events.jsonl` holds one line per bus message that names the
+session (`session` or `id`), live transcript `segment`s included, and per
+hook event an action fires itself with no bus topic (`notes.generated`,
+logged under its event name):
+
+```json
+{"seq": 412, "at": "2026-11-13T15:04:05.120Z", "topic": "segment", "data": {"session": "...", "kind": "live", "text": "..."}}
+```
+
+`seq` is the envelope's `seq`: the log is the counter
+(`sessions/events.rs`). Each session has its own counter behind its own
+lock, taken to count and append one line, so the lines are in `seq` order
+with no gap, and no lock is shared across sessions. A line is one append
+of the whole object and its newline: a crash mid-write leaves at most a
+torn last line, which `session-events` skips (and counts in `skipped`) and
+the next run of the app cuts off before it appends. A session's first
+message in a run continues from the last `seq` in its log, so `seq` stays
+monotonic across restarts. `hook-test` is no bus message: its envelope
+takes the session's last `seq` and the log gets nothing but the run's
+`hook-finished`.
+
+The log starts with the session's directory (`recording-started` is its
+first line) and keeps every later message naming it, not only those up to
+the end of finalisation: that end is no one moment (`auto-stopped`, the
+`transcript.final` hook's `hook-finished` and `notes.generated` come after
+the final pass), and replaying `session.saved` or `notes.generated` needs
+them. Messages naming no session are in no log. The file lives in the
+session directory, so trash, restore, delete, import and export carry it.
+
+`session-events` reads it: `session` (default the newest), `topic`, and
+`from` / `to` (a `seq` range, both ends included).
+
 ## L1: the envelope
 
 ```json
@@ -72,7 +106,8 @@ Rules that hold across layers:
 `data` is per event and has its own schema. `seq` is monotonic within a
 session: it counts the bus messages that name the session (`session` or
 `id`), so every hook event one message stands for shares its `seq`
-(`record.stop` and `transcript.final` at stop). A hook fires at most once per
+(`record.stop` and `transcript.final` at stop), and it is the line's `seq`
+in the session's raw log (L0). A hook fires at most once per
 `dedup` key (in memory, per session); `hook-test` runs are outside dedup. The
 env vars stay (`OATS_EVENT`, `OATS_SESSION_*`, ...), plus `OATS_RUN_ID`,
 `OATS_SEQ` and `OATS_EVENT_FILE` (the envelope written to a file, for
@@ -176,7 +211,7 @@ land with the phrase triggers).
 | `hook-explain` | for a session (default newest) and an event: each hook, fire or not, and why |
 | `hook-simulate` | replays `<session>/events.jsonl` (or a given file) through L2; `run = true` also runs L3; returns the ordered fire list |
 | `hook-runs` | the ledger, filterable by session, hook, event, outcome |
-| `session-events` | the raw L0 log of a session |
+| `session-events` | the raw L0 log of a session (default the newest), filtered by `topic` and a `from`..`to` `seq` range |
 | `subscribe topics=["hook-finished", "hook-decided"]` | live stream (already exists) |
 
 An agent's loop is `hook-events`, write the hook, `hook-simulate` on a real

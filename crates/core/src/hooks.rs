@@ -14,7 +14,7 @@ pub mod events;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -182,14 +182,15 @@ pub struct Run {
     pub truncated: bool,
 }
 
-/// The engine's record of hook runs, newest first, and each session's envelope `seq` and the
-/// (hook, dedup key) pairs that already fired.
+/// The engine's record of hook runs, newest first, each session's envelope `seq` (the counter of
+/// its raw event log) and the (hook, dedup key) pairs that already fired.
 #[derive(Default)]
 pub struct Runner {
     runs: Mutex<VecDeque<Run>>,
     seq: AtomicU64,
-    /// Bus messages seen per session ("" for none): the next envelope's `seq`.
-    seqs: Mutex<HashMap<String, u64>>,
+    /// Bus messages seen per session ("" for none), each logged to `<session>/events.jsonl`:
+    /// the next envelope's `seq`.
+    log: crate::sessions::events::Log,
     fired: Mutex<HashMap<String, BTreeSet<(String, String)>>>,
 }
 
@@ -209,12 +210,15 @@ impl Runner {
             .collect()
     }
 
-    /// The next `seq` of `session` (1 for its first message).
-    pub fn next_seq(&self, session: &str) -> u64 {
-        let mut seqs = self.seqs.lock().expect("hook seqs");
-        let n = seqs.entry(session.to_string()).or_default();
-        *n += 1;
-        *n
+    /// Count a message of `session` ("" for none) and log it to the session's `events.jsonl`
+    /// when `dir` (its directory) exists: its `seq` (1 for its first message).
+    pub fn next_seq(&self, session: &str, dir: Option<&Path>, topic: &str, data: &Value) -> u64 {
+        self.log.record(session, dir, topic, data)
+    }
+
+    /// The `seq` of `session`'s last message (0 before its first in this run).
+    pub fn last_seq(&self, session: &str) -> u64 {
+        self.log.current(session)
     }
 
     /// True the first time `hook` asks for `dedup` in `session`; false after.
@@ -349,9 +353,7 @@ fn session_of(data: &Value) -> Option<String> {
 /// whatever `topic` stands for. Returns at once.
 pub fn on_event(engine: &Arc<Engine>, topic: &str, data: &Value) {
     let session = session_of(data);
-    let seq = engine
-        .hooks
-        .next_seq(session.as_deref().unwrap_or_default());
+    let seq = count(engine, session.as_deref(), topic, data);
     for spec in events::events_for(topic, data) {
         start(engine, spec, topic, session.clone(), seq, data.clone());
     }
@@ -365,10 +367,18 @@ pub fn fire(engine: &Arc<Engine>, event: &str, data: Value) {
         return;
     };
     let session = session_of(&data);
-    let seq = engine
-        .hooks
-        .next_seq(session.as_deref().unwrap_or_default());
+    // No bus topic stands for it, so the raw log keeps it under its event name.
+    let seq = count(engine, session.as_deref(), event, &data);
     start(engine, spec, "", session, seq, data);
+}
+
+/// The `seq` of one message of `session` (L0: also appended to its `events.jsonl`).
+fn count(engine: &Engine, session: Option<&str>, topic: &str, data: &Value) -> u64 {
+    let session = session.unwrap_or_default();
+    let dir = (!session.is_empty())
+        .then(|| engine.store().session_dir(session))
+        .flatten();
+    engine.hooks.next_seq(session, dir.as_deref(), topic, data)
 }
 
 fn start(
@@ -750,8 +760,8 @@ fn view(engine: &Engine, i: usize, h: &Hook) -> Value {
     })
 }
 
-/// The newest session, for a `hook-test` given none.
-fn newest_session(engine: &Engine) -> Option<String> {
+/// The newest session, for a `hook-test` (or `session-events`) given none.
+pub(crate) fn newest_session(engine: &Engine) -> Option<String> {
     let list = engine.store().list(None, None).ok()?;
     list["sessions"]
         .as_array()?
@@ -817,10 +827,12 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             };
             let data = json!({"session": session, "test": true});
             let mut ctx = context(engine, &event, session.as_deref(), data);
-            // A test run is outside dedup: its key names the run, and it always runs.
+            // A test run is outside dedup: its key names the run, and it always runs. It is no
+            // bus message, so it takes the session's last `seq` rather than a new one (the raw
+            // log stays gap-free).
             ctx.seq = engine
                 .hooks
-                .next_seq(session.as_deref().unwrap_or_default());
+                .last_seq(session.as_deref().unwrap_or_default());
             ctx.dedup = format!(
                 "{}:{event}:test:{}",
                 session.as_deref().unwrap_or_default(),

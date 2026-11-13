@@ -237,6 +237,7 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("subscribe", "protocol event stream"),
     ("config-get", "the settings view reads config-resolved"),
     ("hook-events", "the hook event contract for scripts and agents; the Settings hook form shows the same table through hook-list"),
+    ("session-events", "the raw per-session event log for agents and hook replay (ctl)"),
     ("session-import", "one-shot migration verb (ctl)"),
     ("config-convert", "one-shot migration verb (ctl)"),
     ("ics-add", "feed management is ctl / config"),

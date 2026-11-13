@@ -1427,6 +1427,24 @@ impl Engine {
                 self.recorder.annotate(&mut v, session);
                 Ok(v)
             }
+            Action::SessionEvents {
+                session,
+                topic,
+                from,
+                to,
+            } => {
+                let session = match session.clone().filter(|s| !s.is_empty()) {
+                    Some(s) => s,
+                    None => crate::hooks::newest_session(self)
+                        .ok_or_else(|| ConfigError::new("not_found", "no sessions"))?,
+                };
+                let filter = crate::sessions::events::Filter {
+                    topic: topic.clone().filter(|t| !t.is_empty()),
+                    from: *from,
+                    to: *to,
+                };
+                self.store().events(&session, &filter)
+            }
             Action::TranscriptGet { session } => {
                 let mut t = self.store().transcript(session)?;
                 t["speakers"] = json!(crate::speakers::labels_of(
