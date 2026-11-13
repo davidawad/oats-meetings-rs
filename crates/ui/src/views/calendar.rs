@@ -1,11 +1,12 @@
-//! Calendar tab: the upcoming meetings of every calendar source (`calendar-events`: the ICS feed
-//! caches, and the macOS Calendar app when an eventkit source is on) as a month-style grid (one row
-//! per week of the window, today marked), beside the feed subscriptions (add / remove / refresh), over the same actions as `ctl ics-*`. Every choice is an `ics.*` config key: the
-//! upcoming window is `ics.window_days` (`ics-events` with no bounds), and the view re-reads the
-//! feeds and events at most once per `ics.poll_interval` (the scheduler's own cadence), plus after
-//! each action, and whenever the engine publishes `ics-updated` (a fetch changed a cache). Times
-//! show in `ui.tz` (empty: the system zone) with the zone's abbreviation. The view's own state is
-//! a gpui global so it stays inside this file.
+//! Calendar tab: upcoming calendar events (`calendar-events`) and recorded sessions as a month-
+//! style grid (one row per week, today marked), beside the feed subscriptions (add / remove /
+//! refresh), over the same actions as `ctl ics-*`. Sessions with a start time appear as muted
+//! recordings, including their duration when finished. Every choice is an `ics.*` config key: the
+//! event window is `ics.window_days`; the grid reaches back to the first of the current month so
+//! recent recordings have cells. The view re-reads feeds and events at most once per
+//! `ics.poll_interval`, plus after each action and whenever the engine publishes `ics-updated`.
+//! Times show in `ui.tz` (empty: the system zone) with the zone's abbreviation. The view's own
+//! state is a gpui global so it stays inside this file.
 
 use std::time::Instant;
 
@@ -13,7 +14,7 @@ use chrono::{DateTime, Datelike, Duration as Days, NaiveDate};
 use chrono_tz::Tz;
 use gpui::{
     div, prelude::*, px, rgb, AnyElement, App, Context, FocusHandle, FontWeight, Global,
-    KeyDownEvent, SharedString,
+    KeyDownEvent, Render, SharedString, Window,
 };
 use serde_json::{json, Value};
 
@@ -54,6 +55,20 @@ pub(crate) struct Meeting {
     pub time: String,
     /// The display zone's abbreviation at `time` (`EDT`, `UTC`), empty for all-day events.
     pub zone: String,
+    /// Elapsed recording time for a finished session, shown in its tooltip.
+    pub duration: String,
+}
+
+struct MeetingTooltip(String);
+
+impl Render for MeetingTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(320.))
+            .p(px(8.))
+            .bg(rgb(theme::current().raised))
+            .child(self.0.clone())
+    }
 }
 
 #[derive(Default)]
@@ -160,11 +175,52 @@ pub(crate) fn meeting_of(v: &Value, tz: Tz) -> Meeting {
         day,
         time,
         zone,
+        duration: String::new(),
     }
 }
 
+/// A recorded session with a valid start, displayed in the calendar's zone.
+fn recorded_meeting(v: &Value, tz: Tz) -> Option<Meeting> {
+    let started = DateTime::parse_from_rfc3339(&s(v, "started_at")).ok()?;
+    let started = started.with_timezone(&tz);
+    let duration = DateTime::parse_from_rfc3339(&s(v, "ended_at"))
+        .ok()
+        .map(|ended| {
+            let secs = (ended.with_timezone(&chrono::Utc) - started.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0);
+            let hours = secs / 3600;
+            let mins = secs % 3600 / 60;
+            let seconds = secs % 60;
+            if hours > 0 {
+                format!("{hours}h {mins}m")
+            } else if mins > 0 {
+                format!("{mins}m {seconds}s")
+            } else {
+                format!("{seconds}s")
+            }
+        })
+        .unwrap_or_default();
+    Some(Meeting {
+        feed: "recorded".into(),
+        summary: {
+            let title = s(v, "title");
+            if title.is_empty() {
+                "(untitled recording)".into()
+            } else {
+                title
+            }
+        },
+        location: String::new(),
+        day: started.format("%Y-%m-%d").to_string(),
+        time: started.format("%H:%M").to_string(),
+        zone: started.format("%Z").to_string(),
+        duration,
+    })
+}
+
 impl Cal {
-    /// Re-read `ics-list` and `ics-events` (the upcoming window: now + `ics.window_days`).
+    /// Re-read calendar sources and recorded sessions.
     pub(crate) fn load(&mut self, w: &MainWindow) {
         self.loaded = Some(Instant::now());
         self.error = None;
@@ -215,6 +271,15 @@ impl Cal {
                 self.meetings.clear();
                 self.error.get_or_insert(e.to_string());
             }
+        }
+        if let Ok(v) = model::dispatch(&w.engine, "session-list", json!({})) {
+            self.meetings.extend(
+                v.get("sessions")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|session| recorded_meeting(session, tz)),
+            );
         }
     }
 
@@ -598,6 +663,10 @@ pub(crate) fn weeks(from: NaiveDate, to: NaiveDate) -> Vec<[NaiveDate; 7]> {
     out
 }
 
+fn grid_start(from: NaiveDate) -> NaiveDate {
+    from.min(from.with_day(1).unwrap_or(from))
+}
+
 fn grid(cal: &Cal) -> impl IntoElement {
     let th = theme::current();
     let tz = cal.tz.unwrap_or(Tz::UTC);
@@ -636,7 +705,7 @@ fn grid(cal: &Cal) -> impl IntoElement {
                 .child(d)
         }));
     let mut table = kit::panel().flex_none().child(head);
-    for week in weeks(from, to) {
+    for week in weeks(grid_start(from), to) {
         let row = div()
             .flex()
             .flex_none()
@@ -664,18 +733,31 @@ fn grid(cal: &Cal) -> impl IntoElement {
                     if !m.location.is_empty() {
                         tip.push(m.location.clone());
                     }
+                    if !m.duration.is_empty() {
+                        tip.push(format!("Duration: {}", m.duration));
+                    }
+                    let recorded = m.feed == "recorded";
                     div()
+                        .id(format!(
+                            "meeting-{}-{}-{}-{}",
+                            m.feed, m.day, m.time, m.summary
+                        ))
+                        .tooltip(move |_, cx| cx.new(|_| MeetingTooltip(tip.join(" · "))).into())
                         .mt(px(4.))
                         .px(px(6.))
                         .py(px(2.))
                         .rounded(px(4.))
                         .border_l(px(3.))
-                        .border_color(rgb(if m.time.is_empty() {
+                        .border_color(rgb(if recorded {
+                            th.line
+                        } else if m.time.is_empty() {
                             th.remote[0]
                         } else {
                             th.accent
                         }))
-                        .bg(rgb(if m.time.is_empty() {
+                        .bg(rgb(if recorded {
+                            th.raised
+                        } else if m.time.is_empty() {
                             th.warn_soft
                         } else {
                             th.accent_soft
@@ -851,6 +933,27 @@ DTEND:20260101T153000Z\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Sync\r\nEND:VEVENT\r\nEND
         assert_eq!(w[1][6], d("2026-11-15"));
         assert_eq!(weeks(d("2026-11-04"), d("2026-11-04")).len(), 1);
         assert!(weeks(d("2026-11-04"), d("2026-11-01")).is_empty());
+        assert_eq!(grid_start(d("2026-11-13")), d("2026-11-01"));
+        assert_eq!(
+            weeks(grid_start(d("2026-11-13")), d("2026-11-14"))[0][0],
+            d("2026-10-26")
+        );
+    }
+
+    #[test]
+    fn recorded_sessions_with_a_start_become_meetings() {
+        let session = json!({
+            "title": "Planning",
+            "started_at": "2026-11-04T15:00:00Z",
+            "ended_at": "2026-11-04T15:35:10Z"
+        });
+        let meeting = recorded_meeting(&session, NY).expect("started session is shown");
+        assert_eq!(meeting.feed, "recorded");
+        assert_eq!(meeting.summary, "Planning");
+        assert_eq!(meeting.day, "2026-11-04");
+        assert_eq!(meeting.time, "10:00");
+        assert_eq!(meeting.duration, "35m 10s");
+        assert!(recorded_meeting(&json!({"title":"No start"}), NY).is_none());
     }
 
     #[test]
