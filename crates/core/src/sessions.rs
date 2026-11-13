@@ -10,8 +10,9 @@
 //!   <root>/<id>/events.jsonl            the raw event log (`events`: every bus message naming
 //!                                       the session, `{seq, at, topic, data}`, append-only)
 //!
-//! Every file of a session lives in its directory, so trash, restore, delete, import and the
-//! OpenOats copy carry `events.jsonl` with the rest (OpenOats ignores files it does not know).
+//! Every file of a session lives in its directory, so trash, restore, delete and import carry
+//! `events.jsonl` and `hook-runs.jsonl` with the rest. The OpenOats copy leaves both out
+//! (`OATS_ONLY`): they are this app's own logs, and `hook-runs.jsonl` holds hook output.
 //!
 //! Keys only oats-rs writes live in one `x_oats` object in `session.json` (and in each utterance),
 //! which the OpenOats reader ignores: `schemaVersion` (this store's layout version),
@@ -31,6 +32,10 @@ use crate::openoats;
 pub mod events;
 
 pub const SCHEMA_VERSION: u64 = 1;
+/// Files of a session only oats-rs reads, left out of the OpenOats copy: the raw event log and
+/// the hook ledger (whose rows carry hook stdout and stderr).
+const OATS_ONLY: [&str; 2] = [events::FILE, crate::hooks::ledger::FILE];
+
 const TRANSCRIPTS: [(&str, &str); 2] = [
     ("final", "transcript.final.jsonl"),
     ("live", "transcript.live.jsonl"),
@@ -960,6 +965,9 @@ impl Store {
     fn stage_openoats(&self, l: &Loaded, sid: &str, out: &Path) -> Result<()> {
         std::fs::create_dir_all(out).map_err(|e| io(out, e))?;
         for (name, bytes) in read_files(&l.dir)? {
+            if OATS_ONLY.contains(&name.as_str()) {
+                continue;
+            }
             let to = out.join(&name);
             if let Some(p) = to.parent() {
                 std::fs::create_dir_all(p).map_err(|e| io(p, e))?;
