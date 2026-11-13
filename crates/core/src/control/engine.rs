@@ -1434,6 +1434,9 @@ impl Engine {
                 "bad_request",
                 "subscribe is only valid on a live connection",
             )),
+            Action::EventsSince { after, wait_ms } => Ok(json!({
+                "events": self.bus.events_since(after.unwrap_or(0), wait_ms.unwrap_or(0))
+            })),
             Action::Quit { by } => {
                 // Who quit is logged: an app that quit on its own must say who asked (dot-4uzgol.99).
                 let by = by.as_deref().unwrap_or(DEFAULT_BY);

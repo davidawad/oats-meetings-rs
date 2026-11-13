@@ -51,7 +51,8 @@ actions! {
     Ping, "ping", "Liveness check.", "implemented", "read", {};
     Version, "version", "App, protocol and schema versions.", "implemented", "read", {};
     ListActions, "list-actions", "The action manifest.", "implemented", "read", {};
-    Subscribe, "subscribe", "Stream events on this connection; optional topic filter.", "implemented", "read", { topics: Option<Vec<String>> };
+    Subscribe, "subscribe", "Stream events on this control-socket connection; optional topic filter. Not supported over MCP; MCP clients should use events-since.", "implemented", "read", { topics: Option<Vec<String>> };
+    EventsSince, "events-since", "Read engine bus events with sequence numbers greater than after (default 0); wait_ms optionally long-polls for the first newer event. History is retained up to control.event_queue events.", "implemented", "read", { after: Option<u64>, wait_ms: Option<u64> };
     Quit, "quit", "Stop the engine. by: who asks (the GUI sends window, menu or tray; ctl sends ctl), logged and in the quit event.", "implemented", "control", { by: Option<String> };
     ConfigGet, "config-get", "Resolved value of one key.", "implemented", "read", { key: String };
     ConfigSet, "config-set", "Persist a key in the user config file.", "implemented", "write", { key: String, value: Value };
@@ -242,7 +243,11 @@ pub fn mcp_tools() -> Vec<Value> {
             json!({
                 "name": tool_name(name),
                 "title": name,
-                "description": self::doc(doc),
+                "description": if *name == "subscribe" {
+                    "Native control-socket stream only; MCP clients should use events_since to read engine events by cursor.".to_string()
+                } else {
+                    self::doc(doc)
+                },
                 "inputSchema": {
                     "type": "object",
                     "properties": props,

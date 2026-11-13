@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use oats_audio::fake::FakeBackend;
 use oats_core::action::SPECS;
 use oats_core::control::engine::{Engine, EngineOpts};
 use oats_core::control::server;
@@ -69,7 +70,12 @@ fn initialize_then_tools_list_is_the_manifest() {
             .iter()
             .find(|t| t["name"] == name.as_str())
             .unwrap_or_else(|| panic!("no tool {name}"));
-        assert_eq!(t["description"], oats_core::action::doc(doc).as_str());
+        let expected_doc = if *wire == "subscribe" {
+            "Native control-socket stream only; MCP clients should use events_since to read engine events by cursor.".to_string()
+        } else {
+            oats_core::action::doc(doc)
+        };
+        assert_eq!(t["description"], expected_doc);
         let s = &t["inputSchema"];
         assert_eq!(s["type"], "object", "{name}");
         let props = s["properties"].as_object().unwrap();
@@ -176,6 +182,69 @@ fn tools_call_with_the_engine_down_is_an_error_result() {
     assert_eq!(r["isError"], true, "{r}");
     let t = r["content"][0]["text"].as_str().unwrap();
     assert!(t.contains("not_running"), "{t}");
+}
+
+#[test]
+fn mcp_events_since_reads_bus_events_by_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = dir.path().join("rt");
+    let engine = Engine::new(EngineOpts {
+        user_config: dir.path().join("cfg").join("config.toml"),
+        pack: None,
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        machine: "default".into(),
+        sessions_dir: dir.path().join("sessions"),
+        secrets: None,
+    })
+    .unwrap();
+    engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
+    let _handle = server::serve_with_poll(engine, &rt, Duration::from_millis(40)).unwrap();
+    let target = Target::RuntimeDir(rt);
+    let replies = session(
+        &target,
+        &[
+            call(1, "record_start", json!({"session": "mcp-cursor-test"})),
+            call(2, "events_since", json!({"after": 0})),
+        ],
+    );
+    assert_eq!(replies.len(), 2, "{replies:?}");
+    assert_eq!(replies[0]["result"]["isError"], false, "{}", replies[0]);
+    let first_text = replies[1]["result"]["content"][0]["text"].as_str().unwrap();
+    let first: Value = serde_json::from_str(first_text).unwrap();
+    let events = first["events"].as_array().unwrap();
+    let started = events
+        .iter()
+        .find(|event| event["event"] == "recording-started")
+        .expect("recording-started event");
+    let cursor = started["seq"].as_u64().expect("bus sequence");
+    assert_eq!(started["data"]["session"], "mcp-cursor-test");
+    // Emit a later event, then pass the recording event's cursor to the next MCP call.
+    let after_replies = session(
+        &target,
+        &[
+            call(3, "window_show", json!({})),
+            call(4, "events_since", json!({"after": cursor})),
+        ],
+    );
+    assert_eq!(
+        after_replies[0]["result"]["isError"], false,
+        "{}",
+        after_replies[0]
+    );
+    let after: Value = serde_json::from_str(
+        after_replies[1]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let after_events = after["events"].as_array().unwrap();
+    assert!(after_events
+        .iter()
+        .all(|event| event["seq"].as_u64().unwrap() > cursor));
+    assert!(after_events
+        .iter()
+        .any(|event| event["event"] == "window-changed"));
 }
 
 #[test]

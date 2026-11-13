@@ -51,7 +51,7 @@
         "destructiveHint": false,
         "readOnlyHint": true
       },
-      "description": "Stream events on this connection; optional topic filter.",
+      "description": "Native control-socket stream only; MCP clients should use events_since to read engine events by cursor.",
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -67,6 +67,30 @@
       },
       "name": "subscribe",
       "title": "subscribe"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Read engine bus events with sequence numbers greater than after (default 0); wait_ms optionally long-polls for the first newer event. History is retained up to control.event_queue events.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "wait_ms": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "events_since",
+      "title": "events-since"
     },
     {
       "annotations": {

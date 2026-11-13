@@ -23,7 +23,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Stream events on this connection; optional topic filter.",
+      "doc": "Stream events on this control-socket connection; optional topic filter. Not supported over MCP; MCP clients should use events-since.",
       "effect": "read",
       "name": "subscribe",
       "params": [
@@ -31,6 +31,24 @@
           "name": "topics",
           "required": false,
           "type": "Option<Vec<String>>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "Read engine bus events with sequence numbers greater than after (default 0); wait_ms optionally long-polls for the first newer event. History is retained up to control.event_queue events.",
+      "effect": "read",
+      "name": "events-since",
+      "params": [
+        {
+          "name": "after",
+          "required": false,
+          "type": "Option<u64>"
+        },
+        {
+          "name": "wait_ms",
+          "required": false,
+          "type": "Option<u64>"
         }
       ],
       "status": "implemented"

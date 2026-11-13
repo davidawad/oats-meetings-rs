@@ -4267,6 +4267,7 @@ dependencies = [
 name = "oats-ctl"
 version = "0.0.1"
 dependencies = [
+ "oats-audio",
  "oats-core",
  "serde_json",
  "tempfile",
