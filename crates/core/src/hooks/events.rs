@@ -212,6 +212,40 @@ pub const TABLE: &[Spec] = &[
         },
     },
     Spec {
+        name: "transcript.phrase",
+        description: "A final utterance (live or final pass, never a partial) that survived echo removal said one of the hook's match.phrases (a literal on normalized text, word-bounded, or re:<regex>); match.speaker (you, remote, any) and match.cooldown (default app.hook_cooldown, per hook per session, in recording time) apply. data.live is false during the final pass (always, with audio.transcribe = deferred).",
+        topics: &["segment"],
+        when: |_, d| super::phrase::FINAL_KINDS.contains(&d["kind"].as_str().unwrap_or_default()),
+        dedup: "<session>:transcript.phrase:<data.utterance.id>:<data.phrase> (the final pass re-seeing a live utterance's phrase takes its id)",
+        key: |_, d, _| {
+            format!(
+                "{}:{}",
+                d["utterance"]["id"].as_str().unwrap_or_default(),
+                d["phrase"].as_str().unwrap_or_default()
+            )
+        },
+        data: || {
+            obj(
+                &["session", "kind", "live", "phrase", "utterance"],
+                json!({
+                    "session": s(), "kind": {"enum": super::phrase::FINAL_KINDS},
+                    "live": {"type": "boolean"}, "phrase": s(),
+                    "utterance": obj(
+                        &["id", "text", "speaker", "start_ms", "end_ms"],
+                        json!({"id": s(), "text": s(), "speaker": s(),
+                               "start_ms": {"type": "integer", "minimum": 0},
+                               "end_ms": {"type": "integer", "minimum": 0}}),
+                    ),
+                }),
+            )
+        },
+        example: || {
+            json!({"session": "2026-11-13-standup", "kind": "live", "live": true, "phrase": "pricing",
+                   "utterance": {"id": "remote_1@61200", "text": "Can we talk about pricing?",
+                                 "speaker": "remote_1", "start_ms": 61_200, "end_ms": 63_900}})
+        },
+    },
+    Spec {
         name: "transcript.final",
         description: "The final transcript was written: at stop (data is the recording-stopped payload) or by a later transcription (data is the session-saved payload, change transcribed).",
         topics: &["recording-stopped", "session-saved"],
@@ -675,6 +709,11 @@ mod tests {
             ["session.saved"]
         );
         assert!(names("segment", json!({})).is_empty());
+        assert!(names("segment", json!({"kind": "partial"})).is_empty());
+        assert_eq!(
+            names("segment", json!({"kind": "final"})),
+            ["transcript.phrase"]
+        );
     }
 
     #[test]

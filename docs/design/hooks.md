@@ -122,7 +122,8 @@ the table: once per session for `record.stop`, `record.auto_start`,
 `record.auto_stop`; `data.started_at` for `record.start`; the calendar event
 id for `calendar.matched` (the match at start and at stop is one); `record`
 for `transcript.final` at stop and `seq` for a later transcription; `seq`
-for every `record.pause`, `session.saved` and `notes.generated`. The schemas
+for every `record.pause`, `session.saved` and `notes.generated`;
+`<utterance id>:<phrase>` for `transcript.phrase` (below). The schemas
 are written in a small JSON Schema subset (`type`, `const`, `enum`,
 `required`, `properties`, `additionalProperties`, `items`, `anyOf`,
 `minimum`) that `hooks::events::validate` checks; a `data` schema types the
@@ -138,7 +139,7 @@ none.
 | `calendar.matched` | as today | event |
 | `calendar.ending` | `match.before_end` before the matched event's scheduled end, while recording | `remaining` |
 | `calendar.ended` | the matched event's scheduled end passes while recording | `overrun` |
-| `transcript.phrase` | a final (not partial) utterance matches a phrase | utterance, speaker, matched phrase, `live` |
+| `transcript.phrase` | a final (not partial) utterance matches a phrase | `utterance {id, text, speaker, start_ms, end_ms}`, `phrase`, `live`, `kind` |
 | `transcript.final` | the final pass is written | utterance count, mode |
 | `session.saved`, `notes.generated` | as today | as today |
 
@@ -181,9 +182,9 @@ How the L2 fields read the envelope (dot-4uzgol.111.4):
   `attendees` holds when any pattern matches any `calendar.attendees` entry
   (email, else name). `source` reads `calendar.source`. `calendar = false`
   means only sessions with no calendar event.
-- `speaker`, `phrases`, `cooldown` and `before_end` are parsed and checked
-  now (patterns compile, `speaker` is `you`, `remote` or `any`) and judged by
-  the events they belong to (`transcript.phrase`, `calendar.ending`).
+- `speaker`, `phrases` and `cooldown` are judged on `transcript.phrase`
+  (below); `before_end` is parsed and checked now and judged by
+  `calendar.ending` (.7).
 - `matches` checks the event, then `enabled`, then `calendar`, `title`,
   `attendees`, `source`. A skip's reason lists every field that failed, a
   fire's every field that held (`no match filter: fires on every
@@ -200,10 +201,48 @@ How the L2 fields read the envelope (dot-4uzgol.111.4):
   or an unknown `match` key, naming the hook: `hook standup: match.title:
   bad glob "[x": [ is never closed`.
 
-Phrase
-matching runs on normalized text (case-folded, punctuation stripped) of
-final utterances that survived echo removal. It never matches partials, so
-one spoken word fires once.
+### Phrase triggers (dot-4uzgol.111.6, `hooks/phrase.rs`)
+
+`transcript.phrase` follows the `segment` topic: the live pass's utterances
+(`kind = "live"`) and the final pass's (`"final"`), both already past echo
+removal. Any other kind (a partial) is never judged, so it never fires.
+
+- **Normalized text.** Case-folded; apostrophes dropped (`don't` is `dont`);
+  every other character that is not a letter, digit or space is a word
+  break (`follow-up` is `follow up`); whitespace collapsed. A literal phrase
+  is normalized the same way and matches whole words (`price` is not in
+  `pricing`). A `re:` phrase is a regex run on the normalized text. A phrase
+  with no words or a bad regex is refused naming the hook, and a
+  `transcript.phrase` hook needs at least one phrase.
+- **The first phrase said.** A hook whose phrases the utterance does not
+  say gets no decision (the event did not happen for it). One that says
+  several fires once, for the first in its list (`data.phrase`).
+- **`speaker`**: `you` is the mic side (`you`, `room_*`), `remote` everyone
+  else (`remote_*`), `any` (or unset) both.
+- **Utterance id** `<speaker>@<start_ms>`. When a later utterance says the
+  same phrase for the same hook on the same side overlapping in time (the
+  final pass re-seeing what the live pass heard, with its own boundaries
+  and maybe another remote id), it takes the first one's id, so its dedup
+  key `<session>:transcript.phrase:<utterance id>:<phrase>` is the same and
+  one spoken phrase fires once across the live pass, the final pass and a
+  replay.
+- **`cooldown`** (default `app.hook_cooldown`, 30s; `0s` off), per hook per
+  session, in recording time (`start_ms`), not wall time: an utterance that
+  starts within the cooldown of one the hook fired on is skipped. A replay
+  or a final pass run in seconds judges as the live pass did.
+- **Order.** The bus tap judges each utterance on the publishing thread, in
+  bus order (the session is read only when some hook's phrase is said), then
+  publishes the verdicts and runs the hooks on threads; it never publishes
+  from inside the tap.
+- **`live`** is true for the live pass while recording; false for the final
+  pass and for a file transcribed later (`session-transcribe`,
+  `stt-transcribe`: their segments carry `offline = true`).
+- **Reasons.** A fire: `match.speaker = remote: "remote_1" is remote;
+  match.phrases: "pricing" said in "So, pricing?"`. Skips add `already fired
+  for <dedup> (...)` and `match.cooldown: fired at 1:01 (recording time),
+  within 2m of 1:30 (...)`. `hook-explain event=transcript.phrase
+  utterance={text, speaker}` judges a given utterance without consuming any
+  dedup key or cooldown.
 
 ## Transcription mode
 
@@ -231,15 +270,17 @@ at stop, then `transcript.final` fires:
 - `notes-generate` for a session whose pass is running waits for it.
 
 In `deferred` mode `transcript.phrase` hooks fire during the final pass with
-`live = false`. `config-check` warns that they cannot fire mid-meeting (both
-land with the phrase triggers).
+`live = false`. `config-check` (and `hook-list`, and the Settings Hooks
+panel) returns `warnings`: one line per enabled phrase hook that cannot fire
+mid-meeting (`audio.transcribe` `deferred` or `off`, or `stt.live.enabled =
+false`).
 
 ## Agent surface (all in `config/actions.json`)
 
 | Verb | Returns |
 | --- | --- |
 | `hook-events` | every event: description, `data` schema, an example envelope, which bus topic produces it |
-| `hook-explain` | for a session (default newest) and an event: each hook, fire or not, and why |
+| `hook-explain` | for a session (default newest) and an event: each hook, fire or not, and why (`utterance` for `transcript.phrase`) |
 | `hook-simulate` | replays `<session>/events.jsonl` (or a given file) through L2; `run = true` also runs L3; returns the ordered fire list |
 | `hook-runs` | the ledger, filterable by session, hook, event, outcome |
 | `session-events` | the raw L0 log of a session (default the newest), filtered by `topic` and a `from`..`to` `seq` range |

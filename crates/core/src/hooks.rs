@@ -8,12 +8,14 @@
 //! `OATS_EVENT_FILE`; it is killed (its whole process group on unix) past its timeout. A hook
 //! fires at most once per dedup key, and only when its `[hooks.match]` filter holds (`matches`,
 //! dot-4uzgol.111.4): every decision, fire or skip, comes with a reason, is kept for `hook-list`
-//! and published as `hook-decided`, and `hook-explain` shows them without running anything. Every
-//! run (exit code, timing, the first `app.hook_output`
-//! bytes of stdout and stderr) is kept for `hook-list` and published as `hook-finished`; a failure
+//! and published as `hook-decided`, and `hook-explain` shows them without running anything.
+//! `transcript.phrase` (dot-4uzgol.111.6, `phrase`) fires on what is said: the tap judges each
+//! final utterance against every phrase hook, in order, before it returns. Every run (exit
+//! code, timing, the first `app.hook_output` bytes of stdout and stderr) is kept for `hook-list` and published as `hook-finished`; a failure
 //! is logged and shown, never raised into the session.
 
 pub mod events;
+pub mod phrase;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -44,6 +46,9 @@ pub const SPEAKERS: &[&str] = &["you", "remote", "any"];
 
 /// The key whose range bounds a hook's own `timeout` (and whose value is the default).
 const TIMEOUT_KEY: &str = "app.hook_timeout";
+
+/// The key whose range bounds a hook's own `match.cooldown` (and whose value is the default).
+const COOLDOWN_KEY: &str = "app.hook_cooldown";
 
 fn yes() -> bool {
     true
@@ -86,9 +91,10 @@ pub struct Hook {
 /// A hook's `[hooks.match]` table (docs/design/hooks.md L2). Every field is optional, and all
 /// present fields must hold. `title`, each of `attendees` and `source` are patterns: a glob
 /// (`*`, `?`, `[abc]`, `[!abc]`; case-insensitive, the whole text), or after `re:` a regex
-/// (unanchored, as written). `speaker`, `phrases` and `cooldown` (the phrase triggers,
-/// dot-4uzgol.111.6) and `before_end` (`calendar.ending`, dot-4uzgol.111.7) are parsed and checked
-/// here; the events they apply to judge them.
+/// (unanchored, as written). `speaker`, `phrases` and `cooldown` are the phrase triggers'
+/// (dot-4uzgol.111.6, `phrase`): `matches` judges `speaker` and `phrases` on `transcript.phrase`,
+/// the tap `cooldown`. `before_end` (`calendar.ending`, dot-4uzgol.111.7) is parsed and checked
+/// here; its event judges it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Match {
@@ -104,11 +110,13 @@ pub struct Match {
     /// true: only sessions matched to a calendar event; false: only sessions with none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<bool>,
-    /// you | remote | any (empty: any).
+    /// you | remote | any (empty: any): the side of the utterance's speaker.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub speaker: String,
+    /// Literal phrases (normalized, word-bounded) or `re:<regex>`; the first said fires.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub phrases: Vec<String>,
+    /// Per hook per session, in recording time; None: `app.hook_cooldown`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown: Option<Dur>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -298,6 +306,37 @@ pub fn matches(hook: &Hook, envelope: &Value) -> Verdict {
             ),
         }
     }
+    if event == phrase::EVENT {
+        let u = &envelope["data"]["utterance"];
+        let speaker = u["speaker"].as_str().unwrap_or_default();
+        if !m.speaker.is_empty() && m.speaker != "any" {
+            let side = phrase::side(speaker);
+            judge(
+                side == m.speaker,
+                format!("match.speaker = {}: {speaker:?} is {side}", m.speaker),
+            );
+        }
+        match u["text"].as_str() {
+            None => judge(
+                false,
+                "match.phrases: the event has no utterance".to_string(),
+            ),
+            Some(text) => match phrase::first_match(&m.phrases, text) {
+                Err(e) => judge(false, format!("match.phrases: {e}")),
+                Ok(Some(p)) => judge(true, format!("match.phrases: {p:?} said in {text:?}")),
+                Ok(None) if m.phrases.is_empty() => {
+                    judge(false, "match.phrases: none set".to_string())
+                }
+                Ok(None) => judge(
+                    false,
+                    format!(
+                        "match.phrases: none of {} said in {text:?}",
+                        quoted(&m.phrases)
+                    ),
+                ),
+            },
+        }
+    }
     if !failed.is_empty() {
         return no(failed.join("; "));
     }
@@ -371,6 +410,12 @@ fn check(hooks: &[Hook]) -> Result<()> {
             }
         }
         check_match(&label, &h.filter)?;
+        if h.event == phrase::EVENT && h.filter.phrases.is_empty() {
+            return Err(bad(format!(
+                "hook {label}: a {} hook needs match.phrases (literal phrases or re:<regex>)",
+                phrase::EVENT
+            )));
+        }
         if !seen.insert(label.clone()) {
             return Err(bad(format!("hook name {label} is used twice")));
         }
@@ -378,15 +423,29 @@ fn check(hooks: &[Hook]) -> Result<()> {
     Ok(())
 }
 
-/// A `match` table's patterns compile and its `speaker` is one of `SPEAKERS`; Err names the hook.
+/// A `match` table's patterns and phrases compile and its `speaker` is one of `SPEAKERS`; Err
+/// names the hook.
 fn check_match(label: &str, m: &Match) -> Result<()> {
     let fields = [("title", &m.title), ("source", &m.source)]
         .into_iter()
         .filter(|(_, p)| !p.is_empty())
-        .chain(m.attendees.iter().map(|p| ("attendees", p)))
-        .chain(m.phrases.iter().map(|p| ("phrases", p)));
+        .chain(m.attendees.iter().map(|p| ("attendees", p)));
     for (field, p) in fields {
         pattern(p).map_err(|e| bad(format!("hook {label}: match.{field}: {e}")))?;
+    }
+    for p in &m.phrases {
+        phrase::compile(p).map_err(|e| bad(format!("hook {label}: match.phrases: {e}")))?;
+    }
+    if let (Some(c), Some(Kind::Duration { min_ms, max_ms })) =
+        (m.cooldown, keys::find(COOLDOWN_KEY).map(|k| k.kind))
+    {
+        if !(min_ms..=max_ms).contains(&c.0) {
+            return Err(bad(format!(
+                "hook {label}: match.cooldown must be from {} to {}",
+                keys::format_duration_ms(min_ms),
+                keys::format_duration_ms(max_ms)
+            )));
+        }
     }
     if !m.speaker.is_empty() && !SPEAKERS.contains(&m.speaker.as_str()) {
         return Err(bad(format!(
@@ -411,7 +470,7 @@ pub fn match_schema() -> Value {
             "source": pat,
             "calendar": {"type": "boolean"},
             "speaker": {"type": "string", "enum": SPEAKERS},
-            "phrases": {"type": "array", "items": pat},
+            "phrases": {"type": "array", "items": {"type": "string", "description": "a literal phrase (matched on normalized text: case-folded, punctuation stripped, word-bounded) or re:<regex> (run on the normalized text)"}},
             "cooldown": dur,
             "before_end": dur,
         },
@@ -488,6 +547,8 @@ pub struct Runner {
     /// the next envelope's `seq`.
     log: crate::sessions::events::Log,
     fired: Mutex<HashMap<String, BTreeSet<(String, String)>>>,
+    /// Each session's `transcript.phrase` state (hits, fire times, dedup), judged in bus order.
+    phrases: Mutex<HashMap<String, phrase::State>>,
 }
 
 impl Runner {
@@ -718,6 +779,9 @@ fn start(
     if hooks.is_empty() {
         return;
     }
+    if spec.name == phrase::EVENT {
+        return start_phrase(engine, &hooks, session, seq, &data);
+    }
     let event = spec.name;
     let engine = Arc::clone(engine);
     let at = now_stamp();
@@ -758,6 +822,96 @@ fn start(
     if let Err(e) = spawned {
         crate::elog!("oats-meetings-rs: hooks for {event}: cannot start a thread: {e}");
     }
+}
+
+/// Judge a final utterance (`data`, a `segment` payload) for the `transcript.phrase` hooks in
+/// bus order, on the publishing thread, so the cooldown and the live-to-final dedup see the
+/// utterances as they were said; the session is read only when some hook's phrase is said. The
+/// verdicts are then published (`hook-decided`, never from inside the bus tap) and the hooks
+/// that fire run, each on its own thread.
+fn start_phrase(
+    engine: &Arc<Engine>,
+    hooks: &[(String, Hook)],
+    session: Option<String>,
+    seq: u64,
+    data: &Value,
+) {
+    if !phrase::any_hit(hooks, data) {
+        return;
+    }
+    let key = session.clone().unwrap_or_default();
+    let mut ctx = context(engine, phrase::EVENT, session.as_deref(), Value::Null);
+    ctx.seq = seq;
+    let base = ctx.envelope("", "");
+    let cooldown = engine.snapshot().config.app.hook_cooldown;
+    let decisions = {
+        let mut all = engine.hooks.phrases.lock().expect("hook phrases");
+        phrase::judge(all.entry(key).or_default(), hooks, &base, data, cooldown)
+    };
+    if decisions.is_empty() {
+        return;
+    }
+    let hooks = hooks.to_vec();
+    let engine = Arc::clone(engine);
+    let spawned = std::thread::Builder::new()
+        .name("oats-hooks".into())
+        .spawn(move || {
+            let threads: Vec<_> = decisions
+                .into_iter()
+                .filter_map(|d| {
+                    let mut c = ctx.clone();
+                    c.dedup = d.dedup;
+                    c.data = d.data;
+                    decide(&engine, &d.hook, &c, &d.verdict);
+                    let hook = hooks.iter().find(|(l, _)| *l == d.hook)?.1.clone();
+                    d.verdict.fire.then_some((d.hook, hook, c))
+                })
+                .map(|(label, hook, c)| {
+                    let engine = Arc::clone(&engine);
+                    std::thread::Builder::new()
+                        .name(format!("oats-hook-{label}"))
+                        .spawn(move || run_and_report(&engine, &label, &hook, &c, false))
+                })
+                .collect();
+            for t in threads.into_iter().flatten() {
+                let _ = t.join();
+            }
+        });
+    if let Err(e) = spawned {
+        crate::elog!(
+            "oats-meetings-rs: hooks for {}: cannot start a thread: {e}",
+            phrase::EVENT
+        );
+    }
+}
+
+/// What the config means for `transcript.phrase` hooks that cannot fire mid-meeting: one line
+/// per enabled phrase hook when `audio.transcribe` is `deferred` (they fire during the final
+/// pass, `live = false`) or `off`, or `stt.live.enabled` is off. `config-check` and `hook-list`
+/// return them.
+pub fn warnings(cfg: &Config) -> Vec<String> {
+    use crate::config::typed::AudioTranscribe;
+    let why = match cfg.audio.transcribe {
+        AudioTranscribe::Deferred => Some(
+            "audio.transcribe = deferred: it cannot fire mid-meeting, only during the final pass after stop (data.live = false)",
+        ),
+        AudioTranscribe::Off => Some(
+            "audio.transcribe = off: it cannot fire mid-meeting, only when session-transcribe runs later (data.live = false)",
+        ),
+        _ if !cfg.stt.live.enabled => Some(
+            "stt.live.enabled = false: it cannot fire mid-meeting, only during the final pass after stop (data.live = false)",
+        ),
+        _ => None,
+    };
+    let Some(why) = why else {
+        return Vec::new();
+    };
+    cfg.hooks
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.event == phrase::EVENT && h.enabled)
+        .map(|(i, h)| format!("hook {}: {}: {why}", h.label(i), phrase::EVENT))
+        .collect()
 }
 
 /// Keep a decision and publish it as `hook-decided`.
@@ -1121,6 +1275,26 @@ fn view(engine: &Engine, i: usize, h: &Hook) -> Value {
     })
 }
 
+/// `hook-explain`'s `transcript.phrase` data from its `utterance` argument (`text`, and
+/// optionally `speaker`, default `remote_1`, `start_ms`, `end_ms`); `phrase` names none, as each
+/// hook's verdict names its own.
+fn explain_phrase_data(session: Option<&str>, u: Option<&Value>) -> Result<Value> {
+    let Some(u) = u.filter(|u| !u.is_null()) else {
+        return Ok(json!({"session": session}));
+    };
+    let text = u["text"]
+        .as_str()
+        .ok_or_else(|| bad("utterance needs text"))?;
+    let speaker = u["speaker"].as_str().unwrap_or("remote_1");
+    let start_ms = u["start_ms"].as_u64().unwrap_or_default();
+    let end_ms = u["end_ms"].as_u64().unwrap_or(start_ms).max(start_ms);
+    Ok(json!({
+        "session": session, "kind": "final", "live": false, "phrase": null,
+        "utterance": {"id": format!("{speaker}@{start_ms}"), "text": text, "speaker": speaker,
+                      "start_ms": start_ms, "end_ms": end_ms},
+    }))
+}
+
 /// The newest session, for a `hook-test` (or `session-events`) given none.
 pub(crate) fn newest_session(engine: &Engine) -> Option<String> {
     let list = engine.store().list(None, None).ok()?;
@@ -1144,6 +1318,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 "hooks": hooks.iter().enumerate().map(|(i, h)| view(engine, i, h)).collect::<Vec<_>>(),
                 "runs": engine.hooks.runs(),
                 "decisions": engine.hooks.decisions(),
+                "warnings": warnings(&engine.snapshot().config),
                 "events": names(),
                 "event_docs": events::TABLE.iter()
                     .map(|s| json!({"name": s.name, "description": s.description}))
@@ -1165,7 +1340,11 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             }
             Ok(v)
         }
-        Action::HookExplain { session, event } => {
+        Action::HookExplain {
+            session,
+            event,
+            utterance,
+        } => {
             if events::find(event).is_none() {
                 return Err(ConfigError::new(
                     "not_found",
@@ -1185,7 +1364,10 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 session.as_deref(),
                 json!({"session": session}),
             );
-            let envelope = ctx.envelope("", "");
+            let mut envelope = ctx.envelope("", "");
+            if event == phrase::EVENT {
+                envelope["data"] = explain_phrase_data(session.as_deref(), utterance.as_ref())?;
+            }
             let hooks: Vec<Value> = hooks_of(engine)
                 .iter()
                 .enumerate()
@@ -1197,7 +1379,7 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 .collect();
             Ok(json!({
                 "session": session, "event": event, "title": ctx.title,
-                "calendar": ctx.calendar, "hooks": hooks,
+                "calendar": ctx.calendar, "data": envelope["data"], "hooks": hooks,
             }))
         }
         Action::HookTest {

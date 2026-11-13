@@ -3,7 +3,8 @@
 //! Remove (first click arms), and its last run: exit code, time and output. Add / Edit open a form
 //! whose text boxes are the window's one editor (`State::edit`, Enter keeps the field); Save runs
 //! `hook-add` or `hook-edit`, its Match fields (title, attendees, calendar source, calendar
-//! only) as the `match` object (dot-4uzgol.111.4). A failed hook run also raises the window's hook banner
+//! only; for `transcript.phrase` phrases, speaker and cooldown, dot-4uzgol.111.6) as the `match`
+//! object (dot-4uzgol.111.4). A failed hook run also raises the window's hook banner
 //! (`State::hook_failure`), whatever started it.
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, Context, FontWeight, SharedString, Window};
@@ -23,6 +24,11 @@ pub(crate) const CWD: &str = "hooks:cwd";
 pub(crate) const MATCH_TITLE: &str = "hooks:match_title";
 pub(crate) const MATCH_ATTENDEES: &str = "hooks:match_attendees";
 pub(crate) const MATCH_SOURCE: &str = "hooks:match_source";
+pub(crate) const MATCH_PHRASES: &str = "hooks:match_phrases";
+pub(crate) const MATCH_COOLDOWN: &str = "hooks:match_cooldown";
+
+/// What separates phrases in the Phrases box (a regex may hold a comma).
+pub(crate) const PHRASE_SEP: char = ';';
 
 /// The Add / Edit form.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -42,6 +48,11 @@ pub struct Draft {
     pub match_attendees: String,
     pub match_source: String,
     pub match_calendar: Option<bool>,
+    /// `match.phrases` (`PHRASE_SEP`-separated), `match.speaker` (empty: any), `match.cooldown`
+    /// (empty: `app.hook_cooldown`).
+    pub match_phrases: String,
+    pub match_speaker: String,
+    pub match_cooldown: String,
     /// The hook's whole `match` as it was (the fields the form has no box for are kept).
     pub match_rest: Value,
     pub error: Option<String>,
@@ -63,6 +74,17 @@ impl Draft {
             _ => String::new(),
         };
         self.match_calendar = m["calendar"].as_bool();
+        self.match_phrases = match &m["phrases"] {
+            Value::Array(a) => a
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(&format!("{PHRASE_SEP} ")),
+            Value::String(a) => a.clone(),
+            _ => String::new(),
+        };
+        self.match_speaker = s("speaker");
+        self.match_cooldown = s("cooldown");
     }
 
     /// The `match` object `hook-add` / `hook-edit` get: the old one with the form's fields over it.
@@ -85,6 +107,15 @@ impl Draft {
             .collect();
         put("attendees", (!people.is_empty()).then(|| json!(people)));
         put("calendar", self.match_calendar.map(Value::Bool));
+        let phrases: Vec<&str> = self
+            .match_phrases
+            .split(PHRASE_SEP)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .collect();
+        put("phrases", (!phrases.is_empty()).then(|| json!(phrases)));
+        put("speaker", text(&self.match_speaker).filter(|s| s != "any"));
+        put("cooldown", text(&self.match_cooldown));
         Value::Object(m)
     }
 }
@@ -133,6 +164,7 @@ impl Ui {
         json!({
             "hooks": self.list["hooks"],
             "runs": self.list["runs"],
+            "warnings": self.list["warnings"],
             "error": self.error,
             "busy": self.busy,
             "arming": self.arming,
@@ -183,6 +215,8 @@ pub fn commit(st: &mut State) {
         MATCH_TITLE => d.match_title = v,
         MATCH_ATTENDEES => d.match_attendees = v,
         MATCH_SOURCE => d.match_source = v,
+        MATCH_PHRASES => d.match_phrases = v,
+        MATCH_COOLDOWN => d.match_cooldown = v,
         _ => {}
     }
 }
@@ -474,6 +508,33 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
             }))
         }),
     );
+    let speaker = div().flex().gap(px(6.)).children(
+        [
+            ("", "anyone"),
+            ("you", "you (the mic)"),
+            ("remote", "remote"),
+        ]
+        .into_iter()
+        .map(|(v, label)| {
+            let on = d.match_speaker == v || (v.is_empty() && d.match_speaker == "any");
+            kit::button(
+                format!(
+                    "hook-match-speaker-{}",
+                    if v.is_empty() { "any" } else { v }
+                ),
+                label,
+                if on { Kind::Primary } else { Kind::Secondary },
+                Size::Sm,
+                true,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(d) = this.state.hooks_ui.draft.as_mut() {
+                    d.match_speaker = v.to_string();
+                }
+                cx.notify();
+            }))
+        }),
+    );
     let can_save =
         !d.name.trim().is_empty() || w.state.edit.as_ref().is_some_and(|e| e.path == NAME);
     let mut save_btn = kit::button("hook-save", "Save", Kind::Primary, Size::Sm, can_save);
@@ -580,6 +641,32 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
             ),
         ))
         .child(labelled("Calendar", calendar.into_any_element()));
+    if d.event == "transcript.phrase" {
+        col = col
+            .child(labelled(
+                "Phrases",
+                text_box(
+                    w,
+                    MATCH_PHRASES,
+                    &d.match_phrases,
+                    "words said, ;-separated, e.g. pricing; next steps; re:\\bdiscounts?\\b",
+                    480.,
+                    cx,
+                ),
+            ))
+            .child(labelled("Speaker", speaker.into_any_element()))
+            .child(labelled(
+                "Cooldown",
+                text_box(
+                    w,
+                    MATCH_COOLDOWN,
+                    &d.match_cooldown,
+                    "default (app.hook_cooldown)",
+                    200.,
+                    cx,
+                ),
+            ));
+    }
     if let Some(e) = &d.error {
         col = col.child(
             div()
@@ -801,6 +888,15 @@ pub(crate) fn panel(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement 
     if let Some(e) = &ui.error {
         out = out.child(kit::banner(true, "Hooks failed.", e.clone()));
     }
+    // What config-check warns about (a phrase hook that cannot fire mid-meeting).
+    for w in ui.list["warnings"].as_array().into_iter().flatten() {
+        out = out.child(
+            div()
+                .text_size(px(12.))
+                .text_color(rgb(t.dim))
+                .child(w.as_str().unwrap_or_default().to_string()),
+        );
+    }
     out = out.child(list);
     if let Some(d) = &ui.draft {
         out = out.child(form(w, d, cx));
@@ -855,6 +951,65 @@ mod tests {
             d.match_value(),
             json!({"phrases": ["pricing"], "attendees": ["*@acme.com", "bo@x.org"], "source": "work"})
         );
+    }
+
+    /// The phrase fields (dot-4uzgol.111.6): phrases are ;-separated (a regex keeps its comma),
+    /// speaker any and an empty cooldown leave the match.
+    #[test]
+    fn the_phrase_fields_round_trip_through_the_draft() {
+        let old =
+            json!({"phrases": ["pricing", "re:a{1,3}"], "speaker": "remote", "cooldown": "2m"});
+        let mut d = Draft {
+            match_rest: old.clone(),
+            ..Draft::default()
+        };
+        d.set_match(&old);
+        assert_eq!(d.match_phrases, "pricing; re:a{1,3}");
+        assert_eq!(d.match_value(), old);
+        d.match_speaker = "any".into();
+        d.match_cooldown = String::new();
+        d.match_phrases = " next steps ;; ".into();
+        assert_eq!(d.match_value(), json!({"phrases": ["next steps"]}));
+    }
+
+    /// A transcript.phrase hook added through the form keeps its phrases, speaker and cooldown;
+    /// one with no phrases is refused and the form stays open with why.
+    #[test]
+    fn the_hooks_panel_adds_a_phrase_hook() {
+        let (engine, _d) = testutil::engine(&[]);
+        let mut cx = TestAppContext::single();
+        let (view, cx) = cx.add_window_view(|_, _| MainWindow::new(engine.clone()));
+        view.update(cx, |v, cx| {
+            v.state.tab = Tab::Settings;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.update(cx, |v, cx| {
+            invoke(
+                v,
+                "settings.hook_add",
+                json!({"name": "flag-pricing", "event": "transcript.phrase", "command": "true",
+                       "match": {"phrases": ["pricing", "re:\\bdiscounts?\\b"], "speaker": "remote",
+                                 "cooldown": "2m"}}),
+                cx,
+            );
+            let d = v.dump(cx);
+            assert_eq!(
+                d["view"]["hooks"]["hooks"][0]["match"],
+                json!({"phrases": ["pricing", "re:\\bdiscounts?\\b"], "speaker": "remote", "cooldown": "2m"}),
+                "{d}"
+            );
+            invoke(
+                v,
+                "settings.hook_add",
+                json!({"name": "no-words", "event": "transcript.phrase", "command": "true"}),
+                cx,
+            );
+            let d = v.dump(cx);
+            let err = d["view"]["hooks"]["draft"]["error"].as_str().unwrap();
+            assert!(err.contains("hook no-words") && err.contains("match.phrases"), "{err}");
+            cancel(&mut v.state);
+        });
     }
 
     /// Add a hook through the form, test-run it, see the failed run on its row and as the banner,

@@ -1490,11 +1490,13 @@ fn passes(
     id: &str,
     started: DateTime<Utc>,
 ) -> Result<(usize, usize, Value)> {
+    // `offline`: transcribed from a file, not while recording, so its live pass is no live
+    // speech (a `transcript.phrase` from it says `live = false`).
     let emit = |kind: &str, u: &Utt| {
         if let Some(b) = bus {
             b.publish(
                 "segment",
-                json!({"session": id, "kind": kind, "speaker": u.speaker, "text": u.text, "start": u.start, "end": u.end}),
+                json!({"session": id, "kind": kind, "offline": true, "speaker": u.speaker, "text": u.text, "start": u.start, "end": u.end}),
             );
         }
     };

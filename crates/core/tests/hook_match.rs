@@ -722,6 +722,7 @@ mod engine {
             .dispatch(&Action::HookExplain {
                 session: None,
                 event: "record.stop".into(),
+                utterance: None,
             })
             .unwrap();
         assert_eq!(v["session"], "newer", "the newest session by default: {v}");
@@ -768,6 +769,7 @@ mod engine {
             .dispatch(&Action::HookExplain {
                 session: Some("older".into()),
                 event: "record.stop".into(),
+                utterance: None,
             })
             .unwrap();
         assert_eq!(older["hooks"][0]["fire"], false);
@@ -784,13 +786,15 @@ mod engine {
             .dispatch(&Action::HookExplain {
                 session: None,
                 event: "record.explode".into(),
+                utterance: None,
             })
             .unwrap_err();
         assert_eq!(bad.code, "not_found");
         assert!(e
             .dispatch(&Action::HookExplain {
                 session: Some("nope".into()),
-                event: "record.stop".into()
+                event: "record.stop".into(),
+                utterance: None,
             })
             .is_err());
     }

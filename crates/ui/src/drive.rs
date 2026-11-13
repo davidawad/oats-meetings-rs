@@ -197,12 +197,12 @@ pub const OPS: &[(&str, &str, &str)] = &[
     (
         "settings.hook_add",
         "name, event, command, shell?, timeout?, cwd?, match?",
-        "Hooks: Add hook, fill the form (command: program and arguments, or with shell the script; match: {title, attendees, source, calendar}), Save",
+        "Hooks: Add hook, fill the form (command: program and arguments, or with shell the script; match: {title, attendees, source, calendar; phrases, speaker, cooldown for transcript.phrase}), Save",
     ),
     (
         "settings.hook_edit",
         "hook, name?, event?, command?, shell?, timeout?, cwd?, match?",
-        "Hooks: a hook's Edit, change the given fields (match: the Match fields, {title, attendees, source, calendar}), Save",
+        "Hooks: a hook's Edit, change the given fields (match: the Match fields, {title, attendees, source, calendar, phrases, speaker, cooldown}), Save",
     ),
     (
         "settings.hook_enable",
@@ -649,7 +649,8 @@ impl MainWindow {
                     if let Some(b) = args.get("shell").and_then(Value::as_bool) {
                         d.shell = b;
                     }
-                    // match: the Match fields (title, attendees, source, calendar) as an object.
+                    // match: the Match fields (title, attendees, source, calendar, phrases, speaker,
+                    // cooldown) as an object.
                     if let Some(m) = args.get("match").filter(|m| m.is_object()) {
                         d.set_match(m);
                     }

@@ -90,8 +90,14 @@ fn spy_hooks(out: &Path) -> String {
     hooks::names()
         .iter()
         .map(|e| {
+            // A phrase hook needs phrases (dot-4uzgol.111.6): one no tone is heard to say.
+            let m = if *e == "transcript.phrase" {
+                "[hooks.match]\nphrases = [\"oats spy never said\"]\n"
+            } else {
+                ""
+            };
             format!(
-                "[[hooks]]\nname = \"spy-{e}\"\nevent = \"{e}\"\nshell = true\ncommand = [{SPY:?}, {:?}]\n\n",
+                "[[hooks]]\nname = \"spy-{e}\"\nevent = \"{e}\"\nshell = true\ncommand = [{SPY:?}, {:?}]\n{m}\n",
                 out.to_str().unwrap()
             )
         })

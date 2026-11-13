@@ -100,7 +100,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Validate the resolved config.",
+      "doc": "Validate the resolved config; warnings lists what is valid but will not do what it says (a transcript.phrase hook that cannot fire mid-meeting with audio.transcribe = deferred).",
       "effect": "read",
       "name": "config-check",
       "params": [],
@@ -1197,7 +1197,7 @@
       "status": "implemented"
     },
     {
-      "doc": "The [[hooks]] entries (name, event, command, timeout, enabled, the last run) and the recent hook runs with exit code, timing and output, newest first.",
+      "doc": "The [[hooks]] entries (name, event, command, timeout, enabled, the last run) and the recent hook runs with exit code, timing and output, newest first; warnings as config-check gives them.",
       "effect": "read",
       "name": "hook-list",
       "params": [],
@@ -1227,7 +1227,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a [[hooks]] entry: name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd, match (the [hooks.match] table as an object: title, attendees, source, calendar; a pattern is a glob or re:<regex>).",
+      "doc": "Add a [[hooks]] entry: name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd, match (the [hooks.match] table as an object: title, attendees, source, calendar; a pattern is a glob or re:<regex>; for transcript.phrase phrases (required: literal phrases or re:<regex>), speaker (you, remote, any) and cooldown (e.g. \"2m\"; default app.hook_cooldown)).",
       "effect": "write",
       "name": "hook-add",
       "params": [
@@ -1275,7 +1275,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd, match (an object that replaces the whole [hooks.match] table; {} clears it).",
+      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd, match (an object that replaces the whole [hooks.match] table; {} clears it).",
       "effect": "write",
       "name": "hook-edit",
       "params": [
@@ -1328,7 +1328,7 @@
       "status": "implemented"
     },
     {
-      "doc": "For a session (default: the newest) and an event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated), every hook and whether it would fire, with the reason either way (its event, enabled, each [hooks.match] field). Nothing runs; no dedup is consumed.",
+      "doc": "For a session (default: the newest) and an event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.phrase, transcript.final, calendar.matched, session.saved, notes.generated), every hook and whether it would fire, with the reason either way (its event, enabled, each [hooks.match] field). For transcript.phrase, utterance is the one to judge ({text, speaker?, start_ms?, end_ms?}; speaker default remote_1). Nothing runs; no dedup or cooldown is consumed.",
       "effect": "read",
       "name": "hook-explain",
       "params": [
@@ -1341,6 +1341,11 @@
           "name": "event",
           "required": true,
           "type": "String"
+        },
+        {
+          "name": "utterance",
+          "required": false,
+          "type": "Option<Value>"
         }
       ],
       "status": "implemented"

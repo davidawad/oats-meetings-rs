@@ -1360,7 +1360,7 @@ impl Engine {
                 let typed = self.resolved().typed()?;
                 crate::ics::validate_settings(&typed.ics)?;
                 crate::calendar::validate(&typed.calendar)?;
-                Ok(json!({"valid": true}))
+                Ok(json!({"valid": true, "warnings": crate::hooks::warnings(&typed)}))
             }
             Action::ConfigResolved {} => {
                 let r = self.resolved();

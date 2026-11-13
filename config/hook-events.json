@@ -101,6 +101,7 @@
           "record.stop",
           "record.auto_start",
           "record.auto_stop",
+          "transcript.phrase",
           "transcript.final",
           "calendar.matched",
           "session.saved",
@@ -568,6 +569,109 @@
       "name": "record.auto_stop",
       "topics": [
         "auto-stopped"
+      ]
+    },
+    {
+      "data": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "live",
+              "final"
+            ]
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "phrase": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "utterance": {
+            "properties": {
+              "end_ms": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "speaker": {
+                "type": "string"
+              },
+              "start_ms": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "text",
+              "speaker",
+              "start_ms",
+              "end_ms"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "session",
+          "kind",
+          "live",
+          "phrase",
+          "utterance"
+        ],
+        "type": "object"
+      },
+      "dedup": "<session>:transcript.phrase:<data.utterance.id>:<data.phrase> (the final pass re-seeing a live utterance's phrase takes its id)",
+      "description": "A final utterance (live or final pass, never a partial) that survived echo removal said one of the hook's match.phrases (a literal on normalized text, word-bounded, or re:<regex>); match.speaker (you, remote, any) and match.cooldown (default app.hook_cooldown, per hook per session, in recording time) apply. data.live is false during the final pass (always, with audio.transcribe = deferred).",
+      "example": {
+        "at": "2026-11-13T15:15:04.120Z",
+        "calendar": {
+          "attendees": [
+            "ana@acme.com",
+            "Bo"
+          ],
+          "end": "2026-11-13T15:15:00Z",
+          "source": "work",
+          "start": "2026-11-13T15:00:00Z",
+          "title": "Standup"
+        },
+        "data": {
+          "kind": "live",
+          "live": true,
+          "phrase": "pricing",
+          "session": "2026-11-13-standup",
+          "utterance": {
+            "end_ms": 63900,
+            "id": "remote_1@61200",
+            "speaker": "remote_1",
+            "start_ms": 61200,
+            "text": "Can we talk about pricing?"
+          }
+        },
+        "dedup": "2026-11-13-standup:transcript.phrase:remote_1@61200:pricing",
+        "event": "transcript.phrase",
+        "hook": "standup-sync",
+        "run_id": "20261113T151504120Z-3-standup-sync",
+        "schema": "oats.hook-event/1",
+        "seq": 3,
+        "session": {
+          "audio": "/home/me/oats/sessions/2026-11-13-standup/audio.wav",
+          "dir": "/home/me/oats/sessions/2026-11-13-standup",
+          "id": "2026-11-13-standup",
+          "title": "Standup",
+          "transcript": "/home/me/oats/sessions/2026-11-13-standup/transcript.final.jsonl"
+        }
+      },
+      "name": "transcript.phrase",
+      "topics": [
+        "segment"
       ]
     },
     {

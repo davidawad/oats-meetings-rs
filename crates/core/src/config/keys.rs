@@ -921,7 +921,7 @@ pub const KEYS: &[Key] = &[
         path: "hooks",
         kind: Kind::Hooks,
         default: Def::Empty,
-        doc: "Commands run on recording and session events, one [[hooks]] table each: event (one of the hook event table, listed with schemas and examples by hook-events and in config/hook-events.json), command (argv array; run through the shell only with shell = true), optional name, timeout (default app.hook_timeout), enabled (default true), cwd (default the session folder) and match (a [hooks.match] table: title, attendees, source, calendar; a pattern is a case-insensitive glob or re:<regex>; all present fields must hold; hook-explain shows why a hook would fire or not). A hook gets OATS_EVENT, OATS_SESSION_ID, OATS_SESSION_DIR, OATS_TITLE, OATS_AUDIO, OATS_TRANSCRIPT, OATS_HOOK, OATS_RUN_ID, OATS_SEQ and OATS_EVENT_FILE in its environment and the oats.hook-event/1 envelope as JSON on stdin and in the file OATS_EVENT_FILE; it fires at most once per envelope dedup key. Hooks run in the background and never stop a recording; hook-list shows each run's exit code and output. Edit with hook-add / -edit / -remove / -enable.",
+        doc: "Commands run on recording and session events, one [[hooks]] table each: event (one of the hook event table, listed with schemas and examples by hook-events and in config/hook-events.json), command (argv array; run through the shell only with shell = true), optional name, timeout (default app.hook_timeout), enabled (default true), cwd (default the session folder) and match (a [hooks.match] table: title, attendees, source, calendar; a pattern is a case-insensitive glob or re:<regex>; for transcript.phrase also phrases (literal phrases matched on normalized, word-bounded text, or re:<regex>), speaker (you, remote, any) and cooldown (default app.hook_cooldown); all present fields must hold; hook-explain shows why a hook would fire or not). A hook gets OATS_EVENT, OATS_SESSION_ID, OATS_SESSION_DIR, OATS_TITLE, OATS_AUDIO, OATS_TRANSCRIPT, OATS_HOOK, OATS_RUN_ID, OATS_SEQ and OATS_EVENT_FILE in its environment and the oats.hook-event/1 envelope as JSON on stdin and in the file OATS_EVENT_FILE; it fires at most once per envelope dedup key. Hooks run in the background and never stop a recording; hook-list shows each run's exit code and output. Edit with hook-add / -edit / -remove / -enable.",
         ui: false,
         reload: Reload::Live,
     },
@@ -939,6 +939,14 @@ pub const KEYS: &[Key] = &[
         default: Def::I(65_536),
         doc: "Bytes of a hook run's stdout and of its stderr kept for hook-list and Settings; the rest is read and dropped.",
         ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "app.hook_cooldown",
+        kind: Kind::Duration { min_ms: 0, max_ms: HOUR },
+        default: Def::D(30 * SEC),
+        doc: "A transcript.phrase hook with no match.cooldown fires at most once in this much recording time per session (an utterance starting within it of one the hook fired on is skipped, with the reason). 0s: every utterance that says a phrase fires.",
+        ui: true,
         reload: Reload::Live,
     },
     Key {
