@@ -179,12 +179,21 @@ pub fn actions_json() -> String {
     s
 }
 
+/// The hook event table (`hook-events`).
+pub fn hook_events_json() -> String {
+    let mut s = serde_json::to_string_pretty(&sorted(&crate::hooks::events::table_json()))
+        .expect("serializable");
+    s.push('\n');
+    s
+}
+
 pub fn projections() -> Vec<(&'static str, String)> {
     vec![
         ("defaults.json", defaults_json()),
         ("defaults.toml", defaults_toml()),
         ("schema.json", schema_json()),
         ("actions.json", actions_json()),
+        ("hook-events.json", hook_events_json()),
         (
             "template.schema.json",
             resort(&crate::templates::schema_json()),

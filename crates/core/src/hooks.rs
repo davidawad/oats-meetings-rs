@@ -1,14 +1,18 @@
 //! Configurable hooks (dot-4uzgol.89): `[[hooks]]` entries in the user config run a command when a
 //! recording or session event happens (`record.stop`, `notes.generated`, ...).
 //!
-//! The engine's bus tap (`on_event`) maps the published events onto hook events and starts each
-//! enabled matching hook on its own thread, so a hook never blocks a recording, the control socket
-//! or the UI. A hook gets the session as `OATS_*` environment variables and the whole event as JSON
-//! on stdin; it is killed (its whole process group on unix) past its timeout. Every run (exit code,
-//! timing, the first `app.hook_output` bytes of stdout and stderr) is kept for `hook-list` and
-//! published as `hook-finished`; a failure is logged and shown, never raised into the session.
+//! The engine's bus tap (`on_event`) maps the published events onto hook events (the table in
+//! `events`, dot-4uzgol.111.2) and starts each enabled matching hook on its own thread, so a hook
+//! never blocks a recording, the control socket or the UI. A hook gets the session as `OATS_*`
+//! environment variables and the `oats.hook-event/1` envelope as JSON on stdin and in the file
+//! `OATS_EVENT_FILE`; it is killed (its whole process group on unix) past its timeout. A hook
+//! fires at most once per dedup key. Every run (exit code, timing, the first `app.hook_output`
+//! bytes of stdout and stderr) is kept for `hook-list` and published as `hook-finished`; a failure
+//! is logged and shown, never raised into the session.
 
-use std::collections::VecDeque;
+pub mod events;
+
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -25,18 +29,7 @@ use crate::config::typed::{Config, Dur};
 use crate::config::{ConfigError, Result};
 use crate::control::engine::Engine;
 
-/// The events a hook can name, in the order a recording meets them.
-pub const EVENTS: &[&str] = &[
-    "record.start",
-    "record.pause",
-    "record.stop",
-    "record.auto_start",
-    "record.auto_stop",
-    "transcript.final",
-    "calendar.matched",
-    "session.saved",
-    "notes.generated",
-];
+pub use events::names;
 
 /// A `[[hooks]]` table's fields in the order they are written to the user file.
 pub const FIELDS: &[&str] = &[
@@ -117,11 +110,11 @@ fn check(hooks: &[Hook]) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
     for (i, h) in hooks.iter().enumerate() {
         let label = h.label(i);
-        if !EVENTS.contains(&h.event.as_str()) {
+        if events::find(&h.event).is_none() {
             return Err(bad(format!(
                 "hook {label}: event \"{}\" is not one of {}",
                 h.event,
-                EVENTS.join(", ")
+                names().join(", ")
             )));
         }
         if h.command.first().is_none_or(|p| p.trim().is_empty()) {
@@ -153,7 +146,7 @@ pub fn item_schema() -> Value {
         "required": ["event", "command"],
         "properties": {
             "name": {"type": "string"},
-            "event": {"type": "string", "enum": EVENTS},
+            "event": {"type": "string", "enum": names()},
             "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
             "shell": {"type": "boolean", "default": false},
             "timeout": {"type": "string", "format": "duration", "pattern": "^[0-9]+(ms|s|m|h|d)$"},
@@ -167,9 +160,14 @@ pub fn item_schema() -> Value {
 #[derive(Debug, Clone, Serialize)]
 pub struct Run {
     pub seq: u64,
+    /// The envelope's `run_id` (`OATS_RUN_ID`).
+    pub run_id: String,
     pub hook: String,
     pub event: String,
     pub session: Option<String>,
+    /// The envelope's `seq` (`OATS_SEQ`) and `dedup`.
+    pub event_seq: u64,
+    pub dedup: String,
     /// Started by `hook-test` rather than by the event.
     pub test: bool,
     pub started: String,
@@ -184,11 +182,15 @@ pub struct Run {
     pub truncated: bool,
 }
 
-/// The engine's record of hook runs, newest first.
+/// The engine's record of hook runs, newest first, and each session's envelope `seq` and the
+/// (hook, dedup key) pairs that already fired.
 #[derive(Default)]
 pub struct Runner {
     runs: Mutex<VecDeque<Run>>,
     seq: AtomicU64,
+    /// Bus messages seen per session ("" for none): the next envelope's `seq`.
+    seqs: Mutex<HashMap<String, u64>>,
+    fired: Mutex<HashMap<String, BTreeSet<(String, String)>>>,
 }
 
 impl Runner {
@@ -206,6 +208,24 @@ impl Runner {
             .cloned()
             .collect()
     }
+
+    /// The next `seq` of `session` (1 for its first message).
+    pub fn next_seq(&self, session: &str) -> u64 {
+        let mut seqs = self.seqs.lock().expect("hook seqs");
+        let n = seqs.entry(session.to_string()).or_default();
+        *n += 1;
+        *n
+    }
+
+    /// True the first time `hook` asks for `dedup` in `session`; false after.
+    pub fn first(&self, session: &str, hook: &str, dedup: &str) -> bool {
+        self.fired
+            .lock()
+            .expect("hook dedup")
+            .entry(session.to_string())
+            .or_default()
+            .insert((hook.to_string(), dedup.to_string()))
+    }
 }
 
 /// What a hook is told about the event.
@@ -217,49 +237,67 @@ pub struct Ctx {
     pub title: String,
     pub audio: Option<PathBuf>,
     pub transcript: Option<PathBuf>,
+    /// The envelope's `seq`, `at` and `dedup`.
+    pub seq: u64,
+    pub at: String,
+    pub dedup: String,
+    /// The envelope's `calendar` (null when the session matched no event).
+    pub calendar: Value,
     /// The event's own payload (the `record-stop` answer, ...).
     pub data: Value,
 }
 
+fn now_stamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 impl Ctx {
-    fn env(&self, hook: &str) -> Vec<(&'static str, String)> {
-        let p = |p: &Option<PathBuf>| {
-            p.as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default()
-        };
+    fn env(&self, hook: &str, run_id: &str, file: Option<&PathBuf>) -> Vec<(&'static str, String)> {
+        let p = |p: Option<&PathBuf>| p.map(|p| p.display().to_string()).unwrap_or_default();
         vec![
             ("OATS_EVENT", self.event.clone()),
             ("OATS_HOOK", hook.to_string()),
             ("OATS_SESSION_ID", self.session.clone().unwrap_or_default()),
-            ("OATS_SESSION_DIR", p(&self.dir)),
+            ("OATS_SESSION_DIR", p(self.dir.as_ref())),
             ("OATS_TITLE", self.title.clone()),
-            ("OATS_AUDIO", p(&self.audio)),
-            ("OATS_TRANSCRIPT", p(&self.transcript)),
+            ("OATS_AUDIO", p(self.audio.as_ref())),
+            ("OATS_TRANSCRIPT", p(self.transcript.as_ref())),
+            ("OATS_RUN_ID", run_id.to_string()),
+            ("OATS_SEQ", self.seq.to_string()),
+            ("OATS_EVENT_FILE", p(file)),
         ]
     }
 
-    fn stdin(&self, hook: &str) -> Value {
-        json!({
-            "event": self.event,
-            "hook": hook,
-            "session": {
+    /// The `oats.hook-event/1` envelope a run of `hook` gets.
+    pub fn envelope(&self, hook: &str, run_id: &str) -> Value {
+        let p = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
+        events::Head {
+            event: self.event.clone(),
+            seq: self.seq,
+            at: self.at.clone(),
+            dedup: self.dedup.clone(),
+            session: json!({
                 "id": self.session,
-                "dir": self.dir,
+                "dir": p(&self.dir),
                 "title": self.title,
-                "audio": self.audio,
-                "transcript": self.transcript,
-            },
-            "data": self.data,
-        })
+                "audio": p(&self.audio),
+                "transcript": p(&self.transcript),
+            }),
+            calendar: self.calendar.clone(),
+            data: self.data.clone(),
+        }
+        .envelope(hook, run_id)
     }
 }
 
-/// The session's folder, title, audio and transcript (final, else live), as far as they exist.
+/// The session's folder, title, audio, transcript (final, else live) and calendar event, as far
+/// as they exist. `seq`, `at` and `dedup` are the caller's to fill.
 pub fn context(engine: &Engine, event: &str, session: Option<&str>, data: Value) -> Ctx {
     let mut c = Ctx {
         event: event.to_string(),
         session: session.filter(|s| !s.is_empty()).map(str::to_string),
+        at: now_stamp(),
+        calendar: events::calendar_of(&data["calendar"]["event"], &Value::Null),
         data,
         ..Ctx::default()
     };
@@ -271,8 +309,11 @@ pub fn context(engine: &Engine, event: &str, session: Option<&str>, data: Value)
     };
     let dir = v["path"].as_str().map(PathBuf::from);
     c.title = v["title"].as_str().unwrap_or_default().to_string();
+    let meta = v["metadata"].as_object().cloned().unwrap_or_default();
+    if let Some(ev) = meta.get("calendarEvent").filter(|e| e.is_object()) {
+        c.calendar = events::calendar_of(ev, meta.get("attendees").unwrap_or(&Value::Null));
+    }
     if let Some(d) = &dir {
-        let meta = v["metadata"].as_object().cloned().unwrap_or_default();
         let audio = d.join(
             crate::sessions::ext(&meta, "audioFile")
                 .and_then(Value::as_str)
@@ -290,69 +331,81 @@ pub fn context(engine: &Engine, event: &str, session: Option<&str>, data: Value)
 
 /// The hook events a published bus event stands for.
 pub fn events_for(topic: &str, data: &Value) -> Vec<&'static str> {
-    let matched = data["calendar"]["event"].is_object();
-    let mut out = vec![];
-    match topic {
-        "recording-started" => {
-            out.push("record.start");
-            if matched {
-                out.push("calendar.matched");
-            }
-        }
-        "recording-paused" => out.push("record.pause"),
-        "auto-started" => out.push("record.auto_start"),
-        "auto-stopped" => out.push("record.auto_stop"),
-        "recording-stopped" => {
-            out.push("record.stop");
-            if data["transcription"]["final"] == "ok" {
-                out.push("transcript.final");
-            }
-            if matched {
-                out.push("calendar.matched");
-            }
-        }
-        "session-saved" => {
-            out.push("session.saved");
-            if data["change"] == "transcribed" {
-                out.push("transcript.final");
-            }
-        }
-        _ => {}
-    }
-    out
+    events::events_for(topic, data)
+        .iter()
+        .map(|s| s.name)
+        .collect()
 }
 
-/// The engine's bus tap: start the hooks for whatever `topic` stands for. Returns at once.
+/// The session a payload names (`session`, else `id`).
+fn session_of(data: &Value) -> Option<String> {
+    data["session"]
+        .as_str()
+        .or(data["id"].as_str())
+        .map(str::to_string)
+}
+
+/// The engine's bus tap: count the message in its session's `seq` and start the hooks for
+/// whatever `topic` stands for. Returns at once.
 pub fn on_event(engine: &Arc<Engine>, topic: &str, data: &Value) {
-    for ev in events_for(topic, data) {
-        fire(engine, ev, data.clone());
+    let session = session_of(data);
+    let seq = engine
+        .hooks
+        .next_seq(session.as_deref().unwrap_or_default());
+    for spec in events::events_for(topic, data) {
+        start(engine, spec, topic, session.clone(), seq, data.clone());
     }
 }
 
-/// Start every enabled hook on `event`, each on its own thread. Returns at once.
+/// Start every enabled hook on `event` (an action's own event, not a bus message), each on its
+/// own thread. Returns at once.
 pub fn fire(engine: &Arc<Engine>, event: &str, data: Value) {
+    let Some(spec) = events::find(event) else {
+        crate::elog!("oats-meetings-rs: hooks: no event {event}");
+        return;
+    };
+    let session = session_of(&data);
+    let seq = engine
+        .hooks
+        .next_seq(session.as_deref().unwrap_or_default());
+    start(engine, spec, "", session, seq, data);
+}
+
+fn start(
+    engine: &Arc<Engine>,
+    spec: &events::Spec,
+    topic: &str,
+    session: Option<String>,
+    seq: u64,
+    data: Value,
+) {
+    let key = session.clone().unwrap_or_default();
+    let dedup = spec.dedup_key(&key, topic, &data, seq);
     let snap = engine.snapshot();
     let hooks: Vec<(String, Hook)> = snap
         .config
         .hooks
         .iter()
         .enumerate()
-        .filter(|(_, h)| h.enabled && h.event == event)
+        .filter(|(_, h)| h.enabled && h.event == spec.name)
         .map(|(i, h)| (h.label(i), h.clone()))
+        // At most once per dedup key: a message seen again (a replay, a stop that re-matches the
+        // calendar event of its start) does not run the hook again.
+        .filter(|(label, _)| engine.hooks.first(&key, label, &dedup))
         .collect();
     if hooks.is_empty() {
         return;
     }
-    let session = data["session"]
-        .as_str()
-        .or(data["id"].as_str())
-        .map(str::to_string);
-    let (ev, event) = (event.to_string(), event.to_string());
+    let event = spec.name;
     let engine = Arc::clone(engine);
+    let at = now_stamp();
     let spawned = std::thread::Builder::new()
         .name("oats-hooks".into())
         .spawn(move || {
-            let ctx = context(&engine, &ev, session.as_deref(), data);
+            let mut ctx = context(&engine, event, session.as_deref(), data);
+            ctx.seq = seq;
+            ctx.at = at;
+            ctx.dedup = dedup;
             let threads: Vec<_> = hooks
                 .into_iter()
                 .map(|(label, hook)| {
@@ -450,16 +503,60 @@ pub(crate) fn kill(child: &mut Child) {
     let _ = child.kill();
 }
 
+/// The envelope in a file for `OATS_EVENT_FILE` (for a script that cannot read stdin), removed
+/// when the run is over.
+struct EventFile(PathBuf);
+
+impl EventFile {
+    fn write(run_id: &str, envelope: &[u8]) -> Option<Self> {
+        let safe: String = run_id
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let p = std::env::temp_dir().join(format!("oats-hook-{}-{safe}.json", std::process::id()));
+        match std::fs::write(&p, envelope) {
+            Ok(()) => Some(EventFile(p)),
+            Err(e) => {
+                crate::elog!(
+                    "oats-meetings-rs: hook run {run_id}: cannot write {}: {e}",
+                    p.display()
+                );
+                None
+            }
+        }
+    }
+}
+
+impl Drop for EventFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// Run one hook to completion (or its timeout) with `ctx`. Never panics, never returns an error:
 /// whatever went wrong is in the `Run`.
 pub fn run(label: &str, hook: &Hook, ctx: &Ctx, cfg: &Config) -> Run {
     let started = chrono::Utc::now();
     let t0 = Instant::now();
+    let run_id = format!(
+        "{}-{}-{label}",
+        started.format("%Y%m%dT%H%M%S%3fZ"),
+        ctx.seq
+    );
     let mut out = Run {
         seq: 0,
+        run_id: run_id.clone(),
         hook: label.to_string(),
         event: ctx.event.clone(),
         session: ctx.session.clone(),
+        event_seq: ctx.seq,
+        dedup: ctx.dedup.clone(),
         test: false,
         started: started.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         duration_ms: 0,
@@ -471,8 +568,10 @@ pub fn run(label: &str, hook: &Hook, ctx: &Ctx, cfg: &Config) -> Run {
         stderr: String::new(),
         truncated: false,
     };
+    let input = serde_json::to_vec(&ctx.envelope(label, &run_id)).unwrap_or_default();
+    let file = EventFile::write(&run_id, &input);
     let mut cmd = command_of(hook);
-    cmd.envs(ctx.env(label))
+    cmd.envs(ctx.env(label, &run_id, file.as_ref().map(|f| &f.0)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -494,7 +593,6 @@ pub fn run(label: &str, hook: &Hook, ctx: &Ctx, cfg: &Config) -> Run {
             return out;
         }
     };
-    let input = serde_json::to_vec(&ctx.stdin(label)).unwrap_or_default();
     let stdin = child.stdin.take().map(|mut w| {
         std::thread::spawn(move || {
             // A hook that never reads its stdin gets a broken pipe here, which is fine.
@@ -674,8 +772,26 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             Ok(json!({
                 "hooks": hooks.iter().enumerate().map(|(i, h)| view(engine, i, h)).collect::<Vec<_>>(),
                 "runs": engine.hooks.runs(),
-                "events": EVENTS,
+                "events": names(),
+                "event_docs": events::TABLE.iter()
+                    .map(|s| json!({"name": s.name, "description": s.description}))
+                    .collect::<Vec<_>>(),
             }))
+        }
+        Action::HookEvents { event } => {
+            let mut v = events::table_json();
+            if let Some(name) = event.as_deref().filter(|e| !e.is_empty()) {
+                if events::find(name).is_none() {
+                    return Err(ConfigError::new(
+                        "not_found",
+                        format!("no hook event \"{name}\"; events: {}", names().join(", ")),
+                    ));
+                }
+                if let Some(list) = v["events"].as_array_mut() {
+                    list.retain(|e| e["name"] == name);
+                }
+            }
+            Ok(v)
         }
         Action::HookTest {
             hook,
@@ -686,10 +802,10 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
             let i = find(&hooks, hook)?;
             let h = &hooks[i];
             let event = event.clone().unwrap_or_else(|| h.event.clone());
-            if !EVENTS.contains(&event.as_str()) {
+            if events::find(&event).is_none() {
                 return Err(bad(format!(
                     "event \"{event}\" is not one of {}",
-                    EVENTS.join(", ")
+                    names().join(", ")
                 )));
             }
             let session = match session {
@@ -700,7 +816,16 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 None => newest_session(engine),
             };
             let data = json!({"session": session, "test": true});
-            let ctx = context(engine, &event, session.as_deref(), data);
+            let mut ctx = context(engine, &event, session.as_deref(), data);
+            // A test run is outside dedup: its key names the run, and it always runs.
+            ctx.seq = engine
+                .hooks
+                .next_seq(session.as_deref().unwrap_or_default());
+            ctx.dedup = format!(
+                "{}:{event}:test:{}",
+                session.as_deref().unwrap_or_default(),
+                ctx.seq
+            );
             let run = run_and_report(engine, &h.label(i), h, &ctx, true);
             serde_json::to_value(run).map_err(|e| ConfigError::new("internal", e.to_string()))
         }

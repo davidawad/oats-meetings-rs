@@ -1199,7 +1199,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Add a [[hooks]] entry: name, event (record.start, record.stop, record.pause, record.auto_start, record.auto_stop, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.",
+      "doc": "Add a [[hooks]] entry: name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated; hook-events shows each one's envelope), command (argv array, or a string split on spaces; with shell=true the script), timeout (e.g. \"30s\"; default app.hook_timeout), enabled, cwd.",
       "effect": "write",
       "name": "hook-add",
       "params": [
@@ -1242,7 +1242,7 @@
       "status": "implemented"
     },
     {
-      "doc": "Change fields of a hook (by name or 1-based position); timeout \"\" goes back to app.hook_timeout.",
+      "doc": "Change fields of a hook (by name or 1-based position): name, event (record.start, record.pause, record.stop, record.auto_start, record.auto_stop, transcript.final, calendar.matched, session.saved, notes.generated), command, shell, timeout (\"\" goes back to app.hook_timeout), enabled, cwd.",
       "effect": "write",
       "name": "hook-edit",
       "params": [
@@ -1283,6 +1283,19 @@
         },
         {
           "name": "cwd",
+          "required": false,
+          "type": "Option<String>"
+        }
+      ],
+      "status": "implemented"
+    },
+    {
+      "doc": "The hook event contract (oats.hook-event/1): every event a hook can name with its description, the bus topics that produce it, how its dedup key is formed, the JSON Schema of its data and an example envelope; the envelope schema; the OATS_* environment a run gets. event: just that one. The same as config/hook-events.json.",
+      "effect": "read",
+      "name": "hook-events",
+      "params": [
+        {
+          "name": "event",
           "required": false,
           "type": "Option<String>"
         }

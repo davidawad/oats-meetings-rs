@@ -26,7 +26,7 @@ layer through the control API and never has to reconstruct one from logs.
 | Layer | Thing | Where it lives | How an agent reads it |
 | --- | --- | --- | --- |
 | L0 raw | Every bus message a session saw, with `seq` and `at` | `<session>/events.jsonl`, append-only | `session-events` |
-| L1 contract | Named hook events, each a versioned JSON Schema over one envelope | one table in `hooks.rs`, generated to `config/hook-events.json` | `hook-events` |
+| L1 contract | Named hook events, each a versioned JSON Schema over one envelope | one table in `hooks/events.rs`, generated to `config/hook-events.json` | `hook-events` |
 | L2 trigger | `event` + `match` filter, `matches(hook, envelope) -> Verdict { fire, reason }` | `hooks.rs`, pure | `hook-explain` |
 | L3 action | `command` run with env + envelope (stdin and `OATS_EVENT_FILE`) | `hooks.rs` `run` | `hook-test` |
 | L4 ledger | One row per decision and per run: `run_id`, hook, event, `seq`, verdict, exit, timing, output tail | `<session>/hook-runs.jsonl` + the in-memory history | `hook-runs`, `hook-list` |
@@ -62,6 +62,7 @@ Rules that hold across layers:
   "at": "2026-11-13T15:04:05.120Z",
   "run_id": "01JD...-hook-3",
   "dedup": "<session>:transcript.phrase:<utterance id>:<phrase>",
+  "hook": "flag-pricing",
   "session": { "id": "...", "dir": "...", "title": "...", "audio": "...", "transcript": "..." },
   "calendar": { "title": "...", "start": "...", "end": "...", "attendees": ["..."], "source": "..." },
   "data": { }
@@ -69,10 +70,29 @@ Rules that hold across layers:
 ```
 
 `data` is per event and has its own schema. `seq` is monotonic within a
-session. A hook fires at most once per `dedup` key. The env vars stay
-(`OATS_EVENT`, `OATS_SESSION_*`, ...), plus `OATS_RUN_ID`, `OATS_SEQ` and
-`OATS_EVENT_FILE` (the envelope written to a file, for scripts that cannot
-read stdin).
+session: it counts the bus messages that name the session (`session` or
+`id`), so every hook event one message stands for shares its `seq`
+(`record.stop` and `transcript.final` at stop). A hook fires at most once per
+`dedup` key (in memory, per session); `hook-test` runs are outside dedup. The
+env vars stay (`OATS_EVENT`, `OATS_SESSION_*`, ...), plus `OATS_RUN_ID`,
+`OATS_SEQ` and `OATS_EVENT_FILE` (the envelope written to a file, for
+scripts that cannot read stdin, removed after the run).
+
+`hook` (the hook's name, as `OATS_HOOK`) is in the envelope too: `run_id`
+already makes the envelope per run, and a script reading only stdin should
+not need the environment to know which hook it is (dot-4uzgol.111.2).
+
+Dedup keys are `<session>:<event>[:<occurrence>]`, the occurrence named by
+the table: once per session for `record.stop`, `record.auto_start`,
+`record.auto_stop`; `data.started_at` for `record.start`; the calendar event
+id for `calendar.matched` (the match at start and at stop is one); `record`
+for `transcript.final` at stop and `seq` for a later transcription; `seq`
+for every `record.pause`, `session.saved` and `notes.generated`. The schemas
+are written in a small JSON Schema subset (`type`, `const`, `enum`,
+`required`, `properties`, `additionalProperties`, `items`, `anyOf`,
+`minimum`) that `hooks::events::validate` checks; a `data` schema types the
+fields it lists and allows more (a payload may grow), the envelope allows
+none.
 
 ## Events after this epic
 

@@ -63,6 +63,18 @@ impl Ui {
             .collect()
     }
 
+    /// What the selected event is, from the hook event table (`hook-list` event_docs).
+    pub fn event_doc(&self, event: &str) -> String {
+        self.list["event_docs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|e| e["name"] == event)
+            .and_then(|e| e["description"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    }
+
     /// What `ui-state` shows for the panel.
     pub fn dump(&self) -> Value {
         json!({
@@ -74,6 +86,7 @@ impl Ui {
             "draft": self.draft.as_ref().map(|d| json!({
                 "editing": d.editing, "name": d.name, "event": d.event, "command": d.command,
                 "shell": d.shell, "timeout": d.timeout, "cwd": d.cwd, "error": d.error,
+                "event_doc": self.event_doc(&d.event),
             })),
         })
     }
@@ -394,7 +407,21 @@ fn form(w: &MainWindow, d: &Draft, cx: &mut Context<MainWindow>) -> AnyElement {
             "Name",
             text_box(w, NAME, &d.name, "name", 260., cx),
         ))
-        .child(labelled("Event", chips.into_any_element()))
+        .child(labelled(
+            "Event",
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(4.))
+                .child(chips)
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(rgb(t.dim))
+                        .child(w.state.hooks_ui.event_doc(&d.event)),
+                )
+                .into_any_element(),
+        ))
         .child(labelled(
             "Command",
             text_box(
@@ -640,6 +667,21 @@ mod tests {
     fn invoke(v: &mut MainWindow, name: &str, args: Value, cx: &mut Context<MainWindow>) {
         v.drive(&json!({"op": "invoke", "name": name, "args": args}), cx)
             .unwrap();
+    }
+
+    /// The event picker and its description come from the hook event table, through hook-list.
+    #[test]
+    fn the_event_picker_reads_the_hook_event_table() {
+        let (engine, _d) = testutil::engine(&[]);
+        let ui = Ui {
+            list: model::dispatch(&engine, "hook-list", json!({})).unwrap(),
+            ..Ui::default()
+        };
+        assert_eq!(ui.events(), oats_core::hooks::names());
+        for spec in oats_core::hooks::events::TABLE {
+            assert_eq!(ui.event_doc(spec.name), spec.description);
+        }
+        assert_eq!(ui.event_doc("record.explode"), "");
     }
 
     /// Add a hook through the form, test-run it, see the failed run on its row and as the banner,

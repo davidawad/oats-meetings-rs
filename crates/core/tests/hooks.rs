@@ -81,12 +81,13 @@ fn rig(toml: &str) -> Rig {
     }
 }
 
-/// Writes every OATS_* variable to `<out>/<event>.env` (one per line) and stdin to `<event>.json`,
-/// each replaced whole (two runs of one event may overlap).
-const SPY: &str = r#"t="$1/$OATS_EVENT.$$"; printf '%s\n' "$OATS_EVENT" "$OATS_SESSION_ID" "$OATS_SESSION_DIR" "$OATS_TITLE" "$OATS_AUDIO" "$OATS_TRANSCRIPT" "$OATS_HOOK" "$PWD" > "$t.env"; cat > "$t.json"; mv "$t.json" "$1/$OATS_EVENT.json"; mv "$t.env" "$1/$OATS_EVENT.env""#;
+/// Writes every OATS_* variable to `<out>/<event>.env` (one per line), stdin to `<event>.json` and
+/// the OATS_EVENT_FILE to `<event>.file.json`, each replaced whole (two runs of one event may
+/// overlap).
+const SPY: &str = r#"t="$1/$OATS_EVENT.$$"; printf '%s\n' "$OATS_EVENT" "$OATS_SESSION_ID" "$OATS_SESSION_DIR" "$OATS_TITLE" "$OATS_AUDIO" "$OATS_TRANSCRIPT" "$OATS_HOOK" "$PWD" "$OATS_RUN_ID" "$OATS_SEQ" "$OATS_EVENT_FILE" > "$t.env"; cp "$OATS_EVENT_FILE" "$t.file"; cat > "$t.json"; mv "$t.file" "$1/$OATS_EVENT.file.json"; mv "$t.json" "$1/$OATS_EVENT.json"; mv "$t.env" "$1/$OATS_EVENT.env""#;
 
 fn spy_hooks(out: &Path) -> String {
-    hooks::EVENTS
+    hooks::names()
         .iter()
         .map(|e| {
             format!(
@@ -118,6 +119,35 @@ fn seen(out: &Path, event: &str) -> (Vec<String>, Value) {
     (lines, serde_json::from_str(&stdin).unwrap())
 }
 
+/// The envelope a spy saw holds to the event's schema, the OATS_EVENT_FILE held the same JSON
+/// and OATS_RUN_ID / OATS_SEQ are the envelope's. Two runs of one event may overlap, so the spy's
+/// three files are read again until they are one run's.
+fn check_envelope(out: &Path, event: &str) {
+    let mut got = (vec![], Value::Null);
+    wait_until(&format!("one {event} run's spy files"), || {
+        let (env, stdin) = seen(out, event);
+        let file = std::fs::read_to_string(out.join(format!("{event}.file.json")))
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
+        let same = env.get(8).map(String::as_str) == stdin["run_id"].as_str()
+            && file.as_ref() == Some(&stdin);
+        got = (env, stdin);
+        same
+    });
+    let (env, stdin) = got;
+    let spec = hooks::events::find(event).unwrap();
+    hooks::events::validate(&hooks::events::envelope_schema(Some(spec)), &stdin)
+        .unwrap_or_else(|e| panic!("{event}: {e}\n{stdin}"));
+    assert_eq!(stdin["schema"], "oats.hook-event/1");
+    assert_eq!(stdin["event"], event);
+    assert_eq!(env[9], stdin["seq"].to_string(), "{event} OATS_SEQ");
+    assert!(
+        env[10].ends_with(".json"),
+        "{event} OATS_EVENT_FILE {}",
+        env[10]
+    );
+}
+
 fn record(r: &Rig, id: &str, title: &str) -> Value {
     let e = &r.engine;
     e.dispatch(&Action::RecordStart {
@@ -142,7 +172,7 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     )
     .unwrap();
     r.engine.reload("test").unwrap();
-    assert_eq!(r.engine.snapshot().config.hooks.len(), hooks::EVENTS.len());
+    assert_eq!(r.engine.snapshot().config.hooks.len(), hooks::names().len());
     let stop = record(&r, "hooked", "Hooked call");
     assert_eq!(stop["transcription"]["final"], "ok", "{stop}");
     let dir = r.root.join("rec").join("hooked");
@@ -166,7 +196,16 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
             std::fs::canonicalize(dir).unwrap(),
             "{event} cwd"
         );
-        assert_eq!(stdin["event"], event);
+        check_envelope(&out, event);
+        assert_eq!(stdin["hook"], format!("spy-{event}"));
+        assert!(
+            stdin["dedup"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("hooked:{event}")),
+            "{stdin}"
+        );
+        assert_eq!(stdin["calendar"], Value::Null, "{event}: no calendar event");
         assert_eq!(stdin["session"]["id"], "hooked");
         assert_eq!(stdin["session"]["title"], "Hooked call");
         if event != "record.start" {
@@ -190,6 +229,13 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     }
     let (_, pause) = seen(&out, "record.pause");
     assert!(pause["data"]["paused"].is_boolean(), "{pause}");
+    // seq is monotonic within the session: start, pause, stop (one message: transcript.final
+    // shares its seq), then the save.
+    let seq = |e: &str| seen(&out, e).1["seq"].as_u64().unwrap();
+    assert!(seq("record.start") < seq("record.pause"));
+    assert!(seq("record.pause") < seq("record.stop"));
+    assert_eq!(seq("record.stop"), seq("transcript.final"));
+    assert!(seq("record.stop") < seq("session.saved"));
     // A recording that matched a calendar event: the engine publishes the match in the
     // recording-started / -stopped payload (calendar.event), which is what calendar.matched follows.
     r.engine.bus.publish(
@@ -199,6 +245,24 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     let (env, stdin) = seen(&out, "calendar.matched");
     assert_eq!(env[1], "hooked");
     assert_eq!(stdin["data"]["calendar"]["event"]["title"], "Standup");
+    check_envelope(&out, "calendar.matched");
+    assert_eq!(stdin["dedup"], "hooked:calendar.matched:e1");
+    assert_eq!(stdin["calendar"]["title"], "Standup", "{stdin}");
+    // Auto-start and auto-stop, as the engine publishes them.
+    r.engine.bus.publish(
+        "auto-started",
+        json!({"session": "hooked", "source": "speaker", "after": "10s",
+               "message": "Recording started: speaker audio for 10s"}),
+    );
+    r.engine.bus.publish(
+        "auto-stopped",
+        json!({"session": "hooked", "silence_ms": 300_000, "after": "5m", "cut_ms": 1000,
+               "trimmed_ms": 0, "duration_ms": 1000, "message": "Recording stopped after 5m of silence"}),
+    );
+    for event in ["record.auto_start", "record.auto_stop"] {
+        check_envelope(&out, event);
+        assert_eq!(seen(&out, event).0[1], "hooked");
+    }
     // A re-transcription saves the session as transcribed: transcript.final again.
     std::fs::remove_file(out.join("transcript.final.env")).unwrap();
     r.engine
@@ -210,6 +274,15 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     let (env, stdin) = seen(&out, "transcript.final");
     assert_eq!(env[1], "hooked");
     assert_eq!(stdin["data"]["change"], "transcribed");
+    check_envelope(&out, "transcript.final");
+    // Every run is over: their event files are gone.
+    wait_until("the event files removed", || {
+        hooks::names().iter().all(|e| {
+            std::fs::read_to_string(out.join(format!("{e}.env")))
+                .map(|s| s.lines().nth(10).is_some_and(|f| !Path::new(f).exists()))
+                .unwrap_or(true)
+        })
+    });
     // Every run is listed with its exit code.
     let list = r.engine.dispatch(&Action::HookList {}).unwrap();
     let runs = list["runs"].as_array().unwrap();
@@ -277,6 +350,7 @@ fn notes_generated_fires_after_notes_are_written() {
         })
         .unwrap();
     let (env, stdin) = seen(&out, "notes.generated");
+    check_envelope(&out, "notes.generated");
     assert_eq!(env[1], "noted");
     assert_eq!(env[3], "Noted");
     assert_eq!(stdin["data"]["template"], "Plain");
@@ -539,4 +613,173 @@ fn bad_hooks_tables_veto_the_config() {
         );
         assert!(r.engine.snapshot().config.hooks.is_empty());
     }
+}
+
+#[test]
+fn a_hook_fires_at_most_once_per_dedup_key() {
+    let r = rig("");
+    let out = r.out.clone();
+    let log = |name: &str, event: &str| Action::HookAdd {
+        name: name.into(),
+        event: event.into(),
+        command: json!([
+            // One file per run (runs of one hook overlap): <hook>.<run id>.json.
+            r#"cat > "$1/$OATS_HOOK.$OATS_RUN_ID.tmp"; mv "$1/$OATS_HOOK.$OATS_RUN_ID.tmp" "$1/$OATS_HOOK.$OATS_RUN_ID.json""#,
+            out.to_str().unwrap()
+        ]),
+        shell: Some(true),
+        timeout: None,
+        enabled: None,
+        cwd: None,
+    };
+    r.engine
+        .dispatch(&log("cal-a", "calendar.matched"))
+        .unwrap();
+    r.engine
+        .dispatch(&log("cal-b", "calendar.matched"))
+        .unwrap();
+    r.engine.dispatch(&log("stop", "record.stop")).unwrap();
+    r.engine.dispatch(&log("pause", "record.pause")).unwrap();
+    let e1 = json!({"session": "d1", "calendar": {"event": {"id": "e1", "title": "Standup"}}});
+    // The match at start, at stop and a stop seen twice are one calendar.matched and one stop.
+    r.engine.bus.publish("recording-started", e1.clone());
+    r.engine.bus.publish("recording-stopped", e1.clone());
+    r.engine.bus.publish("recording-stopped", e1.clone());
+    // Another event, and another session, are new keys; every pause is its own occurrence.
+    r.engine.bus.publish(
+        "recording-stopped",
+        json!({"session": "d1", "calendar": {"event": {"id": "e2"}}}),
+    );
+    r.engine
+        .bus
+        .publish("recording-stopped", json!({"session": "d2"}));
+    for _ in 0..2 {
+        r.engine.bus.publish(
+            "recording-paused",
+            json!({"session": "d2", "paused": true, "duration_ms": 5}),
+        );
+    }
+    let lines = |hook: &str| -> Vec<Value> {
+        std::fs::read_dir(&out)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(&format!("{hook}.")) && n.ends_with(".json"))
+            .map(|n| serde_json::from_str(&std::fs::read_to_string(out.join(n)).unwrap()).unwrap())
+            .collect()
+    };
+    let total = || {
+        r.engine.dispatch(&Action::HookList {}).unwrap()["runs"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    wait_until("the hook runs", || total() >= 8);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(total(), 8, "{:?}", r.engine.dispatch(&Action::HookList {}));
+    for hook in ["cal-a", "cal-b"] {
+        let mut keys: Vec<String> = lines(hook)
+            .iter()
+            .map(|e| e["dedup"].as_str().unwrap().to_string())
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            ["d1:calendar.matched:e1", "d1:calendar.matched:e2"],
+            "{hook}"
+        );
+    }
+    let mut stops: Vec<String> = lines("stop")
+        .iter()
+        .map(|e| e["dedup"].as_str().unwrap().to_string())
+        .collect();
+    stops.sort();
+    assert_eq!(stops, ["d1:record.stop", "d2:record.stop"]);
+    let pauses = lines("pause");
+    assert_eq!(pauses.len(), 2);
+    assert_ne!(pauses[0]["dedup"], pauses[1]["dedup"]);
+    // hook-test is outside dedup: it runs every time.
+    for _ in 0..2 {
+        let run = r
+            .engine
+            .dispatch(&Action::HookTest {
+                hook: "stop".into(),
+                session: None,
+                event: None,
+            })
+            .unwrap();
+        assert_eq!(run["ok"], true, "{run}");
+    }
+}
+
+#[test]
+fn hook_events_is_the_table_and_the_committed_file() {
+    let r = rig("");
+    let v = r
+        .engine
+        .dispatch(&Action::HookEvents { event: None })
+        .unwrap();
+    assert_eq!(v, hooks::events::table_json());
+    let committed: Value = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/hook-events.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        v, committed,
+        "config/hook-events.json drifted: run config generate"
+    );
+    let names: Vec<&str> = v["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, hooks::names());
+    for e in v["events"].as_array().unwrap() {
+        let spec = hooks::events::find(e["name"].as_str().unwrap()).unwrap();
+        hooks::events::validate(&hooks::events::envelope_schema(Some(spec)), &e["example"])
+            .unwrap_or_else(|err| panic!("{}: {err}", e["name"]));
+    }
+    let one = r
+        .engine
+        .dispatch(&Action::HookEvents {
+            event: Some("record.stop".into()),
+        })
+        .unwrap();
+    assert_eq!(one["events"].as_array().unwrap().len(), 1);
+    assert_eq!(one["events"][0]["name"], "record.stop");
+    let e = r
+        .engine
+        .dispatch(&Action::HookEvents {
+            event: Some("record.explode".into()),
+        })
+        .unwrap_err();
+    assert_eq!(e.code, "not_found");
+    // hook-list's event picker and the hook-add / hook-edit docs come from the table too.
+    let list = r.engine.dispatch(&Action::HookList {}).unwrap();
+    assert_eq!(list["events"], json!(hooks::names()));
+    assert_eq!(list["event_docs"].as_array().unwrap().len(), names.len());
+    let manifest = oats_core::action::manifest_json();
+    for verb in ["hook-add", "hook-edit"] {
+        let doc = manifest["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == verb)
+            .unwrap()["doc"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(!doc.contains("{hook-events}"), "{doc}");
+        assert!(doc.contains(&hooks::names().join(", ")), "{verb}: {doc}");
+    }
+    // The [[hooks]] schema's event enum is the table.
+    assert_eq!(
+        hooks::item_schema()["properties"]["event"]["enum"],
+        json!(hooks::names())
+    );
 }

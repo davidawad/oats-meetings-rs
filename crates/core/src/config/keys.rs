@@ -921,7 +921,7 @@ pub const KEYS: &[Key] = &[
         path: "hooks",
         kind: Kind::Hooks,
         default: Def::Empty,
-        doc: "Commands run on recording and session events, one [[hooks]] table each: event (record.start, record.stop, record.pause, session.saved, transcript.final, notes.generated, calendar.matched), command (argv array; run through the shell only with shell = true), optional name, timeout (default app.hook_timeout), enabled (default true) and cwd (default the session folder). A hook gets OATS_EVENT, OATS_SESSION_ID, OATS_SESSION_DIR, OATS_TITLE, OATS_AUDIO, OATS_TRANSCRIPT and OATS_HOOK in its environment and the event as JSON on stdin. Hooks run in the background and never stop a recording; hook-list shows each run's exit code and output. Edit with hook-add / -edit / -remove / -enable.",
+        doc: "Commands run on recording and session events, one [[hooks]] table each: event (one of the hook event table, listed with schemas and examples by hook-events and in config/hook-events.json), command (argv array; run through the shell only with shell = true), optional name, timeout (default app.hook_timeout), enabled (default true) and cwd (default the session folder). A hook gets OATS_EVENT, OATS_SESSION_ID, OATS_SESSION_DIR, OATS_TITLE, OATS_AUDIO, OATS_TRANSCRIPT, OATS_HOOK, OATS_RUN_ID, OATS_SEQ and OATS_EVENT_FILE in its environment and the oats.hook-event/1 envelope as JSON on stdin and in the file OATS_EVENT_FILE; it fires at most once per envelope dedup key. Hooks run in the background and never stop a recording; hook-list shows each run's exit code and output. Edit with hook-add / -edit / -remove / -enable.",
         ui: false,
         reload: Reload::Live,
     },

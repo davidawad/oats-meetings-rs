@@ -1589,6 +1589,7 @@ impl Engine {
             | Action::IcsEvents { .. } => crate::ics::dispatch(self, a),
             Action::HookList {}
             | Action::HookTest { .. }
+            | Action::HookEvents { .. }
             | Action::HookAdd { .. }
             | Action::HookEdit { .. }
             | Action::HookRemove { .. }
