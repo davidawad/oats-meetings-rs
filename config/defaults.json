@@ -3,6 +3,7 @@
     "hook_before_end": "5m",
     "hook_cooldown": "30s",
     "hook_history": 50,
+    "hook_ledger_tail": 4096,
     "hook_output": 65536,
     "hook_poll": "20ms",
     "hook_timeout": "30s",

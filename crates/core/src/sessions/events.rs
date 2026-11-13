@@ -124,7 +124,12 @@ pub struct Filter {
 /// filtered by `f`. A line that is not a JSON object (a torn last line) is skipped and counted.
 /// A session without a log has none: `count` 0.
 pub fn read(dir: &Path, f: &Filter) -> std::io::Result<Value> {
-    let path: PathBuf = dir.join(FILE);
+    read_file(&dir.join(FILE), f)
+}
+
+/// `read` of a log at any `path` (`hook-simulate file=`).
+pub fn read_file(path: &Path, f: &Filter) -> std::io::Result<Value> {
+    let path: PathBuf = path.to_path_buf();
     let text = match std::fs::read(&path) {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),

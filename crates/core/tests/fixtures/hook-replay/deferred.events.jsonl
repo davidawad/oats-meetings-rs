@@ -1,0 +1,9 @@
+{"seq":1,"at":"2026-11-14T09:00:00.000Z","topic":"recording-started","data":{"session":"2026-11-14-deferred","path":"/home/me/oats/sessions/2026-11-14-deferred/audio.wav","backend":"pipewire","system_backend":null,"channels":2,"rate":48000,"started_at":"2026-11-14T09:00:00Z","title":"Pricing review","transcription":{"state":"deferred","live":"off","final":"deferred"}}}
+{"seq":2,"at":"2026-11-14T09:30:00.000Z","topic":"record.before_stop","data":{"session":"2026-11-14-deferred","reason":"manual","by":"window"}}
+{"seq":3,"at":"2026-11-14T09:30:00.000Z","topic":"recording-stopped","data":{"session":"2026-11-14-deferred","path":"/home/me/oats/sessions/2026-11-14-deferred/audio.wav","duration_ms":1800000,"trimmed_ms":null,"by":"window","forced":false,"reason":null,"transcription":{"state":"deferred","final":"running"}}}
+{"seq":4,"at":"2026-11-14T09:30:00.000Z","topic":"session-saved","data":{"id":"2026-11-14-deferred","change":"record"}}
+{"seq":5,"at":"2026-11-14T09:30:01.000Z","topic":"transcribe-progress","data":{"session":"2026-11-14-deferred","mode":"deferred","state":"running"}}
+{"seq":6,"at":"2026-11-14T09:30:20.000Z","topic":"segment","data":{"session":"2026-11-14-deferred","kind":"final","offline":true,"speaker":"remote_1","text":"What about pricing?","start":12.0,"end":14.0}}
+{"seq":7,"at":"2026-11-14T09:30:21.000Z","topic":"segment","data":{"session":"2026-11-14-deferred","kind":"final","offline":true,"speaker":"you","text":"Pricing is fine.","start":100.0,"end":101.5}}
+{"seq":8,"at":"2026-11-14T09:31:00.000Z","topic":"session-saved","data":{"id":"2026-11-14-deferred","change":"transcribed"}}
+{"seq":9,"at":"2026-11-14T09:31:00.000Z","topic":"transcribe-progress","data":{"session":"2026-11-14-deferred","mode":"deferred","state":"done"}}

@@ -1,0 +1,14 @@
+{"seq":1,"at":"2026-11-12T10:00:00.000Z","topic":"recording-started","data":{"session":"2026-11-12-manual","path":"/home/me/oats/sessions/2026-11-12-manual/audio.wav","backend":"pipewire","system_backend":null,"channels":2,"rate":48000,"started_at":"2026-11-12T10:00:00Z","title":"1:1 Bob","transcription":{"live":"on","final":"on"}}}
+{"seq":2,"at":"2026-11-12T10:00:07.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"live","speaker":"you","text":"Let's agree on next steps.","start":5.0,"end":7.0}}
+{"seq":3,"at":"2026-11-12T10:00:10.000Z","topic":"recording-paused","data":{"session":"2026-11-12-manual","paused":true,"duration_ms":10000}}
+{"seq":4,"at":"2026-11-12T10:00:12.000Z","topic":"recording-paused","data":{"session":"2026-11-12-manual","paused":false,"duration_ms":10000}}
+{"seq":5,"at":"2026-11-12T10:00:23.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"live","speaker":"remote_1","text":"Next steps: I send the doc.","start":20.0,"end":23.0}}
+{"seq":6,"at":"2026-11-12T10:01:02.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"live","speaker":"you","text":"Next steps are clear.","start":60.0,"end":62.0}}
+{"seq":7,"at":"2026-11-12T10:05:00.000Z","topic":"auto-stop-pending","data":{"session":"2026-11-12-manual","silence_ms":240000,"stop_in_ms":60000,"after":"5m","message":"No sound for a while: recording stops in 1m unless you keep it"}}
+{"seq":8,"at":"2026-11-12T10:06:02.000Z","topic":"record.before_stop","data":{"session":"2026-11-12-manual","reason":"auto","by":"auto-stop"}}
+{"seq":9,"at":"2026-11-12T10:06:03.000Z","topic":"segment","data":{"session":"2026-11-12-manual","kind":"final","speaker":"you","text":"Let's agree on next steps.","start":5.1,"end":7.0}}
+{"seq":10,"at":"2026-11-12T10:06:03.000Z","topic":"recording-stopped","data":{"session":"2026-11-12-manual","path":"/home/me/oats/sessions/2026-11-12-manual/audio.wav","duration_ms":362000,"trimmed_ms":62000,"by":"auto-stop","forced":false,"reason":null,"transcription":{"final":"ok"}}}
+{"seq":11,"at":"2026-11-12T10:06:03.000Z","topic":"session-saved","data":{"id":"2026-11-12-manual","change":"record"}}
+{"seq":12,"at":"2026-11-12T10:06:03.000Z","topic":"auto-stopped","data":{"session":"2026-11-12-manual","silence_ms":300000,"after":"5m","cut_ms":62000,"trimmed_ms":62000,"duration_ms":362000,"message":"Recording stopped after 5m of silence"}}
+{"seq":13,"at":"2026-11-12T10:06:04.000Z","topic":"hook-finished","data":{"seq":3,"run_id":"y","hook":"stop","event":"record.stop","session":"2026-11-12-manual","ok":true}}
+{"seq":14,"at":"2026-11-12T10:09:00.000Z","topic":"notes.generated","data":{"session":"2026-11-12-manual","template":"1:1","notes":{"text":"## Summary\n...","template":"1:1"}}}

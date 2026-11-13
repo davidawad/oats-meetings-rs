@@ -10,6 +10,8 @@ hook_before_end = "5m"
 hook_cooldown = "30s"
 # Hook runs, and hook decisions (fire or skip, with the reason), kept (newest first) for hook-list and Settings.
 hook_history = 50
+# Bytes of the end of a hook run's kept stdout and of its stderr (app.hook_output) written to the session's hook-runs.jsonl ledger (stdout_tail, stderr_tail), read by hook-runs. 0: no output in the ledger.
+hook_ledger_tail = 4096
 # Bytes of a hook run's stdout and of its stderr kept for hook-list and Settings; the rest is read and dropped.
 hook_output = 65536
 # How often a running hook is checked for having exited (and against its timeout).

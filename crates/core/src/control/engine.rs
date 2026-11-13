@@ -1788,6 +1788,8 @@ impl Engine {
             | Action::HookTest { .. }
             | Action::HookEvents { .. }
             | Action::HookExplain { .. }
+            | Action::HookSimulate { .. }
+            | Action::HookRuns { .. }
             | Action::HookAdd { .. }
             | Action::HookEdit { .. }
             | Action::HookRemove { .. }

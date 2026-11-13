@@ -29,8 +29,8 @@ layer through the control API and never has to reconstruct one from logs.
 | L1 contract | Named hook events, each a versioned JSON Schema over one envelope | one table in `hooks/events.rs`, generated to `config/hook-events.json` | `hook-events` |
 | L2 trigger | `event` + `match` filter, `matches(hook, envelope) -> Verdict { fire, reason }` | `hooks.rs`, pure | `hook-explain` |
 | L3 action | `command` run with env + envelope (stdin and `OATS_EVENT_FILE`) | `hooks.rs` `run` | `hook-test` |
-| L4 ledger | One row per decision and per run: `run_id`, hook, event, `seq`, verdict, exit, timing, output tail | `<session>/hook-runs.jsonl` + the in-memory history | `hook-runs`, `hook-list` |
-| L5 replay | L0 fed back through L2 (and optionally L3) | `hook-simulate` | `hook-simulate --dry-run` |
+| L4 ledger | One row per decision and per run: `run_id`, hook, event, `seq`, verdict, exit, timing, output tail | `<session>/hook-runs.jsonl` (`hooks/ledger.rs`) + the in-memory history | `hook-runs`, `hook-list` |
+| L5 replay | L0 fed back through L2 (and optionally L3) | `hooks/replay.rs`, pure | `hook-simulate` (`run = false`, the default, runs nothing) |
 
 Rules that hold across layers:
 
@@ -336,20 +336,87 @@ panel) returns `warnings`: one line per enabled phrase hook that cannot fire
 mid-meeting (`audio.transcribe` `deferred` or `off`, or `stt.live.enabled =
 false`).
 
+## L4: the ledger (dot-4uzgol.111.8, `hooks/ledger.rs`)
+
+`<session>/hook-runs.jsonl` gets one row per verdict the engine makes on a
+session's event (fire or skip, the `hook-decided` it publishes) and one per
+run (by the event, `hook-test` or `hook-simulate run = true`), appended when
+the session's directory exists (a `record.before_start` names no session, so
+it is in no ledger). Every row has the same fields:
+
+```json
+{"kind": "run", "at": "...", "session": "...", "run_id": "...", "hook": "...",
+ "event": "record.stop", "seq": 12, "dedup": "...", "verdict": "fire",
+ "reason": "match.title: \"Standup*\" matched \"Standup\"", "outcome": "ok",
+ "exit": 0, "timed_out": false, "error": null, "started": "...", "ms": 41,
+ "stdout_tail": "...", "stderr_tail": "", "test": false, "simulated": false}
+```
+
+A verdict row (`kind = "verdict"`) has null run fields (its run, if any, is
+the next row with the same hook and `dedup`); a run row's `reason` is the
+verdict that fired it. `outcome` is `fire` or `skip` for a verdict, `ok`,
+`failed` or `timed_out` for a run. The output tails are the last
+`app.hook_ledger_tail` bytes of what the run kept (`app.hook_output`). The
+writer is as the raw log's: one append of a whole line under the session's
+own lock, so a crash leaves at most a torn last line, which `hook-runs`
+skips and counts in `skipped`. Like `events.jsonl` it lives in the session
+directory, so trash, restore and delete carry it.
+
+`hook-runs` reads it: `session` (default every session, merged by `at`),
+`hook`, `event`, `outcome`, `limit` (the newest that many rows).
+
+## L5: replay (dot-4uzgol.111.8, `hooks/replay.rs`)
+
+`replay::simulate(hooks, lines, base, opts)` is pure. Each L0 line stands for
+the events `events_for` maps its topic to, or for the event it is named
+after (`notes.generated`, `calendar.ending`, `record.before_stop`: an
+action fired it and the log keeps it under its name, its dedup key formed
+as `fire` forms it). Every hook on the event is judged, disabled ones too,
+exactly as the tap does: `transcript.phrase` through `phrase::judge` (a
+fresh `State`, so cooldowns and the live-to-final dedup run in recording
+time as they did live), `calendar.ending` only for the hooks that came due on
+that tick (`match.before_end`, else `app.hook_before_end`, at least the
+line's `remaining_ms`; once each per replay), the rest through `matches`, then
+dedup in the replay's own set (it starts empty and consumes nothing of the
+engine's). The session is the store's (folder, files, title, calendar) when
+it knows the id, else what the log says (`recording-started`'s title and
+calendar event).
+
+`hook-simulate` runs it over a session's `events.jsonl` (default the newest)
+or `file` (any `events.jsonl`; its lines name the session) and returns
+`decisions` (every verdict in order: `seq`, `topic`, `event`, `hook`,
+`fire`, `reason`, `dedup`) and `fires` (each with the envelope it would
+get, `run_id` `simulated-<seq>-<hook>`). `hook` judges just that one;
+`enable = true` judges every hook as if it were on (the agent loop: add the
+hook with `enabled = false`, simulate, then `hook-enable`). `run = false`
+(the default) runs and writes nothing. `run = true` runs each fire in order
+and waits for it, as `hook-test` does (so the run's own `hook-finished` lands
+in the raw log, as `hook-test`'s does), adds its result to the fire as
+`run`, and writes every verdict and run to the session's ledger with
+`simulated = true`.
+
+The replay tests (`crates/core/tests/hook_replay.rs`) feed the fixtures in
+`crates/core/tests/fixtures/hook-replay/` (a calendar-matched meeting with
+phrases, a manual recording that auto-stops, a deferred-transcription
+session) through `simulate` and assert the exact ordered verdict list, the
+reasons and dedup keys, and that every fire's envelope holds to its schema.
+
 ## Agent surface (all in `config/actions.json`)
 
 | Verb | Returns |
 | --- | --- |
 | `hook-events` | every event: description, `data` schema, an example envelope, which bus topic produces it |
 | `hook-explain` | for a session (default newest) and an event: each hook, fire or not, and why (`utterance` for `transcript.phrase`) |
-| `hook-simulate` | replays `<session>/events.jsonl` (or a given file) through L2; `run = true` also runs L3; returns the ordered fire list |
-| `hook-runs` | the ledger, filterable by session, hook, event, outcome |
+| `hook-simulate` | replays `<session>/events.jsonl` (or a given `file`) through L2; `run = true` also runs L3 and ledgers it as `simulated`; returns every verdict in order and the fires with their envelopes; `hook`, `enable` |
+| `hook-runs` | the ledger, filterable by `session`, `hook`, `event`, `outcome` (`fire`, `skip`, `ok`, `failed`, `timed_out`), `limit` |
 | `session-events` | the raw L0 log of a session (default the newest), filtered by `topic` and a `from`..`to` `seq` range |
 | `subscribe topics=["hook-finished", "hook-decided"]` | live stream (already exists) |
 
-An agent's loop is `hook-events`, write the hook, `hook-simulate` on a real
-past session, `hook-enable`. It never needs a live meeting to know what will
-happen.
+An agent's loop is `hook-events`, write the hook (`hook-add` with
+`enabled = false`), `hook-simulate hook=<it> enable=true` on a real past
+session (`run = true` to see its command work on that session's envelopes),
+`hook-enable`, and later `hook-runs hook=<it>` for what it did. It never
+needs a live meeting to know what will happen.
 
 ## Build cache
 

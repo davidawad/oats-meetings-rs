@@ -238,6 +238,8 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("config-get", "the settings view reads config-resolved"),
     ("hook-events", "the hook event contract for scripts and agents; the Settings hook form shows the same table through hook-list"),
     ("session-events", "the raw per-session event log for agents and hook replay (ctl)"),
+    ("hook-simulate", "agent replay (ctl): a past session's raw log through the hook triggers; the Settings hook rows show live decisions and runs through hook-list"),
+    ("hook-runs", "agent query (ctl): the per-session hook ledger; the Settings hook rows show the recent runs and decisions through hook-list"),
     ("hook-explain", "agent query (ctl): would each hook fire for a session and event; each Settings hook row shows its last decision and reason through hook-list"),
     ("session-import", "one-shot migration verb (ctl)"),
     ("config-convert", "one-shot migration verb (ctl)"),

@@ -43,6 +43,15 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "hook_ledger_tail": {
+          "default": 4096,
+          "description": "Bytes of the end of a hook run's kept stdout and of its stderr (app.hook_output) written to the session's hook-runs.jsonl ledger (stdout_tail, stderr_tail), read by hook-runs. 0: no output in the ledger.",
+          "maximum": 16777216,
+          "minimum": 0,
+          "type": "integer",
+          "x-reload": "live",
+          "x-ui": false
+        },
         "hook_output": {
           "default": 65536,
           "description": "Bytes of a hook run's stdout and of its stderr kept for hook-list and Settings; the rest is read and dropped.",

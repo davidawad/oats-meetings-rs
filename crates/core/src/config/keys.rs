@@ -966,6 +966,14 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "app.hook_ledger_tail",
+        kind: Kind::Int { min: 0, max: 16_777_216 },
+        default: Def::I(4_096),
+        doc: "Bytes of the end of a hook run's kept stdout and of its stderr (app.hook_output) written to the session's hook-runs.jsonl ledger (stdout_tail, stderr_tail), read by hook-runs. 0: no output in the ledger.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "app.hook_poll",
         kind: Kind::Duration { min_ms: MS, max_ms: SEC },
         default: Def::D(20 * MS),

@@ -15,11 +15,16 @@
 //! for their `blocking` hooks up to their timeout, failing open; the recording's watcher fires
 //! `calendar.ending` / `calendar.ended` from the `ending` timer. Every run (exit
 //! code, timing, the first `app.hook_output` bytes of stdout and stderr) is kept for `hook-list` and published as `hook-finished`; a failure
-//! is logged and shown, never raised into the session.
+//! is logged and shown, never raised into the session. Every decision and run of a session is
+//! also appended to its ledger, `<session>/hook-runs.jsonl` (`ledger`, read by `hook-runs`), and
+//! `hook-simulate` replays a session's raw log through the same judges (`replay`,
+//! dot-4uzgol.111.8).
 
 pub mod ending;
 pub mod events;
+pub mod ledger;
 pub mod phrase;
+pub mod replay;
 
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -554,6 +559,8 @@ pub struct Run {
     pub dedup: String,
     /// Started by `hook-test` rather than by the event.
     pub test: bool,
+    /// Started by `hook-simulate run=true` replaying a session's log.
+    pub simulated: bool,
     pub started: String,
     pub duration_ms: u64,
     pub exit_code: Option<i32>,
@@ -593,6 +600,8 @@ pub struct Runner {
     fired: Mutex<HashMap<String, BTreeSet<(String, String)>>>,
     /// Each session's `transcript.phrase` state (hits, fire times, dedup), judged in bus order.
     phrases: Mutex<HashMap<String, phrase::State>>,
+    /// Each session's `hook-runs.jsonl` writer.
+    ledger: ledger::Ledger,
 }
 
 impl Runner {
@@ -923,30 +932,30 @@ fn judge_and_start(
     ctx: &Ctx,
 ) -> Vec<(String, Hook, std::thread::JoinHandle<Run>)> {
     let envelope = ctx.envelope("", "");
-    let firing: Vec<(String, Hook)> = hooks
+    let firing: Vec<(String, Hook, String)> = hooks
         .into_iter()
-        .filter(|(label, hook)| {
-            let mut v = matches(hook, &envelope);
+        .filter_map(|(label, hook)| {
+            let mut v = matches(&hook, &envelope);
             // At most once per dedup key: a message seen again (a replay, a stop that
             // re-matches the calendar event of its start) does not run the hook again.
-            if v.fire && !engine.hooks.first(key, label, &ctx.dedup) {
+            if v.fire && !engine.hooks.first(key, &label, &ctx.dedup) {
                 v = Verdict {
                     fire: false,
                     reason: format!("already fired for {} ({})", ctx.dedup, v.reason),
                 };
             }
-            decide(engine, label, ctx, &v);
-            v.fire
+            decide(engine, &label, ctx, &v);
+            v.fire.then_some((label, hook, v.reason))
         })
         .collect();
     firing
         .into_iter()
-        .filter_map(|(label, hook)| {
+        .filter_map(|(label, hook, reason)| {
             let (engine, ctx, h, l) =
                 (Arc::clone(engine), ctx.clone(), hook.clone(), label.clone());
             match std::thread::Builder::new()
                 .name(format!("oats-hook-{label}"))
-                .spawn(move || run_and_report(&engine, &l, &h, &ctx, false))
+                .spawn(move || run_and_report(&engine, &l, &h, &ctx, Origin::Event, &reason))
             {
                 Ok(t) => Some((label, hook, t)),
                 Err(e) => {
@@ -1044,13 +1053,17 @@ fn start_phrase(
                     c.data = d.data;
                     decide(&engine, &d.hook, &c, &d.verdict);
                     let hook = hooks.iter().find(|(l, _)| *l == d.hook)?.1.clone();
-                    d.verdict.fire.then_some((d.hook, hook, c))
+                    d.verdict
+                        .fire
+                        .then_some((d.hook, hook, c, d.verdict.reason))
                 })
-                .map(|(label, hook, c)| {
+                .map(|(label, hook, c, reason)| {
                     let engine = Arc::clone(&engine);
                     std::thread::Builder::new()
                         .name(format!("oats-hook-{label}"))
-                        .spawn(move || run_and_report(&engine, &label, &hook, &c, false))
+                        .spawn(move || {
+                            run_and_report(&engine, &label, &hook, &c, Origin::Event, &reason)
+                        })
                 })
                 .collect();
             for t in threads.into_iter().flatten() {
@@ -1094,9 +1107,8 @@ pub fn warnings(cfg: &Config) -> Vec<String> {
         .collect()
 }
 
-/// Keep a decision and publish it as `hook-decided`.
-fn decide(engine: &Engine, label: &str, ctx: &Ctx, v: &Verdict) {
-    let d = Decision {
+fn decision(label: &str, ctx: &Ctx, v: &Verdict) -> Decision {
+    Decision {
         at: now_stamp(),
         hook: label.to_string(),
         event: ctx.event.clone(),
@@ -1105,22 +1117,61 @@ fn decide(engine: &Engine, label: &str, ctx: &Ctx, v: &Verdict) {
         dedup: ctx.dedup.clone(),
         fire: v.fire,
         reason: v.reason.clone(),
+    }
+}
+
+/// Append `row` to the ledger of the session `ctx` names, when its directory exists (L4; a
+/// session still recording has its directory before its `session.json` is whole).
+fn ledgered(engine: &Engine, ctx: &Ctx, row: &Value) {
+    let Some(s) = &ctx.session else {
+        return;
     };
+    if let Some(d) = ctx.dir.clone().or_else(|| engine.store().session_dir(s)) {
+        engine.hooks.ledger.append(s, &d, row);
+    }
+}
+
+/// Keep a decision, append it to the session's ledger and publish it as `hook-decided`.
+fn decide(engine: &Engine, label: &str, ctx: &Ctx, v: &Verdict) {
+    let d = decision(label, ctx, v);
     let max = engine.snapshot().config.app.hook_history as usize;
     engine.hooks.decided(&d, max);
+    ledgered(engine, ctx, &ledger::verdict_row(&d, false));
     engine.bus.publish(
         "hook-decided",
         serde_json::to_value(&d).unwrap_or(Value::Null),
     );
 }
 
-/// Run `hook`, keep the run, log a failure and publish `hook-finished`.
-fn run_and_report(engine: &Engine, label: &str, hook: &Hook, ctx: &Ctx, test: bool) -> Run {
+/// What started a run: its event, `hook-test` or `hook-simulate run=true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    Event,
+    Test,
+    Simulated,
+}
+
+/// Run `hook`, keep the run, append it to the session's ledger (with `reason`, the verdict that
+/// fired it), log a failure and publish `hook-finished`.
+fn run_and_report(
+    engine: &Engine,
+    label: &str,
+    hook: &Hook,
+    ctx: &Ctx,
+    origin: Origin,
+    reason: &str,
+) -> Run {
     let cfg = engine.snapshot().config.clone();
     let mut run = run(label, hook, ctx, &cfg);
-    run.test = test;
+    run.test = origin == Origin::Test;
+    run.simulated = origin == Origin::Simulated;
     run.seq = engine.hooks.seq.fetch_add(1, Ordering::SeqCst) + 1;
     engine.hooks.keep(&run, cfg.app.hook_history as usize);
+    ledgered(
+        engine,
+        ctx,
+        &ledger::run_row(&run, reason, cfg.app.hook_ledger_tail as usize),
+    );
     if !run.ok {
         crate::elog!(
             "oats-meetings-rs: hook {label} ({}) failed: {}",
@@ -1248,6 +1299,7 @@ pub fn run(label: &str, hook: &Hook, ctx: &Ctx, cfg: &Config) -> Run {
         event_seq: ctx.seq,
         dedup: ctx.dedup.clone(),
         test: false,
+        simulated: false,
         started: started.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         duration_ms: 0,
         exit_code: None,
@@ -1491,6 +1543,210 @@ pub(crate) fn newest_session(engine: &Engine) -> Option<String> {
         .and_then(|s| s["id"].as_str().map(str::to_string))
 }
 
+fn internal(e: impl std::fmt::Display) -> ConfigError {
+    ConfigError::new("internal", e.to_string())
+}
+
+/// The `Ctx` of a simulated fire, from the envelope the replay built for it.
+fn ctx_of(env: &Value) -> Ctx {
+    let str_of = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    let path = |v: &Value| v.as_str().map(PathBuf::from);
+    let s = &env["session"];
+    Ctx {
+        event: str_of(&env["event"]),
+        session: s["id"].as_str().map(str::to_string),
+        dir: path(&s["dir"]),
+        title: str_of(&s["title"]),
+        audio: path(&s["audio"]),
+        transcript: path(&s["transcript"]),
+        seq: env["seq"].as_u64().unwrap_or_default(),
+        at: str_of(&env["at"]),
+        dedup: str_of(&env["dedup"]),
+        calendar: env["calendar"].clone(),
+        data: env["data"].clone(),
+    }
+}
+
+/// `hook-simulate`: replay a session's raw log (or the log in `file`) through the triggers
+/// (`replay::simulate`) and, with `run`, run each fire in order and ledger it as simulated.
+fn simulate(
+    engine: &Engine,
+    session: Option<&str>,
+    file: Option<&str>,
+    run: bool,
+    only: Option<&str>,
+    enable: bool,
+) -> Result<Value> {
+    let session = session.filter(|s| !s.is_empty());
+    let file = file.filter(|f| !f.trim().is_empty());
+    let (log, source) = match file {
+        Some(f) => {
+            let p = PathBuf::from(f);
+            if !p.is_file() {
+                return Err(ConfigError::new(
+                    "not_found",
+                    format!("no events file {}", p.display()),
+                ));
+            }
+            let v = crate::sessions::events::read_file(&p, &Default::default())
+                .map_err(|e| internal(format!("{}: {e}", p.display())))?;
+            (v, p.display().to_string())
+        }
+        None => {
+            let id = match session {
+                Some(s) => s.to_string(),
+                None => newest_session(engine)
+                    .ok_or_else(|| ConfigError::new("not_found", "no sessions"))?,
+            };
+            let v = engine.store().events(&id, &Default::default())?;
+            let source = v["path"].as_str().unwrap_or_default().to_string();
+            (v, source)
+        }
+    };
+    let lines = log["events"].as_array().cloned().unwrap_or_default();
+    let mut base = replay::Base::from_log(&lines);
+    let id = session
+        .map(str::to_string)
+        .or_else(|| base.session["id"].as_str().map(str::to_string));
+    if session.is_some() {
+        base.session["id"] = json!(id);
+    }
+    // A session the store knows: its folder, files, title and calendar, as the tap reads them.
+    if let Some(known) = id.as_deref().filter(|s| engine.store().get(s).is_ok()) {
+        let ctx = context(engine, "", Some(known), Value::Null);
+        let env = ctx.envelope("", "");
+        let title = base.session["title"].clone();
+        base.session = env["session"].clone();
+        if ctx.title.is_empty() {
+            base.session["title"] = title;
+        }
+        if !ctx.calendar.is_null() {
+            base.calendar = ctx.calendar;
+        }
+    }
+    let cfg = engine.snapshot().config.clone();
+    let mut hooks: Vec<(String, Hook)> = cfg
+        .hooks
+        .iter()
+        .enumerate()
+        .map(|(i, h)| (h.label(i), h.clone()))
+        .collect();
+    if let Some(name) = only.filter(|h| !h.is_empty()) {
+        let i = find(&cfg.hooks, name)?;
+        hooks = vec![hooks.swap_remove(i)];
+    }
+    if enable {
+        for (_, h) in &mut hooks {
+            h.enabled = true;
+        }
+    }
+    let opts = replay::Opts {
+        cooldown: cfg.app.hook_cooldown,
+        before_end: cfg.app.hook_before_end,
+    };
+    let steps = replay::simulate(&hooks, &lines, &base, opts);
+    let mut fires = Vec::new();
+    for st in &steps {
+        let ctx = ctx_of(st.envelope.as_ref().unwrap_or(&json!({
+            "event": st.event, "session": base.session, "seq": st.seq, "at": st.at,
+            "dedup": st.dedup, "calendar": null, "data": null,
+        })));
+        if run {
+            let d = decision(
+                &st.hook,
+                &ctx,
+                &Verdict {
+                    fire: st.fire,
+                    reason: st.reason.clone(),
+                },
+            );
+            ledgered(engine, &ctx, &ledger::verdict_row(&d, true));
+        }
+        if !st.fire {
+            continue;
+        }
+        let mut f = serde_json::to_value(st).map_err(internal)?;
+        if run {
+            if let Some((label, h)) = hooks.iter().find(|(l, _)| *l == st.hook) {
+                let r = run_and_report(engine, label, h, &ctx, Origin::Simulated, &st.reason);
+                f["run"] = serde_json::to_value(r).map_err(internal)?;
+            }
+        }
+        fires.push(f);
+    }
+    let decisions: Vec<Value> = steps
+        .iter()
+        .map(|st| {
+            json!({"seq": st.seq, "at": st.at, "topic": st.topic, "event": st.event,
+                   "hook": st.hook, "fire": st.fire, "reason": st.reason, "dedup": st.dedup})
+        })
+        .collect();
+    Ok(json!({
+        "session": id, "source": source, "lines": lines.len(), "skipped": log["skipped"],
+        "run": run, "hooks": hooks.iter().map(|(l, _)| l).collect::<Vec<_>>(),
+        "decisions": decisions, "fires": fires,
+    }))
+}
+
+/// `hook-runs`: the ledger of one session or of every one, oldest first, filtered.
+fn hook_runs(
+    engine: &Engine,
+    session: Option<&str>,
+    f: ledger::Filter,
+    limit: Option<u64>,
+) -> Result<Value> {
+    if let Some(o) = f.outcome.as_deref() {
+        if !ledger::OUTCOMES.contains(&o) {
+            return Err(bad(format!(
+                "outcome \"{o}\" is not one of {}",
+                ledger::OUTCOMES.join(", ")
+            )));
+        }
+    }
+    let ids: Vec<String> = match session.filter(|s| !s.is_empty()) {
+        Some(s) => {
+            engine.store().get(s)?;
+            vec![s.to_string()]
+        }
+        None => engine.store().list(None, None)?["sessions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["id"].as_str().map(str::to_string))
+            .collect(),
+    };
+    let (mut rows, mut skipped) = (Vec::new(), 0);
+    for id in &ids {
+        let Some(dir) = engine.store().session_dir(id) else {
+            continue;
+        };
+        let (mut r, s) = ledger::read(&dir, &f)
+            .map_err(|e| internal(format!("{}: {e}", dir.join(ledger::FILE).display())))?;
+        for row in &mut r {
+            if row["session"].is_null() {
+                row["session"] = json!(id);
+            }
+        }
+        rows.extend(r);
+        skipped += s;
+    }
+    // Sessions' ledgers merged by time; a stable sort keeps each file's own order.
+    rows.sort_by(|a, b| {
+        a["at"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(b["at"].as_str().unwrap_or_default())
+    });
+    if let Some(n) = limit.and_then(|n| usize::try_from(n).ok()) {
+        let cut = rows.len().saturating_sub(n);
+        rows.drain(..cut);
+    }
+    Ok(
+        json!({"count": rows.len(), "rows": rows, "skipped": skipped,
+              "outcomes": ledger::OUTCOMES}),
+    )
+}
+
 pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
     match a {
         Action::HookList {} => {
@@ -1563,6 +1819,36 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 "calendar": ctx.calendar, "data": envelope["data"], "hooks": hooks,
             }))
         }
+        Action::HookSimulate {
+            session,
+            file,
+            run,
+            hook,
+            enable,
+        } => simulate(
+            engine,
+            session.as_deref(),
+            file.as_deref(),
+            run.unwrap_or(false),
+            hook.as_deref(),
+            enable.unwrap_or(false),
+        ),
+        Action::HookRuns {
+            session,
+            hook,
+            event,
+            outcome,
+            limit,
+        } => hook_runs(
+            engine,
+            session.as_deref(),
+            ledger::Filter {
+                hook: hook.clone().filter(|h| !h.is_empty()),
+                event: event.clone().filter(|e| !e.is_empty()),
+                outcome: outcome.clone().filter(|o| !o.is_empty()),
+            },
+            *limit,
+        ),
         Action::HookTest {
             hook,
             session,
@@ -1598,7 +1884,14 @@ pub fn dispatch(engine: &Engine, a: &Action) -> Result<Value> {
                 session.as_deref().unwrap_or_default(),
                 ctx.seq
             );
-            let run = run_and_report(engine, &h.label(i), h, &ctx, true);
+            let run = run_and_report(
+                engine,
+                &h.label(i),
+                h,
+                &ctx,
+                Origin::Test,
+                "hook-test: run by hand, outside dedup",
+            );
             serde_json::to_value(run).map_err(|e| ConfigError::new("internal", e.to_string()))
         }
         Action::HookAdd {
