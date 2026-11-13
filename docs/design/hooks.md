@@ -147,7 +147,10 @@ happen.
 The repo gets a `.cargo/config.toml` whose `rustc-wrapper` is
 `ci/rustc-wrapper.sh`. The wrapper uses kache when it is on PATH (the
 dotfiles default, `KACHE_LOCAL_ONLY=1`) and passes through otherwise. Every
-worktree and pod then shares compiled dependencies.
+worktree and pod then shares compiled dependencies. `RUST_CACHE=sccache`
+selects sccache and `RUST_CACHE=none` neither; a tool that cannot start also
+passes through, so the cache never fails a build. `ci/rustc-wrapper-test.sh`
+tests it (run by `ci/linux-nix.sh`).
 
 ## What proves it
 

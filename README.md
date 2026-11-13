@@ -3,6 +3,10 @@ oats-meetings-rs: GPUI + Rust rewrite of openoats (private).
 Private; licence undecided (placeholder `LicenseRef-Undecided`). No cargo on carbon: build in pods.
 CI: none hosted. Pods are the CI: `bin/pod-run <repo> <ref> bash ci/linux-nix.sh` (add `env CROSS_TARGET=x86_64-pc-windows-msvc` for the Windows check).
 
+Builds go through `ci/rustc-wrapper.sh` (`.cargo/config.toml`): kache when it is installed
+(`RUST_CACHE=sccache` for sccache, `RUST_CACHE=none` for neither), plain rustc otherwise. On Windows
+without `sh`, build with `RUSTC_WRAPPER=""`. See [AGENTS.md](AGENTS.md#build-cache-kache-through-cirustc-wrappersh).
+
 ## Auto-stop and auto-start
 
 A recording stops by itself after `record.auto_stop.after` (default 5 minutes) of silence on both

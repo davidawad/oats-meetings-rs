@@ -36,3 +36,12 @@ So:
    ```sh
    cargo test -p oats-core --test kinds
    ```
+
+## Build cache: kache through ci/rustc-wrapper.sh
+
+`.cargo/config.toml` sets `build.rustc-wrapper = "ci/rustc-wrapper.sh"`, so every worktree and pod
+shares compiled dependencies. `RUST_CACHE` picks the cache: `kache` (default; `$KACHE_BIN` or
+`kache` on PATH, with `KACHE_LOCAL_ONLY=1` unless set), `sccache` (`$SCCACHE_BIN` or on PATH) or
+`none`. A missing tool, one that cannot start, or any other value runs plain rustc: the cache never
+fails a build. `sh ci/rustc-wrapper-test.sh` tests it (`ci/linux-nix.sh` runs it). A native Windows
+cargo without `sh`: set `RUSTC_WRAPPER=""` (an empty value turns the wrapper off).

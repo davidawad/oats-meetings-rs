@@ -1,0 +1,6 @@
+# Every worktree and pod shares compiled dependencies through a build cache (dot-4uzgol.111.1).
+# cargo resolves this path against the repo root (the .cargo dir's parent). The wrapper picks
+# kache, sccache or nothing from RUST_CACHE and never fails a build over the cache: see AGENTS.md.
+# A Windows host without bash: set RUSTC_WRAPPER="" (an empty value turns the wrapper off).
+[build]
+rustc-wrapper = "ci/rustc-wrapper.sh"

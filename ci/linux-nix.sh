@@ -6,6 +6,8 @@ source "$(dirname "$0")/nix-env.sh"
 set -x
 # main stays rustfmt-clean so pods' fmt steps are no-ops, not rebase conflicts (dot-4uzgol.42).
 cargo fmt --all --check
+# The rustc-wrapper every build goes through (.cargo/config.toml) passes through without a cache tool.
+sh ci/rustc-wrapper-test.sh
 # CROSS_TARGET=<triple>: only `cargo check` that target (no linking, no run).
 if [ -n "${CROSS_TARGET:-}" ]; then
   rustup target add "$CROSS_TARGET"
