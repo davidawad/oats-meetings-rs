@@ -297,6 +297,17 @@ pub fn run_to(args: &[String], env: &dyn Fn(&str) -> Option<String>, out: &mut d
     let mut client = match connected {
         Ok(c) => c,
         Err(e) => {
+            let disabled = oats_core::control::engine::Engine::from_env(env)
+                .ok()
+                .is_some_and(|engine| !engine.snapshot().config.api.enabled);
+            let e = if disabled {
+                oats_core::config::ConfigError::new(
+                    "api_disabled",
+                    "control API is disabled by api.enabled=false",
+                )
+            } else {
+                e
+            };
             if p.json {
                 let v = json!({"ok": false, "error": {"code": e.code, "message": e.message}});
                 if let Err(e) = writeln!(out, "{v}").and_then(|_| out.flush()) {
@@ -498,5 +509,27 @@ mod tests {
             &mut out,
         );
         assert_eq!(code, 3);
+    }
+
+    #[test]
+    fn api_disabled_reports_disabled_and_exits_three() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.toml");
+        std::fs::write(&config, "[api]\nenabled = false\n").unwrap();
+        let runtime = dir.path().join("runtime").to_string_lossy().into_owned();
+        let env = |key: &str| (key == "OATS_CONFIG").then(|| config.to_string_lossy().into_owned());
+        let mut out = Vec::new();
+        let code = run_to(
+            &s(&["--json", "--runtime-dir", &runtime, "ping"]),
+            &env,
+            &mut out,
+        );
+        assert_eq!(code, 3);
+        let reply: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(reply["error"]["code"], "api_disabled");
+        assert!(reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("disabled"));
     }
 }

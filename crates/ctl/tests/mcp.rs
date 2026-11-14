@@ -45,6 +45,15 @@ fn call(id: u64, name: &str, args: Value) -> String {
 }
 
 #[test]
+fn disabled_mcp_exits_with_status_three() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    std::fs::write(&config, "[mcp]\nenabled = false\n").unwrap();
+    let env = |key: &str| (key == "OATS_CONFIG").then(|| config.to_string_lossy().into_owned());
+    assert_eq!(mcp::run_with(&[], &env), 3);
+}
+
+#[test]
 fn initialize_then_tools_list_is_the_manifest() {
     let dir = tempfile::tempdir().unwrap();
     let target = Target::RuntimeDir(dir.path().join("none"));

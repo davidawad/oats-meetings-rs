@@ -193,12 +193,32 @@ fn setting_row(w: &MainWindow, row: &Row, last: bool, cx: &mut Context<MainWindo
             Some(b) => crate::views::shortcuts::control(w, b.command, keys, cx),
             None => div().into_any_element(),
         },
+        Widget::Info { value, copy } => {
+            let shown = div()
+                .max_w(px(420.))
+                .text_size(px(12.))
+                .child(value.clone());
+            let mut row = div().flex().items_center().gap(px(8.)).child(shown);
+            if let Some(snippet) = copy.clone() {
+                row = row.child(
+                    kit::button("api-info-copy", "Copy", Kind::Secondary, Size::Sm, true).on_click(
+                        cx.listener(move |_, _, _, cx| {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(snippet.clone()));
+                        }),
+                    ),
+                );
+            }
+            row.into_any_element()
+        }
         Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } => {
             let seed = match &row.widget {
                 Widget::Text(t) => t.clone(),
                 Widget::Number { value, .. } => value.to_string(),
                 Widget::Duration { text, .. } => text.clone(),
-                Widget::Toggle(_) | Widget::Choice { .. } | Widget::Keys(_) => String::new(),
+                Widget::Toggle(_)
+                | Widget::Choice { .. }
+                | Widget::Keys(_)
+                | Widget::Info { .. } => String::new(),
             };
             let value = match editing {
                 Some(e) => edit_text(e).into_any_element(),

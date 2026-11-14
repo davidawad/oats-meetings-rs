@@ -16,6 +16,13 @@
       "status": "implemented"
     },
     {
+      "doc": "Control socket path, MCP stdio command, and MCP HTTP URL when enabled.",
+      "effect": "read",
+      "name": "api-info",
+      "params": [],
+      "status": "implemented"
+    },
+    {
       "doc": "The action manifest.",
       "effect": "read",
       "name": "list-actions",

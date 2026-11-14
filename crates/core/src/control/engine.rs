@@ -123,6 +123,7 @@ pub struct Engine {
     opts: EngineOpts,
     /// The user file: `opts.user_config` until `config-convert` moves it to another format.
     user_path: RwLock<PathBuf>,
+    runtime_dir: RwLock<Option<PathBuf>>,
     state: RwLock<State>,
     subsystems: RwLock<Vec<Arc<dyn Subsystem>>>,
     // Serializes read-modify-write of the user file (config-set vs reload vs watcher).
@@ -286,6 +287,7 @@ impl Engine {
         let stamp = stamp_of(&opts.user_config);
         let engine = Arc::new_cyclic(|me| Engine {
             user_path: RwLock::new(opts.user_config.clone()),
+            runtime_dir: RwLock::new(None),
             opts,
             state: RwLock::new(State {
                 snap: Arc::new(Snapshot { resolved, config }),
@@ -363,6 +365,10 @@ impl Engine {
     /// The user config file (`config.toml`, `.json` or `.yaml`).
     pub fn user_config(&self) -> PathBuf {
         self.user_path.read().expect("user path").clone()
+    }
+
+    pub(crate) fn set_runtime_dir(&self, dir: &Path) {
+        *self.runtime_dir.write().expect("runtime dir") = Some(dir.to_path_buf());
     }
 
     /// Replace the capture backend factory (tests inject a fake; the default is the OS backend).
@@ -1429,6 +1435,34 @@ impl Engine {
                 "protocol": super::PROTOCOL,
                 "schema_version": SCHEMA_VERSION,
             })),
+            Action::ApiInfo {} => {
+                let cfg = self.snapshot();
+                let env = |k: &str| std::env::var(k).ok();
+                let runtime = self
+                    .runtime_dir
+                    .read()
+                    .expect("runtime dir")
+                    .clone()
+                    .unwrap_or_else(|| super::paths::runtime_dir(&env));
+                let socket = if cfg.config.control.socket.is_empty() {
+                    super::paths::socket_path(&runtime)
+                } else {
+                    PathBuf::from(&cfg.config.control.socket)
+                };
+                let executable =
+                    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("oats-meetings-rs"));
+                let command = format!("{} mcp", executable.display());
+                let http_url = cfg.config.mcp.http.enabled.then(|| {
+                    format!(
+                        "http://{}:{}/mcp",
+                        cfg.config.mcp.http.bind, cfg.config.mcp.http.port
+                    )
+                });
+                let snippet = json!({"mcpServers":{"oats":{"command":executable.to_string_lossy(),"args":["mcp"]}}});
+                Ok(
+                    json!({"control_socket":socket.display().to_string(),"stdio_command":command,"http_url":http_url,"client_json":snippet}),
+                )
+            }
             Action::ListActions {} => Ok(action::manifest_json()),
             Action::Subscribe { .. } => Err(ConfigError::new(
                 "bad_request",

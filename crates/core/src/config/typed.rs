@@ -38,6 +38,7 @@ impl Serialize for Dur {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub app: App,
+    pub api: Api,
     pub audio: Audio,
     pub calendar: Calendar,
     pub config: ConfigSection,
@@ -47,6 +48,7 @@ pub struct Config {
     pub ics: Ics,
     pub license: License,
     pub llm: Llm,
+    pub mcp: Mcp,
     pub network: Network,
     pub notes: Notes,
     pub privacy: Privacy,
@@ -57,6 +59,28 @@ pub struct Config {
     pub stt: Stt,
     pub templates: Templates,
     pub ui: Ui,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Api {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Mcp {
+    pub enabled: bool,
+    pub read_only: bool,
+    pub http: McpHttp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpHttp {
+    pub enabled: bool,
+    pub port: u32,
+    pub bind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

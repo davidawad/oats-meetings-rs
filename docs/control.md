@@ -31,6 +31,27 @@ A client config entry (Claude Code `.mcp.json`, Claude Desktop and others take t
 
 ```json
 {"mcpServers": {"oats": {"command": "oats-meetings-rs", "args": ["mcp"]}}}
+
+The Settings section **API & MCP** controls `api.enabled`, `mcp.enabled`, `mcp.read_only`, and
+`mcp.http.*`. Disabling the API closes the control socket; disabling MCP makes `mcp` exit with a
+clear error. Read-only mode rejects MCP write and control tools. MCP HTTP is off by default; when
+enabled it serves the same tools at `http://127.0.0.1:47960/mcp` using Streamable HTTP. Change
+`mcp.http.bind` to listen on another interface. `ctl api-info` reports the current socket,
+stdio command, HTTP URL, and client JSON snippet.
+
+```toml
+[api]
+enabled = true
+
+[mcp]
+enabled = true
+read_only = false
+
+[mcp.http]
+enabled = false
+port = 47960
+bind = "127.0.0.1"
+```
 ```
 
 Smoke test:

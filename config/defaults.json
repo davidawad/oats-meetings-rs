@@ -1,4 +1,7 @@
 {
+  "api": {
+    "enabled": true
+  },
   "app": {
     "hook_before_end": "5m",
     "hook_cooldown": "30s",
@@ -133,6 +136,15 @@
     "base_url": "",
     "model": "llama3.1",
     "timeout": "2m"
+  },
+  "mcp": {
+    "enabled": true,
+    "http": {
+      "bind": "127.0.0.1",
+      "enabled": false,
+      "port": 47960
+    },
+    "read_only": false
   },
   "network": {
     "allow": false,

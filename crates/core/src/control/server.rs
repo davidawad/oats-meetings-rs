@@ -9,6 +9,7 @@
 
 use std::fs::{File, TryLockError};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -33,7 +34,7 @@ pub struct ServerHandle {
     engine: Arc<Engine>,
     accept: Option<JoinHandle<()>>,
     watcher: Option<JoinHandle<()>>,
-    current: Arc<Mutex<PathBuf>>,
+    current: Arc<Mutex<Option<PathBuf>>>,
     lock: Arc<LockSubsystem>,
 }
 
@@ -52,7 +53,11 @@ impl InstanceLock {
 impl ServerHandle {
     /// Where the socket is bound right now (it moves when `control.socket` is reloaded).
     pub fn socket_path(&self) -> PathBuf {
-        self.current.lock().expect("socket path").clone()
+        self.current
+            .lock()
+            .expect("socket path")
+            .clone()
+            .unwrap_or_default()
     }
 
     pub fn socket_display(&self) -> String {
@@ -222,7 +227,36 @@ fn bind(path: &Path) -> Result<Listener> {
 /// `control.socket`: the accept loop re-binds when the desired path changes.
 struct ControlSubsystem {
     default: PathBuf,
-    desired: Arc<Mutex<PathBuf>>,
+    desired: Arc<Mutex<Option<PathBuf>>>,
+}
+
+struct McpHttpSubsystem {
+    desired: Mutex<Option<String>>,
+}
+impl Subsystem for McpHttpSubsystem {
+    fn name(&self) -> &'static str {
+        "mcp-http"
+    }
+    fn validate(&self, new: &Config) -> Result<()> {
+        let next = new
+            .mcp
+            .http
+            .enabled
+            .then(|| format!("{}:{}", new.mcp.http.bind, new.mcp.http.port));
+        if next != *self.desired.lock().expect("MCP HTTP address") {
+            if let Some(addr) = next {
+                drop(TcpListener::bind(&addr).map_err(|e| io_err(&addr, e))?);
+            }
+        }
+        Ok(())
+    }
+    fn apply(&self, _old: &Config, new: &Config) {
+        *self.desired.lock().expect("MCP HTTP address") = new
+            .mcp
+            .http
+            .enabled
+            .then(|| format!("{}:{}", new.mcp.http.bind, new.mcp.http.port));
+    }
 }
 
 impl Subsystem for ControlSubsystem {
@@ -231,18 +265,21 @@ impl Subsystem for ControlSubsystem {
     }
 
     fn validate(&self, new: &Config) -> Result<()> {
-        let target = socket_target(new, &self.default);
+        let target = new.api.enabled.then(|| socket_target(new, &self.default));
         if target != *self.desired.lock().expect("desired") {
             // Prove the new address can be bound before anything changes.
-            drop(bind(&target)?);
-            #[cfg(unix)]
-            let _ = std::fs::remove_file(&target);
+            if let Some(target) = target {
+                drop(bind(&target)?);
+                #[cfg(unix)]
+                let _ = std::fs::remove_file(&target);
+            }
         }
         Ok(())
     }
 
     fn apply(&self, _old: &Config, new: &Config) {
-        *self.desired.lock().expect("desired") = socket_target(new, &self.default);
+        *self.desired.lock().expect("desired") =
+            new.api.enabled.then(|| socket_target(new, &self.default));
     }
 }
 
@@ -271,17 +308,47 @@ fn serve_inner(
     runtime_dir: &Path,
     poll: Option<Duration>,
 ) -> Result<ServerHandle> {
+    engine.set_runtime_dir(runtime_dir);
     std::fs::create_dir_all(runtime_dir)
         .map_err(|e| io_err(&runtime_dir.display().to_string(), e))?;
     let cfg = engine.snapshot();
+    let first_http = if cfg.config.mcp.http.enabled {
+        let addr = format!("{}:{}", cfg.config.mcp.http.bind, cfg.config.mcp.http.port);
+        let listener = TcpListener::bind(&addr).map_err(|e| io_err(&addr, e))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| io_err("MCP HTTP listener", e))?;
+        Some(listener)
+    } else {
+        None
+    };
+    engine.register(Arc::new(McpHttpSubsystem {
+        desired: Mutex::new(
+            cfg.config
+                .mcp
+                .http
+                .enabled
+                .then(|| format!("{}:{}", cfg.config.mcp.http.bind, cfg.config.mcp.http.port)),
+        ),
+    }));
+    let mut address = cfg
+        .config
+        .mcp
+        .http
+        .enabled
+        .then(|| format!("{}:{}", cfg.config.mcp.http.bind, cfg.config.mcp.http.port));
     let held = if cfg.config.app.single_instance {
         Some(acquire_lock(&paths::lock_path(runtime_dir))?)
     } else {
         None
     };
     let default_socket = paths::socket_path(runtime_dir);
-    let socket = socket_target(&cfg.config, &default_socket);
-    let listener = bind(&socket)?;
+    let socket = cfg
+        .config
+        .api
+        .enabled
+        .then(|| socket_target(&cfg.config, &default_socket));
+    let listener = socket.as_ref().map(|s| bind(s)).transpose()?;
     let current = Arc::new(Mutex::new(socket.clone()));
     let desired = Arc::new(Mutex::new(socket));
     let lock = Arc::new(LockSubsystem {
@@ -295,6 +362,58 @@ fn serve_inner(
         desired: Arc::clone(&desired),
     }));
 
+    let http_engine = Arc::clone(&engine);
+    thread::Builder::new()
+        .name("oats-mcp-http".into())
+        .spawn(move || {
+            let mut listener = first_http;
+            while !http_engine.is_shutdown() {
+                let cfg = http_engine.snapshot();
+                let want = if cfg.config.mcp.http.enabled {
+                    Some(format!(
+                        "{}:{}",
+                        cfg.config.mcp.http.bind, cfg.config.mcp.http.port
+                    ))
+                } else {
+                    None
+                };
+                if want != address {
+                    let next = want
+                        .as_deref()
+                        .and_then(|addr| TcpListener::bind(addr).ok());
+                    if let Some(next) = next {
+                        let _ = next.set_nonblocking(true);
+                        address = want;
+                        listener = Some(next);
+                    } else if !cfg.config.mcp.http.enabled {
+                        listener = None;
+                        address = None;
+                    }
+                }
+                if let Some(l) = listener.as_ref() {
+                    match l.accept() {
+                        Ok((stream, _)) => {
+                            let e = Arc::clone(&http_engine);
+                            let _ = thread::Builder::new()
+                                .name("oats-mcp-http-conn".into())
+                                .spawn(move || mcp_http(e, stream));
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(_) => {}
+                    }
+                }
+                thread::sleep(
+                    http_engine
+                        .snapshot()
+                        .config
+                        .control
+                        .accept_poll
+                        .as_duration(),
+                );
+            }
+        })
+        .map_err(|e| io_err("spawn MCP HTTP", e))?;
+
     let eng = Arc::clone(&engine);
     let cur = Arc::clone(&current);
     let accept = thread::Builder::new()
@@ -305,18 +424,23 @@ fn serve_inner(
                 let want = desired.lock().expect("desired").clone();
                 let have = cur.lock().expect("current").clone();
                 if want != have {
-                    match bind(&want) {
+                    match want.as_ref().map(|p| bind(p)).transpose() {
                         Ok(l) => {
                             listener = l;
                             #[cfg(unix)]
-                            let _ = std::fs::remove_file(&have);
+                            if let Some(old) = have.as_ref() {
+                                let _ = std::fs::remove_file(old);
+                            }
                             *cur.lock().expect("current") = want;
                         }
-                        // Validated before the swap, so this is a late race; stay put.
                         Err(_) => *desired.lock().expect("desired") = have,
                     }
                 }
-                match listener.accept() {
+                let Some(active) = listener.as_ref() else {
+                    thread::sleep(eng.snapshot().config.control.accept_poll.as_duration());
+                    continue;
+                };
+                match active.accept() {
                     Ok(stream) => {
                         let e = Arc::clone(&eng);
                         let _ = thread::Builder::new()
@@ -334,7 +458,9 @@ fn serve_inner(
                 }
             }
             #[cfg(unix)]
-            let _ = std::fs::remove_file(cur.lock().expect("current").clone());
+            if let Some(path) = cur.lock().expect("current").as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
         })
         .map_err(|e| io_err("spawn accept", e))?;
 
@@ -366,6 +492,107 @@ fn serve_inner(
         current,
         lock,
     })
+}
+
+/// Minimal Streamable HTTP transport for MCP: JSON-RPC POST requests at `/mcp`.
+fn mcp_http(engine: Arc<Engine>, mut stream: TcpStream) {
+    use std::io::{Read, Write};
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while head.len() < 16_384 && !head.ends_with(b"\r\n\r\n") {
+        if stream.read_exact(&mut byte).is_err() {
+            return;
+        }
+        head.push(byte[0]);
+    }
+    let text = String::from_utf8_lossy(&head);
+    let mut lines = text.lines();
+    let request = lines.next().unwrap_or_default();
+    let length = lines
+        .filter_map(|l| l.split_once(':'))
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+        .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body = vec![0; length.min(16 * 1024 * 1024)];
+    if stream.read_exact(&mut body).is_err() || !request.starts_with("POST /mcp ") {
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+        return;
+    }
+    let msg: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+            return;
+        }
+    };
+    let id = msg.get("id").cloned().unwrap_or(Value::Null);
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+    let result = if !engine.snapshot().config.mcp.enabled {
+        Err((-32603, "MCP is disabled by mcp.enabled".into()))
+    } else {
+        match method {
+            "initialize" => Ok(
+                json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":false}},"serverInfo":{"name":crate::APP_NAME,"version":env!("CARGO_PKG_VERSION")}}),
+            ),
+            "ping" => Ok(json!({})),
+            "tools/list" => Ok(json!({"tools":action::mcp_tools()})),
+            "tools/call" => {
+                let name = msg["params"]["name"].as_str().unwrap_or("");
+                let wire = action::from_tool_name(name);
+                let args = msg["params"]["arguments"]
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+                if !engine.snapshot().config.mcp.enabled {
+                    Err((-32603, "MCP is disabled by mcp.enabled".into()))
+                } else if engine.snapshot().config.mcp.read_only
+                    && wire
+                        .and_then(|w| action::SPECS.iter().find(|s| s.0 == w))
+                        .is_some_and(|s| s.3 != "read")
+                {
+                    Ok(
+                        json!({"content":[{"type":"text","text":"MCP is read-only (mcp.read_only=true)"}],"isError":true}),
+                    )
+                } else if let Some(wire) = wire {
+                    let mut o = args;
+                    o.insert("action".into(), json!(wire));
+                    match serde_json::from_value::<Action>(Value::Object(o)) {
+                        Ok(a) => match engine.dispatch(&a) {
+                            Ok(v) => Ok(
+                                json!({"content":[{"type":"text","text":v.to_string()}],"isError":false}),
+                            ),
+                            Err(e) => Ok(
+                                json!({"content":[{"type":"text","text":e.to_string()}],"isError":true}),
+                            ),
+                        },
+                        Err(e) => Err((-32602, e.to_string())),
+                    }
+                } else {
+                    Err((-32602, "unknown MCP tool".into()))
+                }
+            }
+            _ => Err((-32601, format!("method not found: {method}"))),
+        }
+    };
+    let reply = if id.is_null() {
+        Value::Null
+    } else {
+        match result {
+            Ok(r) => json!({"jsonrpc":"2.0","id":id,"result":r}),
+            Err((c, m)) => json!({"jsonrpc":"2.0","id":id,"error":{"code":c,"message":m}}),
+        }
+    };
+    if reply.is_null() {
+        let _ = stream.write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n");
+        return;
+    }
+    let bytes = reply.to_string();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        bytes.len(),
+        bytes
+    );
+    let _ = stream.write_all(response.as_bytes());
 }
 
 struct Conn {
@@ -511,6 +738,32 @@ fn process(engine: &Arc<Engine>, conn: &Arc<Conn>, line: &str) -> Option<Value> 
             "missing string field 'action'",
         ));
     };
+    let mcp = obj
+        .remove("_mcp")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if mcp {
+        let cfg = engine.snapshot();
+        if !cfg.config.mcp.enabled {
+            return Some(err_envelope(
+                &id,
+                "mcp_disabled",
+                "MCP is disabled by mcp.enabled",
+            ));
+        }
+        if cfg.config.mcp.read_only
+            && action::SPECS
+                .iter()
+                .find(|s| s.0 == name)
+                .is_some_and(|s| s.3 != "read")
+        {
+            return Some(err_envelope(
+                &id,
+                "mcp_read_only",
+                "MCP action is disabled by mcp.read_only",
+            ));
+        }
+    }
     if !action::exists(&name) {
         return Some(err_envelope(
             &id,

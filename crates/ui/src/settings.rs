@@ -33,6 +33,10 @@ pub enum Widget {
     },
     /// A shortcut's keystrokes, canonical (`ui.keys.*`): rebound by pressing a key.
     Keys(Vec<String>),
+    Info {
+        value: String,
+        copy: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +96,7 @@ fn widget(kind: Kind, value: Option<&Value>) -> Widget {
 /// The settings sections in order, each with the key path prefixes it holds; a key goes to the
 /// first section with a matching prefix (so `ui.theme` is Appearance, other `ui.*` Window).
 pub const SECTIONS: &[(&str, &[&str])] = &[
+    ("API & MCP", &["api.", "mcp."]),
     ("Recording", &["audio.", "ui.monitor", "record."]),
     ("Transcription", &["stt."]),
     ("Speakers", &["speakers."]),
@@ -222,6 +227,65 @@ pub fn build(flat: &Flat) -> Vec<Group> {
             widget: widget(k.kind, flat.get(k.path)),
         });
     }
+    let api_at = SECTIONS
+        .iter()
+        .position(|(n, _)| *n == "API & MCP")
+        .unwrap_or(0);
+    let runtime = oats_core::control::paths::runtime_dir(&|k| std::env::var(k).ok());
+    let socket = flat
+        .get("control.socket")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            oats_core::control::paths::socket_path(&runtime)
+                .display()
+                .to_string()
+        });
+    let executable =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("oats-meetings-rs"));
+    let command = format!("{} mcp", executable.display());
+    let enabled = flat
+        .get("mcp.http.enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let bind = flat
+        .get("mcp.http.bind")
+        .and_then(Value::as_str)
+        .unwrap_or("127.0.0.1");
+    let port = flat
+        .get("mcp.http.port")
+        .and_then(Value::as_u64)
+        .unwrap_or(47_960);
+    let url = if enabled {
+        format!("http://{bind}:{port}/mcp")
+    } else {
+        "Disabled".into()
+    };
+    let snippet = serde_json::json!({"mcpServers":{"oats":{"command":executable.to_string_lossy(),"args":["mcp"]}}}).to_string();
+    let infos = [
+        ("Control socket", socket, None),
+        ("MCP stdio command", command, None),
+        ("MCP HTTP URL", url, None),
+        (
+            "MCP client JSON",
+            "Copy a client configuration snippet".into(),
+            Some(snippet),
+        ),
+    ];
+    let rows = groups.entry(api_at).or_default();
+    rows.extend(infos.into_iter().map(|(label, value, copy)| Row {
+        path: match label {
+            "Control socket" => "api.info.socket",
+            "MCP stdio command" => "api.info.stdio",
+            "MCP HTTP URL" => "api.info.http",
+            _ => "api.info.client_json",
+        },
+        label: label.into(),
+        doc: "Read-only connection information for API and MCP clients.",
+        reload: Reload::Live,
+        widget: Widget::Info { value, copy },
+    }));
     groups
         .into_iter()
         .map(|(at, rows)| Group {
@@ -251,7 +315,11 @@ pub fn next_value(row: &Row) -> Option<Value> {
                 .map_or(0, |i| i + 1);
             options.get(i % options.len().max(1)).map(|o| json!(o))
         }
-        Widget::Text(_) | Widget::Number { .. } | Widget::Duration { .. } | Widget::Keys(_) => None,
+        Widget::Text(_)
+        | Widget::Number { .. }
+        | Widget::Duration { .. }
+        | Widget::Keys(_)
+        | Widget::Info { .. } => None,
     }
 }
 
@@ -262,6 +330,7 @@ pub fn value_text(w: &Widget) -> String {
         Widget::Toggle(b) => b.to_string(),
         Widget::Choice { current, .. } => current.clone(),
         Widget::Text(t) => t.clone(),
+        Widget::Info { value, .. } => value.clone(),
         Widget::Number { value, .. } => value.to_string(),
         Widget::Duration { text, .. } => text.clone(),
         Widget::Keys(keys) => keys
@@ -407,6 +476,39 @@ mod tests {
             .find(|r| r.path == "app.menubar")
             .unwrap();
         assert_eq!(row.widget, Widget::Toggle(false));
+    }
+
+    #[test]
+    fn api_mcp_section_contains_settings_and_connection_info() {
+        let (engine, _d) = testutil::engine(&[]);
+        let groups = build(&engine.resolved().flat);
+        let api = groups.iter().find(|g| g.name == "API & MCP").unwrap();
+        for path in [
+            "api.enabled",
+            "mcp.enabled",
+            "mcp.http.enabled",
+            "mcp.http.port",
+            "mcp.http.bind",
+            "mcp.read_only",
+        ] {
+            assert!(api.rows.iter().any(|r| r.path == path), "missing {path}");
+        }
+        for path in [
+            "api.info.socket",
+            "api.info.stdio",
+            "api.info.http",
+            "api.info.client_json",
+        ] {
+            assert!(api.rows.iter().any(|r| r.path == path), "missing {path}");
+        }
+        assert!(matches!(
+            &api.rows
+                .iter()
+                .find(|r| r.path == "api.info.client_json")
+                .unwrap()
+                .widget,
+            Widget::Info { copy: Some(_), .. }
+        ));
     }
 
     #[test]

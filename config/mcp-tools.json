@@ -36,6 +36,21 @@
         "destructiveHint": false,
         "readOnlyHint": true
       },
+      "description": "Control socket path, MCP stdio command, and MCP HTTP URL when enabled.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "api_info",
+      "title": "api-info"
+    },
+    {
+      "annotations": {
+        "destructiveHint": false,
+        "readOnlyHint": true
+      },
       "description": "The action manifest.",
       "inputSchema": {
         "additionalProperties": false,

@@ -270,6 +270,7 @@ fn widget_value(w: &Widget) -> Value {
         Widget::Toggle(b) => json!(b),
         Widget::Choice { current, .. } => json!(current),
         Widget::Text(t) => json!(t),
+        Widget::Info { value, .. } => json!(value),
         Widget::Number { value, .. } => json!(value),
         Widget::Duration { text, .. } => json!(text),
         Widget::Keys(keys) => json!(keys

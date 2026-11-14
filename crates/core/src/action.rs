@@ -50,6 +50,7 @@ macro_rules! actions {
 actions! {
     Ping, "ping", "Liveness check.", "implemented", "read", {};
     Version, "version", "App, protocol and schema versions.", "implemented", "read", {};
+    ApiInfo, "api-info", "Control socket path, MCP stdio command, and MCP HTTP URL when enabled.", "implemented", "read", {};
     ListActions, "list-actions", "The action manifest.", "implemented", "read", {};
     Subscribe, "subscribe", "Stream events on this control-socket connection; optional topic filter. Not supported over MCP; MCP clients should use events-since.", "implemented", "read", { topics: Option<Vec<String>> };
     EventsSince, "events-since", "Read engine bus events with sequence numbers greater than after (default 0); wait_ms optionally long-polls for the first newer event. History is retained up to control.event_queue events.", "implemented", "read", { after: Option<u64>, wait_ms: Option<u64> };

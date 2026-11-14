@@ -4,6 +4,7 @@
 //! hot reload on/off and persistence.
 
 use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
@@ -71,6 +72,48 @@ fn p(pairs: &[(&str, Value)]) -> Map<String, Value> {
 }
 
 #[test]
+fn mcp_http_serves_initialize_and_tools_list() {
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe.local_addr().unwrap().port();
+    drop(probe);
+    let rig = Rig::with_config(Some(&format!(
+        "[mcp.http]\nenabled = true\nport = {port}\nbind = \"127.0.0.1\"\n"
+    )));
+    for (id, method) in [(1, "initialize"), (2, "tools/list")] {
+        let body = json!({"jsonrpc":"2.0","id":id,"method":method,"params":{}}).to_string();
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(s, "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+        let mut response = String::new();
+        std::io::Read::read_to_string(&mut s, &mut response).unwrap();
+        let payload = response.split_once("\r\n\r\n").unwrap().1;
+        let value: Value = serde_json::from_str(payload).unwrap();
+        assert_eq!(value["id"], id);
+        if method == "initialize" {
+            assert_eq!(value["result"]["protocolVersion"], "2025-06-18");
+        } else {
+            assert!(!value["result"]["tools"].as_array().unwrap().is_empty());
+        }
+    }
+    drop(rig);
+}
+
+#[test]
+fn api_disabled_does_not_bind_control_socket() {
+    let rig = Rig::with_config(Some("[api]\nenabled = false\n"));
+    assert!(Client::connect(&rig.rt).is_err());
+}
+
+#[test]
+fn mcp_read_only_rejects_control_actions() {
+    let rig = Rig::with_config(Some("[mcp]\nread_only = true\n"));
+    let mut c = rig.client();
+    c.send_raw(b"{\"id\":1,\"v\":1,\"action\":\"record-start\",\"_mcp\":true}\n")
+        .unwrap();
+    let response = c.read_line().unwrap();
+    assert_eq!(response["error"]["code"], "mcp_read_only");
+}
+
+#[test]
 fn ping_and_hello_handshake() {
     let rig = Rig::new();
     let mut c = rig.client();
@@ -80,6 +123,20 @@ fn ping_and_hello_handshake() {
     assert_eq!(r["ok"], true);
     assert_eq!(r["schema_version"], 1);
     assert_eq!(r["data"]["pong"], true);
+}
+
+#[test]
+fn api_info_reports_socket_command_and_client_snippet() {
+    let rig = Rig::new();
+    let mut client = rig.client();
+    let info = client.call("api-info", Map::new()).unwrap()["data"].clone();
+    assert_eq!(
+        info["control_socket"],
+        rig.rt.join("control.sock").display().to_string()
+    );
+    assert!(info["stdio_command"].as_str().unwrap().ends_with(" mcp"));
+    assert!(info["client_json"]["mcpServers"]["oats"]["args"][0] == "mcp");
+    assert!(info["http_url"].is_null());
 }
 
 #[test]

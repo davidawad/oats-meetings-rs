@@ -23,7 +23,11 @@ pub enum Target {
 
 pub fn run(args: &[String]) -> i32 {
     let env = |k: &str| std::env::var(k).ok();
-    let mut target = Target::RuntimeDir(paths::runtime_dir(&env));
+    run_with(args, &env)
+}
+
+pub fn run_with(args: &[String], env: &dyn Fn(&str) -> Option<String>) -> i32 {
+    let mut target = Target::RuntimeDir(paths::runtime_dir(env));
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -42,6 +46,17 @@ pub fn run(args: &[String]) -> i32 {
             Target::RuntimeDir(PathBuf::from(v))
         };
         i += 2;
+    }
+    match oats_core::control::engine::Engine::from_env(env) {
+        Ok(engine) if !engine.snapshot().config.mcp.enabled => {
+            oats_core::elog!("mcp: disabled by mcp.enabled=false");
+            return 3;
+        }
+        Err(e) => {
+            oats_core::elog!("mcp: cannot read configuration: {e}");
+            return 1;
+        }
+        _ => {}
     }
     match serve(&target, io::stdin().lock(), &mut io::stdout()) {
         Ok(()) => 0,
@@ -132,6 +147,8 @@ fn call(target: &Target, params: &Value) -> Result<Value, (i64, String)> {
         Ok(c) => c,
         Err(e) => return Ok(tool_result(e.to_string(), true)),
     };
+    let mut args = args;
+    args.insert("_mcp".into(), json!(true));
     let v = match client.call(wire, args) {
         Ok(v) => v,
         Err(e) => return Ok(tool_result(e.to_string(), true)),

@@ -3,6 +3,19 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "properties": {
+    "api": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Serve the local control socket used by ctl and MCP.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
     "app": {
       "additionalProperties": false,
       "properties": {
@@ -1283,6 +1296,55 @@
           "x-max-ms": 3600000,
           "x-min": "1s",
           "x-min-ms": 1000,
+          "x-reload": "live",
+          "x-ui": true
+        }
+      },
+      "type": "object"
+    },
+    "mcp": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Allow the stdio MCP server to run.",
+          "type": "boolean",
+          "x-reload": "live",
+          "x-ui": true
+        },
+        "http": {
+          "additionalProperties": false,
+          "properties": {
+            "bind": {
+              "default": "127.0.0.1",
+              "description": "Address the MCP HTTP server binds to. Use a loopback address for local-only access.",
+              "type": "string",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "enabled": {
+              "default": false,
+              "description": "Serve the MCP tools over Streamable HTTP.",
+              "type": "boolean",
+              "x-reload": "live",
+              "x-ui": true
+            },
+            "port": {
+              "default": 47960,
+              "description": "TCP port for the MCP HTTP endpoint.",
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer",
+              "x-reload": "live",
+              "x-ui": true
+            }
+          },
+          "type": "object"
+        },
+        "read_only": {
+          "default": false,
+          "description": "Reject MCP tools that change state or control the running app.",
+          "type": "boolean",
           "x-reload": "live",
           "x-ui": true
         }
