@@ -412,7 +412,10 @@ mod tests {
         let groups = build(&engine.resolved().flat);
         let shown: BTreeSet<&str> = groups
             .iter()
-            .flat_map(|g| g.rows.iter().map(|r| r.path))
+            // Info rows (the API & MCP connection details) show values, not config keys.
+            .flat_map(|g| g.rows.iter())
+            .filter(|r| !matches!(r.widget, Widget::Info { .. }))
+            .map(|r| r.path)
             .collect();
         let hidden: BTreeSet<&str> = hidden().into_iter().collect();
         let all: BTreeSet<&str> = keys::KEYS.iter().map(|k| k.path).collect();

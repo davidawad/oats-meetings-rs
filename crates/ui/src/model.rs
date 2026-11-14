@@ -241,6 +241,8 @@ pub const EXEMPT: &[(&str, &str)] = &[
     ("hook-simulate", "agent replay (ctl): a past session's raw log through the hook triggers; the Settings hook rows show live decisions and runs through hook-list"),
     ("hook-runs", "agent query (ctl): the per-session hook ledger; the Settings hook rows show the recent runs and decisions through hook-list"),
     ("hook-explain", "agent query (ctl): would each hook fire for a session and event; each Settings hook row shows its last decision and reason through hook-list"),
+    ("api-info", "agent query (ctl, MCP): the connection details the Settings API & MCP rows show"),
+    ("events-since", "agent event feed (MCP): engine events after a cursor; the GUI follows the bus directly"),
     ("session-import", "one-shot migration verb (ctl)"),
     ("config-convert", "one-shot migration verb (ctl)"),
     ("ics-add", "feed management is ctl / config"),
