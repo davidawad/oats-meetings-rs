@@ -46,6 +46,6 @@ Start Menu shortcut. The `.ico` is already derived and tested by `ci/icons.sh`.
    `ditto -c -k --keepParent "Oats Meetings.app" Oats-Meetings-X-arm64.zip`.
 3. `ci/make-cask.sh X <zip> <download base url> <homepage>` prints the Homebrew cask for the tap
    (`Casks/oats-meetings.rb`): `brew install --cask davidawad/tap/oats-meetings`.
-4. Publishing (GitHub release, tap commit) is a deliberate step. Blockers today: `Cargo.toml` says
-   `publish = false`, licence `LicenseRef-Undecided` ("Do not publish", David's ruling, dot-4uzgol), and the
-   app is ad-hoc signed, not notarized, so the cask strips the quarantine flag after install.
+4. Publishing (GitHub release, tap commit) is a deliberate step (bead dot-g07x9). The licence is GPL-3.0-or-later
+   (LICENSE). `publish = false` only keeps the crates off crates.io. The app is ad-hoc signed, not notarized, so the
+   cask strips the quarantine flag after install; notarizing needs an Apple Developer ID.

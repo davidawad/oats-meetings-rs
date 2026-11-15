@@ -5,8 +5,8 @@ members = ["crates/core", "crates/ui", "crates/ctl", "crates/audio", "."]
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-# Placeholder: no licence chosen (David's ruling, dot-4uzgol). Do not publish.
-license = "LicenseRef-Undecided"
+# GPL-3.0-or-later (David, 2026-11-15; LICENSE). publish = false only keeps it off crates.io; it ships as a macOS app.
+license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.dependencies]

@@ -3,7 +3,7 @@ name = "oats-shadergen"
 version = "0.0.1"
 edition = "2021"
 publish = false
-license = "LicenseRef-Undecided"
+license = "GPL-3.0-or-later"
 
 # Standalone (not a member of the main workspace): runs inside real Windows, see ci/windows-shaders.sh.
 [workspace]
