@@ -63,15 +63,32 @@ impl Listing {
 
 impl ModelRow {
     /// Size, WER, speed, languages and runtime in one line, e.g.
-    /// `661.2 MB, WER 6.0%, RTFx 6000, en, sherpa-onnx` (the `ui-state` summary).
+    /// `661.2 MB, WER 6.0%, 1 hr in 1.1 s, en, sherpa-onnx` (the `ui-state` summary).
     pub fn facts(&self) -> String {
         let mut f = vec![self.size.clone(), format!("WER {}", self.wer)];
-        if let Some(r) = self.speed.strip_suffix('×') {
-            f.push(format!("RTFx {r}"));
+        if !self.speed.is_empty() {
+            f.push(format!("1 hr in {}", self.speed));
         }
         f.push(self.languages.clone());
         f.push(self.runtime.clone());
         f.join(", ")
+    }
+}
+
+/// How long an hour of audio takes at `rtfx` (seconds of audio per second of compute), in the unit
+/// that reads best, so models compare by one number where lower is faster: `1.1 s`, `17 s`, `3 min`.
+/// Empty for a speed that is not positive.
+fn hour_takes(rtfx: f64) -> String {
+    if rtfx <= 0.0 || !rtfx.is_finite() {
+        return String::new();
+    }
+    let secs = 3600.0 / rtfx;
+    if secs < 10.0 {
+        format!("{secs:.1} s")
+    } else if secs < 120.0 {
+        format!("{secs:.0} s")
+    } else {
+        format!("{:.0} min", secs / 60.0)
     }
 }
 
@@ -150,7 +167,7 @@ pub fn listing(v: &Value) -> Listing {
                     .map_or_else(|| "n/a".into(), |w| format!("{w:.1}%")),
                 speed: m["rtfx"]
                     .as_f64()
-                    .map(|r| format!("{r:.0}×"))
+                    .map(hour_takes)
                     .unwrap_or_default(),
                 languages: languages(m),
                 runtime: m["runtime"].as_str().unwrap_or("?").to_string(),
@@ -378,7 +395,7 @@ pub fn render(w: &MainWindow, cx: &mut Context<MainWindow>) -> AnyElement {
         .child(div().flex_1().child("Model"))
         .child(div().w(px(84.)).flex_none().text_right().child("Size"))
         .child(div().w(px(70.)).flex_none().text_right().child("WER"))
-        .child(div().w(px(80.)).flex_none().text_right().child("Speed"))
+        .child(div().w(px(80.)).flex_none().text_right().child("1 hr takes"))
         .child(div().w(px(170.)).flex_none());
     let mut table = kit::panel().child(header);
     for r in &l.rows {
@@ -496,6 +513,17 @@ mod tests {
     use gpui::TestAppContext;
 
     #[test]
+    fn hour_takes_reads_in_the_best_unit_and_lower_is_faster() {
+        assert_eq!(hour_takes(3386.0), "1.1 s");
+        assert_eq!(hour_takes(216.0), "17 s");
+        assert_eq!(hour_takes(30.0), "2 min");
+        assert_eq!(hour_takes(1.0), "60 min");
+        assert_eq!(hour_takes(0.0), "");
+        assert_eq!(hour_takes(-5.0), "");
+        assert_eq!(hour_takes(f64::NAN), "");
+    }
+
+    #[test]
     fn rows_follow_presence_progress_selection_and_the_runtime_built_in() {
         let v = json!({
             "selected": "base.en", "runtime": "whisper.cpp", "models_dir": "/m", "explicit_path": null,
@@ -510,7 +538,7 @@ mod tests {
                 {"id": "small.en", "name": "Whisper small (English)", "present": false, "bytes": null, "selected": false, "compiled": true,
                  "download": {"state": "failed", "error": {"code": "x", "message": "HTTP 404"}}},
                 {"id": "parakeet-tdt-0.6b-v2", "name": "Parakeet TDT 0.6B v2 (English)", "present": false, "bytes": null,
-                 "size": 661_190_513u64, "wer": 6.02, "rtfx": 6000, "languages": ["en"], "runtime": "sherpa-onnx",
+                 "size": 661_190_513u64, "wer": 6.02, "rtfx": 3386, "languages": ["en"], "runtime": "sherpa-onnx",
                  "compiled": true, "selected": false, "download": null},
                 {"id": "moonshine-base-en", "name": "Moonshine", "present": false, "runtime": "sherpa-onnx",
                  "compiled": false, "selected": false, "download": null},
@@ -535,11 +563,11 @@ mod tests {
         assert!(r[2].failed && r[2].status.contains("HTTP 404") && r[2].can_download);
         assert_eq!(
             r[3].facts(),
-            "661.2 MB, WER 6.0%, RTFx 6000, en, sherpa-onnx"
+            "661.2 MB, WER 6.0%, 1 hr in 1.1 s, en, sherpa-onnx"
         );
         assert_eq!(
             (r[3].size.as_str(), r[3].wer.as_str(), r[3].speed.as_str()),
-            ("661.2 MB", "6.0%", "6000×")
+            ("661.2 MB", "6.0%", "1.1 s")
         );
         assert_eq!(
             (r[3].languages.as_str(), r[3].runtime.as_str()),

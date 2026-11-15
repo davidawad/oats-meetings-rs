@@ -45,7 +45,7 @@
         {"role": "joiner", "name": "joiner.int8.onnx", "bytes": 1739080, "sha256": "7946164367946e7f9f29a122407c3252b680dbae9a51343eb2488d057c3c43d2", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/joiner.int8.onnx"},
         {"role": "tokens", "name": "tokens.txt", "bytes": 9384, "sha256": "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d", "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/tokens.txt"}
       ],
-      "benchmark": {"wer": 6.02, "rtfx": 6000, "source": "Open ASR Leaderboard (hf-audio/open_asr_leaderboard), nvidia/parakeet-tdt-0.6b-v2, Oct 2026, as cited in dot-4uzgol.66; fp32 checkpoint, this entry is the int8 export"}
+      "benchmark": {"wer": 6.02, "rtfx": 3386, "source": "NVIDIA model card nvidia/parakeet-tdt-0.6b-v2 (metadata RTFx 3386.02, prose 3380; Open ASR Leaderboard, batch size 128, hardware not named; varies with audio length and batch size); fp32 checkpoint, this entry is the int8 export. An earlier 6000 (dot-4uzgol.66) does not match the card"}
     },
     {
       "id": "large-v3-turbo-q5_0",
