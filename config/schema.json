@@ -1240,8 +1240,8 @@
           "x-ui": false
         },
         "spdx": {
-          "default": "LicenseRef-Undecided",
-          "description": "SPDX expression for packaging metadata (placeholder).",
+          "default": "GPL-3.0-or-later",
+          "description": "SPDX expression for packaging metadata.",
           "type": "string",
           "x-reload": "live",
           "x-ui": false

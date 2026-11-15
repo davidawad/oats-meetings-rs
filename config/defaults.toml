@@ -238,8 +238,8 @@ timeout = "2m"
 [license]
 # Licence holder metadata (placeholder; no licence chosen).
 holder = ""
-# SPDX expression for packaging metadata (placeholder).
-spdx = "LicenseRef-Undecided"
+# SPDX expression for packaging metadata.
+spdx = "GPL-3.0-or-later"
 
 [llm]
 # Reference (secret:<namespace>/<name>) to the LLM API key in the secrets backend. The key itself is never in config; store it with secret-set.

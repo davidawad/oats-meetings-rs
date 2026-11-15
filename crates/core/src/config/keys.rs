@@ -1720,8 +1720,8 @@ pub const KEYS: &[Key] = &[
     Key {
         path: "license.spdx",
         kind: Kind::Str,
-        default: Def::S("LicenseRef-Undecided"),
-        doc: "SPDX expression for packaging metadata (placeholder).",
+        default: Def::S("GPL-3.0-or-later"),
+        doc: "SPDX expression for packaging metadata.",
         ui: false,
         reload: Reload::Live,
     },

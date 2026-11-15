@@ -128,7 +128,7 @@
   },
   "license": {
     "holder": "",
-    "spdx": "LicenseRef-Undecided"
+    "spdx": "GPL-3.0-or-later"
   },
   "llm": {
     "api_key_ref": "secret:llm/api-key",

@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn get_and_usage() {
         let o = run(&s(&["get", "license.spdx"]), &no_env);
-        assert_eq!(o.stdout, "LicenseRef-Undecided\n");
+        assert_eq!(o.stdout, "GPL-3.0-or-later\n");
         assert_eq!(run(&s(&["get", "nope.key"]), &no_env).code, 1);
         assert_eq!(run(&s(&["frobnicate"]), &no_env).code, 2);
         assert_eq!(run(&s(&[]), &no_env).code, 2);

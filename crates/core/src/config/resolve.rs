@@ -330,7 +330,7 @@ mod tests {
     fn defaults_resolve_and_type() {
         let r = resolve(&base()).unwrap();
         let c = r.typed().unwrap();
-        assert_eq!(c.license.spdx, "LicenseRef-Undecided");
+        assert_eq!(c.license.spdx, "GPL-3.0-or-later");
     }
 
     #[test]
@@ -638,9 +638,9 @@ mod tests {
     }
 
     #[test]
-    fn licence_is_a_placeholder_by_default() {
+    fn licence_expression_is_gpl_by_default() {
         let c = resolve(&base()).unwrap().typed().unwrap();
-        assert_eq!(c.license.spdx, "LicenseRef-Undecided");
+        assert_eq!(c.license.spdx, "GPL-3.0-or-later");
         assert_eq!(c.license.holder, "");
     }
 }
