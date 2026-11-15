@@ -36,3 +36,16 @@ Start Menu shortcut. The `.ico` is already derived and tested by `ci/icons.sh`.
   OV/EV cert, or Azure Trusted Signing.
 - Linux: `.deb` repos sign the repo metadata (`gpg`/`reprepro`), AppImage supports an embedded
   `--sign` GPG signature. Keys come from Infisical at release time, never from the repo.
+
+## Releasing (staged, nothing here publishes)
+1. `ci/release.sh` (dry run) prints the next semver (from conventional commits) and its notes;
+   `ci/release.sh --apply` bumps `Cargo.toml` and the `oats-*` entries in `Cargo.lock`, prepends
+   `CHANGELOG.md`, commits `chore(release): vX` and tags `vX` locally. `ci/release-test.sh` tests it.
+2. Build the macOS binary in a pod (`bin/pod-remote-build`), with `libsherpa-onnx-c-api.dylib` and
+   `libonnxruntime.dylib` beside it (`make-app.sh` refuses without them), then `make-app.sh`, then
+   `ditto -c -k --keepParent "Oats Meetings.app" Oats-Meetings-X-arm64.zip`.
+3. `ci/make-cask.sh X <zip> <download base url> <homepage>` prints the Homebrew cask for the tap
+   (`Casks/oats-meetings.rb`): `brew install --cask davidawad/tap/oats-meetings`.
+4. Publishing (GitHub release, tap commit) is a deliberate step. Blockers today: `Cargo.toml` says
+   `publish = false`, licence `LicenseRef-Undecided` ("Do not publish", David's ruling, dot-4uzgol), and the
+   app is ad-hoc signed, not notarized, so the cask strips the quarantine flag after install.
