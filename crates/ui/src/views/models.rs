@@ -25,7 +25,7 @@ pub struct ModelRow {
     pub size: String,
     /// Published word error rate, e.g. `6.0%` (`n/a` when the catalog has none).
     pub wer: String,
-    /// Speed as a real-time factor, e.g. `6000×` (empty when unpublished).
+    /// How long an hour of audio takes, e.g. `1.1 s` (empty when unpublished). Lower is faster.
     pub speed: String,
     /// `en`, `en/de`, or `99 languages`.
     pub languages: String,
