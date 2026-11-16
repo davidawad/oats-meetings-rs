@@ -1,5 +1,15 @@
 oats-meetings-rs: GPUI + Rust rewrite of openoats.
 
+## Install (macOS, Apple silicon)
+
+```sh
+brew install --cask davidawad/tap/oats-meetings
+```
+
+The cask installs `Oats Meetings.app` and links its CLI as `oats`. The app is ad-hoc signed, not
+notarized, so the cask clears the quarantine flag after install. Releases:
+https://github.com/davidawad/oats-meetings-rs/releases
+
 Licensed GPL-3.0-or-later (see `LICENSE`). No cargo on carbon: build in pods.
 CI: none hosted. Pods are the CI: `bin/pod-run <repo> <ref> bash ci/linux-nix.sh` (add `env CROSS_TARGET=x86_64-pc-windows-msvc` for the Windows check).
 
