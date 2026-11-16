@@ -1,0 +1,340 @@
+# Changelog
+
+## 0.1.0 (2026-11-15)
+
+### Features
+
+- control: add API and MCP settings (dot-4uzgol.120)
+- calendar: add entry preview panel (dot-4uzgol.119)
+- mcp: expose engine events by cursor (dot-4uzgol.118)
+- calendar: show recorded sessions (dot-4uzgol.115)
+- record: auto-stop warning says how long it has been silent and the configured record.auto_stop.after (dot-4uzgol.111.9)
+- mcp: oats-meetings-rs mcp, an MCP stdio server whose tools are the action manifest (dot-4uzgol.114)
+- hooks: hook-simulate replay + per-session hook-runs.jsonl ledger (dot-4uzgol.111.8)
+- hooks: calendar.ending / calendar.ended and record.before_start / before_stop, blocking and fail-open (dot-4uzgol.111.7)
+- hooks: transcript.phrase -- words in the transcript fire hooks (dot-4uzgol.111.6)
+- hooks: [hooks.match] filters (title, attendees, source, calendar), hook-decided verdicts and hook-explain (dot-4uzgol.111.4)
+- sessions: per-session raw event log events.jsonl and session-events verb (dot-4uzgol.111.3)
+- record: audio.transcribe = deferred -- audio only while recording, final pass at stop, then transcript.final (dot-4uzgol.111.5)
+- hooks: hook event contract -- oats.hook-event/1 envelope, one table, hook-events verb, generated config/hook-events.json (dot-4uzgol.111.2)
+- record: configurable auto-stop on silence and auto-start on activity (dot-4uzgol.110)
+- calendar: calendar source kind=command: any programmatic feed run on each read (dot-4uzgol.105)
+- calendar: provider trait over os-local, Google, Microsoft 365, CalDAV and ICS, selectable per account (dot-4uzgol.100)
+- perms: ctl perms-status / perms-ensure; Linux mic + system audio + calendar access with no prompts; CalDAV feeds (dot-4uzgol.96)
+- config: accept config.toml, config.json or config.yaml (one file, one schema); config-set writes back in the file's own format; ctl config-convert migrates (dot-4uzgol.87)
+- speakers: configurable speaker labels for mic and system sides in one [speakers] table (dot-4uzgol.86)
+- stt: speaker-embedding diarization (sherpa-onnx TitaNet, CoreML opt-in) and an AMI DER test (dot-4uzgol.83)
+- hooks: configurable [[hooks]]: run commands on recording and session events (dot-4uzgol.89)
+- ui: Settings search bar, focused by / (ui.keys.search), filters settings live (dot-4uzgol.90)
+- audio,ui: always-on input monitor: idle mic and system-audio meters, ui.monitor (dot-4uzgol.92)
+- ui: New session button left of Start on the Live record strip (dot-4uzgol.91)
+- sessions: OpenOats compat against upstream b4353cd7: markdown export, OpenOats copy, templates.json export, x_oats namespace (dot-4uzgol.85)
+- calendar: calendar sources incl. macOS Calendar (EventKit) with per-account/calendar selection; title sessions from the overlapping event (dot-4uzgol.88)
+- ui: configurable keyboard shortcuts: bare keys, ui.keys, Settings rebind (dot-4uzgol.82)
+- stt: diarize the system-audio track into remote_1..N; mic stays you (dot-4uzgol.77)
+- audio: macOS system audio via a Core Audio process tap, ScreenCaptureKit as fallback (dot-4uzgol.76)
+- ui: drafting-table redesign in GPUI: tokens, Plex fonts, tab rail, record strip (dot-4uzgol.78)
+- stt: Parakeet v2 on the Apple Neural Engine via native CoreML (FluidAudio parity), sherpa-onnx CPU fallback (dot-4uzgol.69)
+- stt: English-only STT catalog; drop parakeet v3 and multilingual whisper small/base/tiny (dot-4uzgol.68)
+- stt,ui: one STT model catalog + picker; any local model selectable by config or the Models dropdown (dot-4uzgol.66)
+- core,ui: ctl drives the GUI headlessly: ui-select, ui-state dump, ui-invoke view buttons (dot-4uzgol.53)
+- core,ui: transcript-search action; Sessions search matches transcript text with a snippet (dot-4uzgol.45)
+- ui,core: Trash view: list, restore and empty trashed sessions (dot-4uzgol.38)
+- templates: template-save/template-delete engine actions; templates view creates, edits, renames and deletes (dot-4uzgol.35)
+- ui: templates view lists templates and shows prompt + required headings (dot-4uzgol.35)
+- ui: Models view: list/download/select/delete whisper models with progress (dot-4uzgol.39)
+- ui: calendar view: ICS feeds add/remove/refresh and upcoming meetings (dot-4uzgol.36)
+- ui: Notes view: show, edit, save and regenerate session notes (dot-4uzgol.34)
+- ui: Sessions view manages sessions: search, rename, tag/untag, delete to trash (dot-4uzgol.37)
+- ui: nav/router scaffold for Notes, Templates, Calendar, Trash, Models tabs (dot-4uzgol.40)
+- ui: Linux StatusNotifierItem tray via ksni so app.menubar works on Linux (dot-4uzgol.41)
+- ui: in-window record controls, recording badge, Live view reset/swap/wrap (dot-4uzgol.27, dot-4uzgol.29)
+- whisper ASR on by default, model download action with progress, usage on --help, tray warns once (dot-4uzgol.26 .25 .33)
+- ui: editable settings (text/int/duration, device picker), scrolling list, wrapped help; window app_id (dot-4uzgol.30, .31)
+- stt: sha-pinned LibriSpeech benchmark corpus + engine x model WER/RTF/memory bench (dot-4uzgol.22)
+- audio: macOS ScreenCaptureKit system audio + cpal mic, permission gate, plist strings, gated live test (dot-4uzgol.6)
+- config: network.error_snippet and stt.cloud.max_response keys
+- config: hash dims, id/name/key caps, drain sizes, stt tuning as keys; widen the constants test
+- ui: settings rows for integer and duration keys
+- stt: parakeet engine (sherpa-onnx) behind Asr, stt.local.engine key, fetch + WER tests
+- stt: gate stt.local.model to six whisper models, fetch and WER-test each
+- config: ui.tick key replaces the window's 100ms literal
+- config: stt and audio tunables as typed keys; audio timing plumbed from config
+- config: integer and duration kinds; llm/kb/ics/control tunables as keys
+- ui: devices-list in the live view; parity covers audio actions
+- audio: transcribe while recording (live + final), audio reload subsystem, mic-left layout
+- ui: main window, menus, keys, tray, capture hiding, GUI hosts the engine
+- stt: ASR trait, local whisper + cloud openai-compatible backends, live/final pipeline, stt-transcribe/status, reload subsystem
+- secrets: secret:<key> references, env + keyring backends; ics feed headers hold only references; secret-set/delete/has
+- windows: vendor prebuilt gpui_windows shaders generated in real Windows, hash-pinned
+- ics: register IcsSubsystem in config reload: veto bad feeds, drop cache of removed feeds
+- notes, templates, KB, secrets, network gate (dot-4uzgol.10)
+- windows: shadergen tool (d3dcompiler_47 in real Windows)
+- ics: subscribe to ICS feeds: ics-add/remove/list/refresh/events, cache, scheduler, ics-updated (dot-4uzgol.17)
+- whole-config atomic reload, subsystems, rollback, sessions.delete_mode (dot-4uzgol.18)
+- audio: oats-audio crate, devices/record/session-get actions, audio config keys, live tests (dot-4uzgol.7)
+- session store, openoats importer, session actions, comment-preserving config set (dot-4uzgol.9)
+- windows: icon resource via build.rs, cargo-xwin build, wixl msi (dot-4uzgol.16)
+- control API (actions, engine, socket server, ctl client, hot reload) (dot-4uzgol.5)
+- packaging: vendored upstream icon, icon derivation, linux deb/AppImage scripts, macOS template (dot-4uzgol.12)
+- config surface (typed keys, packs, axes router, generated projections) (dot-4uzgol.4)
+- workspace skeleton and GPUI hello window (dot-4uzgol.3)
+
+### Fixes
+
+- config: default license to GPL-3.0-or-later (dot-xmcdo)
+- ui: exempt api-info and events-since from the UI parity check; settings key test skips Info rows (dot-4uzgol.120)
+- build: pin clang for macOS whisper builds (dot-4uzgol.113)
+- hooks: newest session breaks a started_at tie by ended_at then id; hook_match starts its sessions in different seconds (dot-4uzgol.111.9)
+- ci: skip unavailable AMI diarization fixtures (dot-4uzgol.112)
+- sessions: the OpenOats copy leaves out events.jsonl and hook-runs.jsonl (dot-4uzgol.111.9)
+- build: rustc-wrapper runs under bash so CARGO_BIN_EXE_<bin-name> reaches rustc (dot-4uzgol.111.9)
+- ui: Stop and Pause hold the elapsed clock from the press; the window follows the recorder during a stop (dot-4uzgol.109)
+- stt: sherpa-onnx models run in a worker process that ends when they unload (dot-4uzgol.108)
+- stt: sherpa-onnx models live and die on a thread of their own, so their thread state goes with them; footprint test covers both models (dot-4uzgol.107)
+- stt: idle means idle: diarizer follows unload_after, every model load counted and logged, macOS returns freed pages (dot-4uzgol.106)
+- stt: stt-status waits out an in-progress model unload (dot-4uzgol.102)
+- stt: release idle sherpa-onnx/whisper/CoreML models after stt.local.unload_after (dot-4uzgol.102)
+- audio,stt: residual echo suppressor after the linear AEC; drop you-utterances whose energy envelope tracks the remote channel (dot-4uzgol.101)
+- test: default_asr sends record-stop with the new by field (dot-4uzgol.99)
+- audio,core,ui: a lost capture never ends a recording; forced stops say why (dot-4uzgol.99)
+- stt: log_mel reflect pad no longer underflows on audio shorter than n_fft/2 (dot-4uzgol.104)
+- ci: fetch-models.sh downloads every model from its pinned catalog url and sha256 (dot-4uzgol.104)
+- audio,stt: Core Audio tap echo, opened-backend label and silent-tap warning (dot-4uzgol.98)
+- ui: mark perms-status / perms-ensure as ctl-only in the actions parity exempt list (dot-4uzgol.96)
+- stt: a short 'you' repeat of a remote sentence's opening words is echo unless the mic is louder than bleed (dot-4uzgol.95)
+- stt: echo dedupe matches words of one remote utterance, not time overlap; common words and replies are never echo (dot-4uzgol.94)
+- test: port private_meeting.rs to the dot-4uzgol.83 Diarization API (models dir via Settings)
+- stt: keep near-end double talk in the final pass: echo words match remote words said at the same moment, per-stage mic counts in x_oats.micStages (dot-4uzgol.93)
+- ui: list the OpenOats export verbs as ctl-only in the action parity table (dot-4uzgol.85)
+- ui: ellipsize model names and footer segments, '1 line', system_backend applies live (dot-4uzgol.81)
+- audio: release the mic on Stop: pause cpal streams, drop their callback, recorder holds Weak queues (dot-4uzgol.80)
+- ui: display a window GPUI is not presenting so bus events repaint it (dot-4uzgol.79)
+- echo: canceller warmup mutes the first remote sentence; dedupe matches misheard echo (dot-4uzgol.75)
+- macos: ad-hoc sign with an identifier-only designated requirement so TCC grants survive rebuilds (dot-4uzgol.74)
+- macos: root build.rs emits -rpath @loader_path so make-app.sh accepts the release binary (dot-4uzgol.73)
+- audio,core: cancel speaker echo in the mic and drop echoed "you" utterances (dot-4uzgol.65)
+- ui,core: no Trash tab where the OS trash cannot be listed (macOS); Sessions says Move to Finder Trash there (dot-4uzgol.61)
+- audio: macOS lists mics from CoreAudio HAL properties, not cpal AudioUnit probes (dot-4uzgol.59)
+- core,ui: engine.lock is removed on the normal quit path, not only by the watchdog (dot-4uzgol.60)
+- audio,core,ui: device listing off the main thread with a bounded wait and a TTL cache; quit watchdog on its own thread removes engine.lock (dot-4uzgol.57)
+- ui,core: macOS window lifecycle: show on launch without focus, activate only on an explicit show, quit exits (dot-4uzgol.56)
+- core,ui: ui-* wait is the ui.drive_wait config key, not a const (dot-4uzgol.53)
+- ui: build gpui_platform with font-kit on macOS so text renders; macos_text_system test (dot-4uzgol.52)
+- ui,core: raise the main window only on a show request, not every tick (dot-4uzgol.52)
+- ctl: parse key=value and JSON-object params by name; reject unknown named forms with usage exit 2 (dot-4uzgol.51)
+- ui: linux_engine_reports_capture_hiding_unsupported asserts unsupported on every host; the test engine always resolves the linux axis (dot-4uzgol.50)
+- ui: host test initializer sets tray_entries and capture_supported (main build fix, dot-4uzgol.45)
+- core: transcript-search snippet context is the sessions.search_snippet_chars key (dot-4uzgol.45)
+- ui,core: GUI polish: select-all in text inputs, live search without save/cancel, tab survives hide/show, titles in delete confirm and Trash, stable add-feed row (dot-4uzgol.48)
+- stt,ui: fetch a missing model at launch; transcribe audio-only recordings when it lands; session-transcribe action + GUI button (dot-4uzgol.44)
+- core,ui: privacy-toggle warns and tray/menu say 'not supported' where hide_method is none (dot-4uzgol.49)
+- ctl,config: treat EPIPE on stdout as a quiet early exit instead of panicking (dot-4uzgol.47)
+- ui,core: Calendar view fetches on Add, reloads on ics-updated, shows times in ui.tz with zone abbreviation (dot-4uzgol.46)
+- ui: Notes template picker reloads on tab entry and before Regenerate (dot-4uzgol.43)
+- ui: calendar meeting day/time split on wall-clock separators, not char counts (dot-4uzgol.36)
+- stt-bench: drive the real stt::run pipeline (Live::new now takes Tuning)
+- stt-bench: keep a row that follows cargo's 'test bench ...' prefix; OATS_BENCH_ONLY subset
+- stt-bench: run nix without the pod LD_LIBRARY_PATH
+- core: place trash helper before tests module (dot-4uzgol.24)
+- core: trash sessions via NSFileManager on macOS, no Finder AppleScript/TCC prompt (dot-4uzgol.24)
+- config: key length floors keep the defaults valid
+- control: accepted control sockets are blocking on macOS (BSD accept inherits O_NONBLOCK) (dot-4uzgol.15)
+- engine: store integers in the user TOML
+- audio: drop unused field
+- ui: engine learns when the window cannot open; relax e2e window assertions
+- ui: window handle trait call, async update
+- stt: cut leading silence before recognition and add it back as the offset
+- config: defaults.toml emits one header per table (stt has leaves after sub-tables)
+- audio: start every source on the same instant (live barrier) so channels stay aligned
+- audio: open() returns only once audio flows (cold parec takes ~2s to connect)
+- duplicate mod secrets
+- audio: parec latency 100ms; 20ms underruns on a loaded host
+- single keyring workspace dep
+- merge leftovers; use workspace ureq 3 for the LLM client
+- sort template.schema.json keys regardless of map type
+- raw string delimiter (###)
+- raw string delimiter in template test
+- config: audio.dir (record_dir sorted between audio.mic and audio.system and duplicated the TOML table)
+- audio: resampler length tolerance; no-fail-fast
+- ci: nix build without the pod lib path
+- audio: cpal is Windows-only (nix libasound drags a second glibc into pod binaries)
+- windows: explicit IDE units
+- audio: cpal/pipewire compile fixes
+- windows: add every output's bin of qemu/libisoburn to PATH
+- windows: libisoburn provides xorriso; quiet curl
+- windows: drop unsupported Platform attr (wixl -a x64 sets arch)
+- no action param may shadow the request id; test ordering
+- packaging: avoid pipefail SIGPIPE in proof greps
+- sort object keys inside arrays too
+- packaging: AppImage from pinned type2 runtime + squashfs (no appimagetool in nixpkgs)
+- ctl borrow
+- const is_option, replace deprecated split
+- packaging: build in subshell so nix LD_LIBRARY_PATH does not break host tools
+- generated JSON is key-sorted regardless of serde_json preserve_order
+- simplify config cli arg parsing
+- gpui_platform entrypoint, pinned nixpkgs, CI uses ci/linux-nix.sh (dot-4uzgol.3)
+
+### Other
+
+- license: GPL-3.0-or-later (LICENSE, Cargo.toml, shadergen, README)
+- release: semver + changelog + release-notes script, tests, Homebrew cask template (staged, nothing published)
+- models: doc comment for the speed field
+- models: speed column shows how long an hour of audio takes; parakeet rtfx 6000 -> 3386 per the model card
+- kache for every worktree and pod via .cargo/config.toml and ci/rustc-wrapper.sh (dot-4uzgol.111.1)
+- hooks: hooks v2 design -- event contract, match, phrase triggers, deferred transcription, replay (dot-4uzgol.111)
+- ui: sync_rec test retries while another engine thread holds the recorder (dot-4uzgol.107)
+- hooks: hook rig does not auto-download the speaker model (dot-4uzgol.106)
+- stt: stt_unload checks the unload_after key without the parakeet feature (dot-4uzgol.102)
+- ui: a meter repaint redraws only the meter bars, and nothing while the window is occluded (dot-4uzgol.103)
+- ui: idle input-monitor meters repaint only the meters, never the transcript (dot-4uzgol.97)
+- cargo fmt
+- work left uncommitted at agent exit (dot-4uzgol-83-a2)
+- private: gitignored fixture of the 2026-11-06 meeting, ignored tests for diarization, echo leak, WER vs OpenOats, compat round-trip (dot-4uzgol.84)
+- design: drafting-table UI redesign (mockup, spec, tab PNGs); David approved 2026-11-04 (dot-4uzgol)
+- macos: shellcheck source directive for sign.sh (dot-4uzgol.74)
+- work left uncommitted at agent exit (dot-4uzgol-72-a1)
+- work left uncommitted at agent exit (dot-4uzgol-71-a1)
+- stt: default_asr writes the model this build runs, nested bundle files included (dot-4uzgol.69)
+- bench: record the remaining English STT benchmark work (dot-4uzgol.67)
+- packaging: new blueprint app icon (icon A), per David 2026-10-30 (dot-4uzgol.12)
+- core: pending-at-stop transcription test waits on the session-saved transcribed event, not a non-empty transcript (dot-4uzgol.63)
+- AGENTS.md documents the kinds.rs literal rules; CLAUDE.md points to it (dot-4uzgol.62)
+- gate main on cargo fmt --all --check (dot-4uzgol.42)
+- cargo fmt templates engine changes (dot-4uzgol.35)
+- cargo fmt
+- cargo fmt stt/models.rs (dot-4uzgol.39)
+- cargo fmt
+- cargo fmt
+- cargo fmt
+- ci: local ASR is a default feature
+- ui: read whisper availability from stt-status
+- auto-commit: edit crates/core/tests/kinds.rs
+- stt: record the stt tuning keys at defaults
+- stt: benchmark table from one full run on the real pipeline (dot-4uzgol.22)
+- stt: fix speaker count
+- stt: engine x model benchmark table (dot-4uzgol.22)
+- auto-commit: edit 5 files
+- auto-commit: edit 4 files
+- auto-commit: edit 9 files
+- auto-commit: edit 2 files
+- reload single_instance retake polls for the released lock
+- single_instance_lock polls for the released lock instead of assuming shutdown is instant
+- tone_hz measured over the audible span, not zero-padded tail
+- poll for a whole live transcript line
+- deterministic FakeBackend (media-time catch-up) and polled assertions instead of wall-clock bounds (dot-4uzgol.15)
+- regenerate Cargo.lock and config projections
+- export OATS_ONLY_MODEL so the workspace stt tests honour it (dot-4uzgol.23)
+- audio-linux fetches only tiny.en, no Parakeet (dot-4uzgol.23)
+- regenerate Cargo.lock and config projections
+- auto-commit: edit 3 files
+- secrets: resolve takes the cap
+- regenerate Cargo.lock and config projections
+- auto-commit: edit 4 files
+- regenerate Cargo.lock and config projections
+- auto-commit: edit ci/stt-compat.sh
+- auto-commit: edit 5 files
+- print the per-model WER table
+- stt: model is an enum, refused by the key table
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- audio: pipewire outputs on PATH, wireplumber
+- run icons.sh without the nix lib path
+- audio: pipewire bring-up probe
+- derive icons before the windows cross-check (build.rs embeds the .ico)
+- stt: threads is an integer
+- drop unused imports
+- regenerate Cargo.lock and config projections
+- show reply
+- control: max_line boundary
+- kb: chunk boundaries
+- config: fix kinds rig type
+- regenerate Cargo.lock and config projections
+- auto-commit: edit 11 files
+- audio: unknown device is vetoed at config time
+- audio: both-off is a reload veto; run the live step even when a workspace test fails
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- drop software-Vulkan attempt (host glibc too old); keep Xvfb e2e
+- ui: assert immediate window action answers
+- ui: GUI process hosts the control engine (Xvfb e2e)
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- auto-commit: edit 3 files
+- audio: recordings live in the session store; control_cli uses a still-planned action
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- windows: image index (Desktop Experience for gui), exit code fix, require version line
+- audio: show server logs when the pulse socket never appears
+- stt: do not assert cross-channel order of whisper segment times
+- audio: windows cross-target check script
+- regenerate Cargo.lock and config projections
+- fetch model with the host curl (nix libs on LD_LIBRARY_PATH break it)
+- regenerate config projections and Cargo.lock; fix whisper path arg
+- stt: whisper acceptance tests, model fetch and checksum, ci wiring
+- auto-commit: edit ci/fetch-models.sh
+- windows: VM run reports missing DLLs and bounds the exe run
+- keep nix ncurses/libffi/libxml2 out of LD_LIBRARY_PATH (host libclang needs host libs)
+- bindgen uses the host libclang
+- pod tools probe 2
+- pod tools probe
+- regenerate Cargo.lock and config projections
+- Cargo.lock from regen
+- auto-commit: edit crates/core/src/sessions.rs
+- nix-env tail must not fail under set -e
+- audio: probe latency and first-byte time
+- ics_engine passes the new EngineOpts.secrets field
+- optional whisper-rs feature, hound, libclang in the pod env
+- regenerate Cargo.lock and config projections
+- audio: pulse realtime probe
+- ureq uses the OS TLS stack on Windows (no ring/C toolchain for the cross check)
+- import-check script for OpenOats templates files
+- regenerate Cargo.lock and config projections
+- windows: VM run can target the gui variant (VARIANT=gui)
+- regenerate Cargo.lock and config projections
+- audio: per-source sample counts and a parec rate probe
+- ctl acceptance for notes, network gate and KB through the real binary
+- auto-commit: edit 6 files
+- auto-commit: edit tests/notes_cli.rs
+- windows: release GUI variant using hash-pinned VM-generated shaders
+- auto-commit: edit crates/core/src/ics/mod.rs
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- regenerate Cargo.lock and config projections
+- auto-commit: edit 8 files
+- auto-commit: edit 4 files
+- ics: list due uses the real clock
+- ics: tick expectation at t=1300
+- Cargo.lock records embed-resource build-dependency (dot-4uzgol.16)
+- regenerate Cargo.lock and config projections
+- windows: fetch zed sources for hlsl
+- windows: shaders task for the VM script
+- regenerate Cargo.lock and config projections
+- auto-commit: edit crates/core/tests/reload.rs
+- windows: VM script supports cached base overlay and KVM (VM_CACHE)
+- regenerate Cargo.lock and config projections
+- session binary tests, meeting-compat store dump (dot-4uzgol.9)
+- auto-commit: edit 7 files
+- regenerate Cargo.lock and config projections
+- windows: static CRT, QEMU/TCG real-Windows run script (dot-4uzgol.16)
+- windows: wine binary name
+- regenerate Cargo.lock and config projections
+- windows: msi extract check, wine smoke run (labelled)
+- auto-commit: edit ci/package-windows.sh
+- restore control integration tests (accidentally truncated)
+- regenerate Cargo.lock and config projections
+- auto-commit: edit 3 files
+- auto-commit: edit 6 files
+- auto-commit: edit crates/core/src/action.rs
+- auto-commit: edit 5 files
+- auto-commit: edit ci/README.md
+- remove hosted CI config; pods are the CI (dot-4uzgol.3)
+- linux and windows-check jobs use ci/linux-nix.sh on pinned nixos/nix; drop macOS cross-check
+- llvm-rc for windows check; runtime_shaders for cross macOS check
+- CROSS_TARGET mode for cross-target cargo check
+- keep nix glibc/gcc out of the library path
+- tolerate packages without a dev output
+- walk nix closure and add freetype transitive deps (dot-4uzgol.3)
+- rootless Linux build via nix-provided GUI libs (dot-4uzgol.3)
+- initial README
