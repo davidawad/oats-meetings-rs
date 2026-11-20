@@ -1340,6 +1340,15 @@ fn a_deferred_stop_without_the_model_keeps_the_audio_and_is_transcribed_later() 
     let m = meta(&r, "nm");
     assert_eq!(m["metadata"]["x_oats"]["transcribePending"], true, "{m}");
     assert!(m["ended_at"].is_string());
+    // A pending session with live lines (what a live pass wrote before the final pass failed)
+    // keeps them and is still redone without overwrite (dot-ua2s9).
+    oats_core::sessions::Store::new(r.dir.path().join("rec"))
+        .write_transcript(
+            "nm",
+            "live",
+            &[json!({"text": "said live", "speaker": "you"})],
+        )
+        .unwrap();
     present.store(true, std::sync::atomic::Ordering::SeqCst);
     let v = r
         .engine

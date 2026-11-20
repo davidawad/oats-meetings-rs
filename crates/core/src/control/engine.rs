@@ -564,8 +564,9 @@ impl Engine {
                                 drop(running);
                                 let store = engine.store();
                                 for id in pending {
-                                    let _ = store.write_transcript(&id, "live", &[]);
-                                    let _ = store.write_transcript(&id, "final", &[]);
+                                    // Keep the live transcript and any earlier final one: a final
+                                    // pass only ever lands whole (write_transcript renames), so
+                                    // marking pending is enough for session-transcribe to redo it.
                                     let _ = store.set_pending(&id, true);
                                 }
                                 crate::log::line(json!({
@@ -585,8 +586,9 @@ impl Engine {
                                 drop(running);
                                 let store = engine.store();
                                 for id in pending {
-                                    let _ = store.write_transcript(&id, "live", &[]);
-                                    let _ = store.write_transcript(&id, "final", &[]);
+                                    // Keep the live transcript and any earlier final one: a final
+                                    // pass only ever lands whole (write_transcript renames), so
+                                    // marking pending is enough for session-transcribe to redo it.
                                     let _ = store.set_pending(&id, true);
                                 }
                                 crate::log::line(json!({
@@ -772,7 +774,9 @@ impl Engine {
         };
         let store = self.store();
         let v = store.get(id)?;
-        if !overwrite && v["utterance_count"].as_u64().unwrap_or(0) > 0 {
+        // A pending session keeps its live transcript until the redo succeeds (dot-ua2s9).
+        let pending = v["metadata"]["x_oats"]["transcribePending"] == true;
+        if !overwrite && !pending && v["utterance_count"].as_u64().unwrap_or(0) > 0 {
             return Err(ConfigError::new(
                 "exists",
                 format!("session {id} already has a transcript; overwrite=true replaces it"),

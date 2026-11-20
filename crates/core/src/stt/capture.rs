@@ -253,8 +253,7 @@ impl Transcriber {
                         let stages = record_stages(&self.store, &worker_id, live_stages, Some(stages))
                             .unwrap_or(Value::Null);
                         if let Err(error) = self.store.transcribed(&worker_id, &self.plan.settings.engine_label()) {
-                            let _ = self.store.write_transcript(&worker_id, "live", &[]);
-                            let _ = self.store.write_transcript(&worker_id, "final", &[]);
+                            // The live transcript stays; pending makes session-transcribe redo the final pass.
                             let _ = self.store.set_pending(&worker_id, true);
                             self.plan.bus.publish("transcribe-progress", json!({"session": worker_id,
                                 "mode": "final", "state": "failed", "total_seconds": total_seconds,
@@ -267,8 +266,7 @@ impl Transcriber {
                             "total_seconds": total_seconds, "final_utterances": count, "mic_stages": stages}));
                     }
                     Err(error) => {
-                        let _ = self.store.write_transcript(&worker_id, "live", &[]);
-                        let _ = self.store.write_transcript(&worker_id, "final", &[]);
+                        // The live transcript stays; pending makes session-transcribe redo the final pass.
                         let _ = self.store.set_pending(&worker_id, true);
                         self.plan.bus.publish("transcribe-progress", json!({"session": worker_id,
                             "mode": "final", "state": "failed", "total_seconds": total_seconds,
@@ -277,8 +275,7 @@ impl Transcriber {
                 }
             });
         if let Err(error) = spawned {
-            let _ = fallback_store.write_transcript(&id, "live", &[]);
-            let _ = fallback_store.write_transcript(&id, "final", &[]);
+            // The live transcript stays; pending makes session-transcribe redo the final pass.
             let _ = fallback_store.set_pending(&id, true);
             bus.publish(
                 "transcribe-progress",
