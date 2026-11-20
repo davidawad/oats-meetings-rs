@@ -192,7 +192,14 @@ fn an_idle_app_loads_no_model_and_each_transcription_loads_it_once() {
     // A recording loads the model once for its live and final passes.
     let unloads = status(&r)["models"]["unloads"].as_u64().unwrap();
     let done = record(&r, "s1");
-    assert_eq!(done["transcription"]["final"], "ok", "{done}");
+    assert_eq!(done["transcription"]["final"], "running", "{done}");
+    wait_until("the final pass of s1", || {
+        r.engine.bus.events_since(0, 0).iter().any(|e| {
+            e["event"] == "transcribe-progress"
+                && e["data"]["session"] == "s1"
+                && e["data"]["state"] == "done"
+        })
+    });
     assert_eq!(r.cache.loads(), 1);
     assert_eq!(status(&r)["models"]["loads"].as_u64().unwrap(), loads0 + 1);
     // Released once unload_after passes, and idle again loads nothing.

@@ -168,6 +168,22 @@ fn record(r: &Rig, id: &str, title: &str) -> Value {
     e.dispatch(&Action::RecordStop { by: None }).unwrap()
 }
 
+/// Wait for the detached final pass of `session` to report done (dot-av6le).
+fn final_done(r: &Rig, session: &str) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !r.engine.bus.events_since(0, 0).iter().any(|e| {
+        e["event"] == "transcribe-progress"
+            && e["data"]["session"] == session
+            && e["data"]["state"] == "done"
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the final pass of {session}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     let r = rig("");
@@ -180,7 +196,8 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     r.engine.reload("test").unwrap();
     assert_eq!(r.engine.snapshot().config.hooks.len(), hooks::names().len());
     let stop = record(&r, "hooked", "Hooked call");
-    assert_eq!(stop["transcription"]["final"], "ok", "{stop}");
+    assert_eq!(stop["transcription"]["final"], "running", "{stop}");
+    final_done(&r, "hooked");
     let dir = r.root.join("rec").join("hooked");
     let dir = dir.to_str().unwrap();
     for event in [
@@ -223,9 +240,18 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
         }
         if event == "record.stop" {
             assert_eq!(stdin["data"]["session"], "hooked");
-            assert_eq!(stdin["data"]["transcription"]["final"], "ok");
+            // The final pass runs detached after stop (dot-av6le); transcript.final reports it.
+            assert_eq!(stdin["data"]["transcription"]["final"], "running");
         }
-        if matches!(event, "record.stop" | "transcript.final") {
+        if event == "record.stop" {
+            // At stop only the live transcript exists; the final one comes with transcript.final.
+            assert!(
+                env[5].ends_with("transcript.live.jsonl"),
+                "{event} OATS_TRANSCRIPT {}",
+                env[5]
+            );
+        }
+        if event == "transcript.final" {
             assert!(
                 env[5].ends_with("transcript.final.jsonl"),
                 "{event} OATS_TRANSCRIPT {}",
