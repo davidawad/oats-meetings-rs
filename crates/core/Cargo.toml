@@ -50,6 +50,7 @@ ureq = { workspace = true, features = ["rustls"] }
 [target.'cfg(unix)'.dependencies]
 # Hooks: kill a timed-out hook's whole process group.
 libc = "0.2"
+signal-hook = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 ureq = { workspace = true, features = ["native-tls"] }

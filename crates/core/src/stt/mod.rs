@@ -42,6 +42,10 @@ pub mod sherpa;
 pub mod tdt;
 pub mod wav;
 pub mod wer;
+#[cfg(unix)]
+use signal::SignalMonitor;
+#[cfg(unix)]
+mod signal;
 #[cfg(feature = "parakeet")]
 pub mod worker;
 
@@ -1316,7 +1320,8 @@ fn final_channel(
     language: &str,
     t: &Tuning,
     completed: &mut f64,
-    progress: &mut dyn FnMut(f64),
+    progress: &mut dyn FnMut(&str, f64),
+    phase: &str,
 ) -> Result<Vec<Utt>> {
     let piece = t.final_piece_samples;
     let mut out = Vec::new();
@@ -1330,7 +1335,7 @@ fn final_channel(
             t,
         )?);
         *completed += chunk.len() as f64 / f64::from(SAMPLE_RATE);
-        progress(*completed);
+        progress(phase, *completed);
     }
     Ok(out)
 }
@@ -1339,14 +1344,14 @@ fn final_channel(
 /// (when diarization is on), echo of remote speech dropped from "you", in time order; and what
 /// became of the mic channel on the way.
 pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<Utt>, MicStages)> {
-    final_utts_with_progress(asr, s, chans, &mut |_| {})
+    final_utts_with_progress(asr, s, chans, |_, _| {})
 }
 
 fn final_utts_with_progress(
     asr: &dyn Asr,
     s: &Settings,
     chans: &Channels,
-    progress: &mut dyn FnMut(f64),
+    mut progress: impl FnMut(&str, f64),
 ) -> Result<(Vec<Utt>, MicStages)> {
     let mut completed = 0.0;
     let mut all = final_channel(
@@ -1356,7 +1361,8 @@ fn final_utts_with_progress(
         &s.language,
         &s.tuning,
         &mut completed,
-        progress,
+        &mut progress,
+        "final_you",
     )?;
     let recognised = all.len();
     let mut them = final_channel(
@@ -1366,7 +1372,8 @@ fn final_utts_with_progress(
         &s.language,
         &s.tuning,
         &mut completed,
-        progress,
+        &mut progress,
+        "final_them",
     )?;
     if let Some(d) = &s.diarize {
         diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
@@ -1458,14 +1465,15 @@ pub fn run(
         &s.engine_label(),
     )?;
     store.set_meta(id, "language", json!(s.language))?;
-    let (live_n, final_n, stages) = match passes(store, bus, &asr, s, chans, id, started) {
-        Ok(n) => n,
-        Err(e) => {
-            // A failed run leaves no half-written session behind.
-            let _ = std::fs::remove_dir_all(&dir);
-            return Err(e);
-        }
-    };
+    let (live_n, final_n, stages) =
+        match passes(store, bus, &asr, s, chans, id, started, &mut |_, _| {}) {
+            Ok(n) => n,
+            Err(e) => {
+                // A failed run leaves no half-written session behind.
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(e);
+            }
+        };
     let summary = store.finish(id, &now.to_rfc3339_opts(SecondsFormat::Secs, true))?;
     if let Some(b) = bus {
         b.publish("session-saved", json!({"id": id, "change": "transcribed"}));
@@ -1500,13 +1508,50 @@ pub fn into_session(
             .and_then(|()| store.write_transcript(id, "final", &[]))
     };
     clear()?;
-    let (live_n, final_n, stages) = match passes(store, bus, &asr, s, chans, id, started) {
+    #[cfg(unix)]
+    let mut monitor = SignalMonitor::new(id, chans.seconds()).ok();
+    #[cfg(unix)]
+    if let Some(monitor) = &mut monitor {
+        monitor.progress("starting", 0.0, chans.seconds());
+    }
+    let (live_n, final_n, stages) = match passes(
+        store,
+        bus,
+        &asr,
+        s,
+        chans,
+        id,
+        started,
+        &mut |phase, processed_s| {
+            #[cfg(unix)]
+            if let Some(monitor) = &mut monitor {
+                monitor.progress(phase, processed_s, chans.seconds());
+            }
+            #[cfg(not(unix))]
+            let _ = (phase, processed_s);
+        },
+    ) {
         Ok(n) => n,
         Err(e) => {
             let _ = clear();
+            let _ = store.set_pending(id, true);
+            #[cfg(unix)]
+            crate::log::line(serde_json::json!({
+                "event": "transcription_end",
+                "session_id": id,
+                "phase": "failed",
+                "decision": "pending_for_resume",
+                "processed_s": 0.0,
+                "total_s": chans.seconds(),
+                "pid": std::process::id(),
+            }));
             return Err(e);
         }
     };
+    #[cfg(unix)]
+    if let Some(monitor) = &mut monitor {
+        monitor.finish("completed", chans.seconds());
+    }
     store.set_meta(id, "language", json!(s.language))?;
     let summary = store.transcribed(id, &s.engine_label())?;
     if let Some(b) = bus {
@@ -1528,6 +1573,7 @@ fn passes(
     chans: &Channels,
     id: &str,
     started: DateTime<Utc>,
+    progress: &mut dyn FnMut(&str, f64),
 ) -> Result<(usize, usize, Value)> {
     // `offline`: transcribed from a file, not while recording, so its live pass is no live
     // speech (a `transcript.phrase` from it says `live = false`).
@@ -1562,13 +1608,15 @@ fn passes(
                 }
             }
             pos += step;
+            progress("live", pos as f64 / f64::from(SAMPLE_RATE));
         }
         write(live.flush()?)?;
         live_stages = Some(live.mic_stages());
     }
     if s.final_enabled {
         let total_secs = chans.seconds();
-        let (all, stages) = final_utts_with_progress(&**asr, s, chans, &mut |processed| {
+        let (all, stages) = final_utts_with_progress(&**asr, s, chans, |phase, processed| {
+            progress(phase, processed);
             if let Some(bus) = bus {
                 bus.publish(
                     "transcribe-progress",
