@@ -548,7 +548,7 @@ impl Engine {
                             .signal_stall_timeout
                             .as_duration();
                         let mut force_exit = false;
-                        while !running.is_empty() {
+                        while !running.is_empty() || crate::stt::signal::active_sessions() > 0 {
                             let (next, _) = changed
                                 .wait_timeout(running, force_window.min(stall_timeout))
                                 .expect("final passes");
@@ -557,7 +557,10 @@ impl Engine {
                                 received,
                                 force_window,
                             ) {
-                                let pending: Vec<String> = running.iter().cloned().collect();
+                                let mut pending: Vec<String> = running.iter().cloned().collect();
+                                pending.extend(crate::stt::signal::active_session_ids());
+                                pending.sort();
+                                pending.dedup();
                                 drop(running);
                                 let store = engine.store();
                                 for id in pending {

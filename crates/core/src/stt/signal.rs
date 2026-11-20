@@ -81,6 +81,23 @@ pub(crate) fn received_count() -> usize {
         .unwrap_or_default()
 }
 
+pub(crate) fn active_sessions() -> usize {
+    active_session_ids().len()
+}
+
+pub(crate) fn active_session_ids() -> Vec<String> {
+    HUB.get()
+        .map(|hub| {
+            hub.progress
+                .lock()
+                .expect("session progress")
+                .keys()
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn latest_signal() -> Option<&'static str> {
     HUB.get().and_then(|hub| {
         hub.events
@@ -356,6 +373,9 @@ impl Drop for SignalMonitor {
                 .lock()
                 .expect("session progress")
                 .remove(&self.session);
+            for watcher in hub.watchers.lock().expect("signal watchers").iter() {
+                watcher.unpark();
+            }
         }
     }
 }
