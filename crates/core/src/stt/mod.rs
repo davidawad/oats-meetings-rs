@@ -1320,7 +1320,7 @@ fn final_channel(
     language: &str,
     t: &Tuning,
     completed: &mut f64,
-    progress: &mut dyn FnMut(&str, f64),
+    progress: &mut dyn FnMut(&str, f64) -> Result<()>,
     phase: &str,
 ) -> Result<Vec<Utt>> {
     let piece = t.final_piece_samples;
@@ -1335,7 +1335,7 @@ fn final_channel(
             t,
         )?);
         *completed += chunk.len() as f64 / f64::from(SAMPLE_RATE);
-        progress(phase, *completed);
+        progress(phase, *completed)?;
     }
     Ok(out)
 }
@@ -1344,14 +1344,14 @@ fn final_channel(
 /// (when diarization is on), echo of remote speech dropped from "you", in time order; and what
 /// became of the mic channel on the way.
 pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<Utt>, MicStages)> {
-    final_utts_with_progress(asr, s, chans, |_, _| {})
+    final_utts_with_progress(asr, s, chans, |_, _| Ok(()))
 }
 
 fn final_utts_with_progress(
     asr: &dyn Asr,
     s: &Settings,
     chans: &Channels,
-    mut progress: impl FnMut(&str, f64),
+    mut progress: impl FnMut(&str, f64) -> Result<()>,
 ) -> Result<(Vec<Utt>, MicStages)> {
     let mut completed = 0.0;
     let mut all = final_channel(
@@ -1466,7 +1466,7 @@ pub fn run(
     )?;
     store.set_meta(id, "language", json!(s.language))?;
     let (live_n, final_n, stages) =
-        match passes(store, bus, &asr, s, chans, id, started, &mut |_, _| {}) {
+        match passes(store, bus, &asr, s, chans, id, started, &mut |_, _| Ok(())) {
             Ok(n) => n,
             Err(e) => {
                 // A failed run leaves no half-written session behind.
@@ -1509,10 +1509,10 @@ pub fn into_session(
     };
     clear()?;
     #[cfg(unix)]
-    let mut monitor = SignalMonitor::new(id, chans.seconds()).ok();
+    let mut monitor = SignalMonitor::new(id, chans.seconds(), s.cloud_timeout).ok();
     #[cfg(unix)]
     if let Some(monitor) = &mut monitor {
-        monitor.progress("starting", 0.0, chans.seconds());
+        let _ = monitor.progress("starting", 0.0, chans.seconds());
     }
     let (live_n, final_n, stages) = match passes(
         store,
@@ -1525,10 +1525,11 @@ pub fn into_session(
         &mut |phase, processed_s| {
             #[cfg(unix)]
             if let Some(monitor) = &mut monitor {
-                monitor.progress(phase, processed_s, chans.seconds());
+                monitor.progress(phase, processed_s, chans.seconds())?;
             }
             #[cfg(not(unix))]
             let _ = (phase, processed_s);
+            Ok(())
         },
     ) {
         Ok(n) => n,
@@ -1536,21 +1537,15 @@ pub fn into_session(
             let _ = clear();
             let _ = store.set_pending(id, true);
             #[cfg(unix)]
-            crate::log::line(serde_json::json!({
-                "event": "transcription_end",
-                "session_id": id,
-                "phase": "failed",
-                "decision": "pending_for_resume",
-                "processed_s": 0.0,
-                "total_s": chans.seconds(),
-                "pid": std::process::id(),
-            }));
+            if let Some(monitor) = &mut monitor {
+                monitor.finish("pending_for_resume", "pending_for_resume", chans.seconds());
+            }
             return Err(e);
         }
     };
     #[cfg(unix)]
     if let Some(monitor) = &mut monitor {
-        monitor.finish("completed", chans.seconds());
+        monitor.finish("completed", "completed", chans.seconds());
     }
     store.set_meta(id, "language", json!(s.language))?;
     let summary = store.transcribed(id, &s.engine_label())?;
@@ -1573,7 +1568,7 @@ fn passes(
     chans: &Channels,
     id: &str,
     started: DateTime<Utc>,
-    progress: &mut dyn FnMut(&str, f64),
+    progress: &mut dyn FnMut(&str, f64) -> Result<()>,
 ) -> Result<(usize, usize, Value)> {
     // `offline`: transcribed from a file, not while recording, so its live pass is no live
     // speech (a `transcript.phrase` from it says `live = false`).
@@ -1608,7 +1603,7 @@ fn passes(
                 }
             }
             pos += step;
-            progress("live", pos as f64 / f64::from(SAMPLE_RATE));
+            progress("live", pos as f64 / f64::from(SAMPLE_RATE))?;
         }
         write(live.flush()?)?;
         live_stages = Some(live.mic_stages());
@@ -1616,7 +1611,7 @@ fn passes(
     if s.final_enabled {
         let total_secs = chans.seconds();
         let (all, stages) = final_utts_with_progress(&**asr, s, chans, |phase, processed| {
-            progress(phase, processed);
+            progress(phase, processed)?;
             if let Some(bus) = bus {
                 bus.publish(
                     "transcribe-progress",
@@ -1624,6 +1619,7 @@ fn passes(
                            "processed_seconds": processed.min(total_secs), "total_seconds": total_secs}),
                 );
             }
+            Ok(())
         })?;
         final_stages = Some(stages);
         let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();

@@ -14,6 +14,8 @@ use oats_audio::resample::Decimate3;
 use oats_audio::Source;
 use serde_json::{json, Value};
 
+#[cfg(unix)]
+use super::signal::SignalMonitor;
 use super::{
     by_time, final_utts_with_progress, record_stages, utterance_json, wav, Asr, Live, MicStages,
     Settings, Utt,
@@ -308,16 +310,41 @@ impl Transcriber {
             "mode": "final", "state": "running", "processed_seconds": 0.0,
             "total_seconds": total_seconds}),
         );
-        let (all, stages) = final_utts_with_progress(
+        #[cfg(unix)]
+        let mut monitor = SignalMonitor::new(&self.id, total_seconds, s.cloud_timeout).ok();
+        #[cfg(unix)]
+        if let Some(monitor) = &mut monitor {
+            let _ = monitor.progress("starting", 0.0, total_seconds);
+        }
+        let result = final_utts_with_progress(
             &*self.plan.asr,
             s,
             &chans,
-            &mut |processed| {
+            &mut |phase: &str, processed: f64| {
+                #[cfg(unix)]
+                if let Some(monitor) = &mut monitor {
+                    monitor.progress(phase, processed.min(total_seconds), total_seconds)?;
+                }
                 self.plan.bus.publish("transcribe-progress", json!({"session": self.id,
                 "mode": "final", "state": "running", "processed_seconds": processed.min(total_seconds),
                 "total_seconds": total_seconds}));
+                Ok(())
             },
-        )?;
+        );
+        let (all, stages) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                #[cfg(unix)]
+                if let Some(monitor) = &mut monitor {
+                    monitor.finish("pending_for_resume", "pending_for_resume", total_seconds);
+                }
+                return Err(error);
+            }
+        };
+        #[cfg(unix)]
+        if let Some(monitor) = &mut monitor {
+            monitor.finish("completed", "completed", total_seconds);
+        }
         let lines: Vec<Value> = all
             .iter()
             .map(|u| utterance_json(u, self.started))
