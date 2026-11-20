@@ -65,6 +65,20 @@ fn rig() -> Rig {
         secrets: None,
     })
     .unwrap();
+    let models_dir = dir.path().join("models");
+    engine
+        .set("stt.local.model", &json!("parakeet-tdt-0.6b-v2"), "test")
+        .unwrap();
+    engine
+        .set(
+            "stt.local.models_dir",
+            &json!(models_dir.to_str().unwrap()),
+            "test",
+        )
+        .unwrap();
+    engine
+        .set("stt.local.provider", &json!("cpu"), "test")
+        .unwrap();
     // Recordings are sessions: they land under the session store root.
     engine
         .set(
@@ -78,6 +92,18 @@ fn rig() -> Rig {
     // 1 s live windows so a few seconds of fake audio produce live utterances.
     engine.set("stt.live.chunk", &json!("1s"), "test").unwrap();
     Rig { dir, engine }
+}
+
+#[test]
+fn recording_rig_pins_the_model_and_provider_to_its_temp_directory() {
+    let r = rig();
+    let local = &r.engine.snapshot().config.stt.local;
+    assert_eq!(local.model, "parakeet-tdt-0.6b-v2");
+    assert_eq!(local.provider, oats_core::config::typed::SttProvider::Cpu);
+    assert_eq!(
+        local.models_dir,
+        r.dir.path().join("models").to_string_lossy()
+    );
 }
 
 /// Poll `cond` until it holds (30 s deadline) instead of sleeping a fixed wall time.

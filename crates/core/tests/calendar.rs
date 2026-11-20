@@ -499,12 +499,30 @@ fn rig(kit: Arc<FakeKit>) -> Rig {
     })
     .unwrap();
     engine.set_event_store(kit.clone());
+    // The default os-local source reaches EventKit on macOS. Tests opt into sources explicitly.
+    engine
+        .set(
+            "calendar.sources",
+            &json!(r#"[{"name":"ics","kind":"ics"}]"#),
+            "test",
+        )
+        .unwrap();
     engine.set_audio_factory(Box::new(|_| Ok(Box::new(FakeBackend::default()))));
     engine
         .set("audio.transcribe", &json!("off"), "test")
         .unwrap();
     engine.set("ui.tz", &json!("UTC"), "test").unwrap();
     Rig { dir, engine, kit }
+}
+
+#[test]
+fn calendar_rig_starts_with_no_host_calendar_source_or_store() {
+    let r = rig(FakeKit::new(Access::FullAccess, true));
+    let sources = parse_sources(&r.engine.snapshot().config.calendar.sources).unwrap();
+    assert!(sources.iter().all(|source| source.kind == SourceKind::Ics));
+    assert_eq!(sources.len(), 1);
+    let injected: Arc<dyn EventStore> = r.kit.clone();
+    assert!(Arc::ptr_eq(&r.engine.event_store(), &injected));
 }
 
 fn run(r: &Rig, a: Value) -> oats_core::config::Result<Value> {
