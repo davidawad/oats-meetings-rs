@@ -135,10 +135,7 @@ pub struct Engine {
     monitoring: AtomicBool,
     recorder: Arc<Recorder>,
     me: Weak<Engine>,
-    // One session-transcribe at a time (ctl, the GUI and the model-arrived pass).
-    transcribe_lock: Mutex<()>,
-    /// Sessions whose deferred final pass (`audio.transcribe = deferred`) is running; notes for
-    /// one wait until it is done (`wait_final_pass`).
+    /// Sessions whose detached final pass is running; notes for one wait until it completes.
     final_passes: (Mutex<std::collections::HashSet<String>>, std::sync::Condvar),
     ui: RwLock<Option<Arc<dyn UiPort>>>,
     event_store: crate::calendar::StoreSlot,
@@ -150,6 +147,19 @@ pub struct Engine {
     last_stop: Mutex<Option<std::time::Instant>>,
     /// The auto-start watcher thread is running (`watch_auto_start`).
     auto_start: AtomicBool,
+}
+
+struct FinalPassGuard<'a> {
+    passes: &'a (Mutex<std::collections::HashSet<String>>, std::sync::Condvar),
+    id: String,
+}
+
+impl Drop for FinalPassGuard<'_> {
+    fn drop(&mut self) {
+        let (set, cv) = self.passes;
+        set.lock().expect("final passes").remove(&self.id);
+        cv.notify_all();
+    }
 }
 
 fn stamp_of(path: &std::path::Path) -> Stamp {
@@ -303,7 +313,6 @@ impl Engine {
             monitoring: AtomicBool::new(false),
             recorder: Arc::new(Recorder::default()),
             me: me.clone(),
-            transcribe_lock: Mutex::new(()),
             final_passes: Default::default(),
             ui: RwLock::new(None),
             event_store: crate::calendar::StoreSlot::default(),
@@ -316,6 +325,15 @@ impl Engine {
         let me = Arc::downgrade(&engine);
         engine.bus.set_tap(Some(Box::new(move |topic, data| {
             if let Some(e) = me.upgrade() {
+                if topic == "transcribe-progress"
+                    && matches!(data["state"].as_str(), Some("done" | "failed"))
+                {
+                    if let Some(id) = data["session"].as_str() {
+                        let (set, cv) = &e.final_passes;
+                        set.lock().expect("final passes").remove(id);
+                        cv.notify_all();
+                    }
+                }
                 crate::hooks::on_event(&e, topic, data);
             }
         })));
@@ -534,6 +552,10 @@ impl Engine {
             if active.as_deref() == Some(id.as_str()) {
                 continue;
             }
+            self.wait_final_pass(&id);
+            if !store.pending().contains(&id) {
+                continue;
+            }
             match self.session_transcribe(&id, false, false) {
                 Ok(_) => done.push(id),
                 Err(e) if matches!(e.code, "exists" | "no_audio" | "not_found") => {
@@ -551,16 +573,41 @@ impl Engine {
     /// `session-transcribe`: run the ASR over a saved session's own audio and write the transcript
     /// into it. `fetch` starts the model download when it is missing (the session stays pending).
     fn session_transcribe(&self, id: &str, overwrite: bool, fetch: bool) -> Result<Value> {
-        let _one = self
-            .transcribe_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.session_transcribe_with_job(id, overwrite, fetch, false)
+    }
+
+    fn session_transcribe_deferred(&self, id: &str, fetch: bool) -> Result<Value> {
+        self.session_transcribe_with_job(id, false, fetch, true)
+    }
+
+    fn session_transcribe_with_job(
+        &self,
+        id: &str,
+        overwrite: bool,
+        fetch: bool,
+        deferred_job: bool,
+    ) -> Result<Value> {
         if self.recorder.active_id().as_deref() == Some(id) {
             return Err(ConfigError::new(
                 "recording",
                 format!("session {id} is still recording; stop it first"),
             ));
         }
+        let _job = if deferred_job {
+            None
+        } else {
+            let (set, _) = &self.final_passes;
+            if !set.lock().expect("final passes").insert(id.to_string()) {
+                return Err(ConfigError::new(
+                    "transcribing",
+                    format!("session {id} already has a final transcription running"),
+                ));
+            }
+            Some(FinalPassGuard {
+                passes: &self.final_passes,
+                id: id.to_string(),
+            })
+        };
         let store = self.store();
         let v = store.get(id)?;
         if !overwrite && v["utterance_count"].as_u64().unwrap_or(0) > 0 {
@@ -1026,8 +1073,36 @@ impl Engine {
             v["calendar"] = c;
         }
         let deferred = v["transcription"]["state"] == "deferred";
+        let detached = v["transcription"]["state"] == "running";
         if deferred {
             v["transcription"]["final"] = json!("running");
+            v["transcription"]["live"] = json!("off");
+            self.final_passes
+                .0
+                .lock()
+                .expect("final passes")
+                .insert(id.clone());
+            let worker_id = id.clone();
+            if let Some(engine) = self.me.upgrade() {
+                let event_cursor = self
+                    .bus
+                    .events_since(0, 0)
+                    .last()
+                    .and_then(|event| event["seq"].as_u64())
+                    .unwrap_or(0);
+                if let Err(error) = std::thread::Builder::new()
+                    .name(format!("oats-transcribe-{id}"))
+                    .spawn(move || engine.deferred_pass(&worker_id, event_cursor))
+                {
+                    self.finish_deferred_spawn_error(&id, &error.to_string());
+                    v["transcription"]["final"] =
+                        json!({"error": "could not start transcription worker"});
+                }
+            } else {
+                self.finish_deferred_spawn_error(&id, "engine is shutting down");
+                v["transcription"]["final"] = json!({"error": "engine is shutting down"});
+            }
+        } else if detached {
             self.final_passes
                 .0
                 .lock()
@@ -1037,7 +1112,8 @@ impl Engine {
         self.bus.publish("recording-stopped", v.clone());
         self.session_saved(&v["session"]);
         if deferred {
-            v["transcription"] = self.deferred_pass(&id);
+            // The saved audio and metadata are complete. The detached worker owns only this
+            // session's final pass, leaving the recorder available for the next meeting.
         } else if self.store().pending().contains(&id) {
             // The model may have arrived while this pending recording was running.
             self.model_arrived();
@@ -1050,8 +1126,22 @@ impl Engine {
     /// is the `transcript.final` hook event. `transcribe-progress` says `running`, then `done` or
     /// `failed`; a failed one stays pending (a missing model is downloaded per
     /// `stt.local.auto_download` and the session transcribed when it arrives; `session-transcribe`
-    /// runs it any time). Returns record-stop's `transcription`.
-    fn deferred_pass(&self, id: &str) -> Value {
+    /// runs it any time). Progress and completion are reported on the bus.
+    fn deferred_pass(&self, id: &str, mut cursor: u64) {
+        loop {
+            let events = self.bus.events_since(cursor, 100);
+            if events.iter().any(|event| {
+                event["event"] == "session-saved"
+                    && event["data"]["change"] == "record"
+                    && event["data"]["id"] == id
+            }) {
+                break;
+            }
+            cursor = events
+                .last()
+                .and_then(|event| event["seq"].as_u64())
+                .unwrap_or(cursor);
+        }
         let progress = |state: &str, extra: Value| {
             let mut d = json!({"session": id, "mode": "deferred", "state": state});
             if let (Some(d), Value::Object(x)) = (d.as_object_mut(), extra) {
@@ -1059,8 +1149,21 @@ impl Engine {
             }
             self.bus.publish("transcribe-progress", d);
         };
-        progress("running", json!({}));
-        let out = self.session_transcribe(id, false, true);
+        let total_seconds = self
+            .store()
+            .get(id)
+            .ok()
+            .and_then(|session| {
+                session["metadata"]["x_oats"]["durationMs"]
+                    .as_f64()
+                    .map(|ms| ms / 1000.0)
+            })
+            .unwrap_or(0.0);
+        progress(
+            "running",
+            json!({"processed_seconds": 0.0, "total_seconds": total_seconds}),
+        );
+        let out = self.session_transcribe_deferred(id, true);
         {
             let (set, cv) = &self.final_passes;
             set.lock().expect("final passes").remove(id);
@@ -1072,9 +1175,6 @@ impl Engine {
                     "done",
                     json!({"final_utterances": r["final_utterances"], "backend": r["backend"]}),
                 );
-                json!({"state": "done", "mode": "deferred", "backend": r["backend"],
-                       "live": "off", "live_utterances": 0, "final": "ok",
-                       "final_utterances": r["final_utterances"], "mic_stages": r["mic_stages"]})
             }
             Err(e) => {
                 crate::elog!("oats-meetings-rs: deferred transcription of {id}: {e}");
@@ -1084,15 +1184,29 @@ impl Engine {
                     e.message
                 );
                 let error = json!({"code": e.code, "message": message});
-                progress("failed", json!({"error": error.clone()}));
-                json!({"state": "deferred", "mode": "deferred", "live": "off",
-                       "final": {"error": error}, "final_utterances": 0})
+                progress("failed", json!({"error": error}));
             }
         }
     }
 
-    /// Block until session `id`'s deferred final pass (if one is running) is done, so notes read
-    /// the final transcript as they do after an `auto` stop.
+    fn finish_deferred_spawn_error(&self, id: &str, message: &str) {
+        let (set, cv) = &self.final_passes;
+        set.lock().expect("final passes").remove(id);
+        cv.notify_all();
+        let _ = self.store().set_pending(id, true);
+        self.bus.publish(
+            "transcribe-progress",
+            json!({
+                "session": id,
+                "mode": "deferred",
+                "state": "failed",
+                "error": {"message": format!("could not start transcription worker: {message}")}
+            }),
+        );
+    }
+
+    /// Block until session `id`'s detached final pass (if one is running) is done, so notes read
+    /// the final transcript.
     fn wait_final_pass(&self, id: &str) {
         let (set, cv) = &self.final_passes;
         let mut g = set.lock().expect("final passes");

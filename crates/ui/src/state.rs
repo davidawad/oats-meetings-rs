@@ -349,9 +349,8 @@ pub struct State {
     pub rec: Rec,
     /// A recording button's action is running off the UI thread (a start loads the ASR model).
     pub pending: Option<Control>,
-    /// The record clock held where it stood when Stop or Pause was pressed, until the engine
-    /// answers (dot-4uzgol.109): a stop runs the final transcription before it returns, and the
-    /// clock must not count on through it.
+    /// The record clock held where it stood when Stop or Pause was pressed, until capture
+    /// finalization completes; the clock must not count on through an in-flight stop.
     pub held_ms: Option<u64>,
     pub settings: Vec<Group>,
     /// Number of capture devices the audio backend reports (0 when none or unavailable).
@@ -378,6 +377,8 @@ pub struct State {
     pub auto_pending: Option<String>,
     /// The Live session's deferred transcription, while it waits for stop, runs or has failed.
     pub after_stop: Option<AfterStop>,
+    /// Detached final transcription jobs, keyed by session id.
+    pub transcription_jobs: BTreeMap<String, (f64, f64, Option<String>)>,
     /// The default speech model's name and runtime (`stt-model-list`), for the Live header and
     /// status line.
     pub model: Option<(String, String)>,
@@ -690,25 +691,58 @@ impl State {
                 self.after_stop =
                     (d["transcription"]["final"] == "running").then_some(AfterStop::Running);
             }
-            Some("transcribe-progress") if self.live_session.as_deref() == Some(&session) => {
+            Some("transcribe-progress") => {
                 match d["state"].as_str() {
-                    Some("running") => self.after_stop = Some(AfterStop::Running),
+                    Some("running") => {
+                        self.transcription_jobs.insert(
+                            session.clone(),
+                            (
+                                d["processed_seconds"].as_f64().unwrap_or(0.0),
+                                d["total_seconds"].as_f64().unwrap_or(0.0),
+                                None,
+                            ),
+                        );
+                    }
                     Some("done") => {
-                        self.after_stop = None;
-                        if let Some((lines, names)) = self.saved_lines(engine, &session) {
-                            self.live = lines;
-                            self.live_names = names;
-                        }
+                        self.transcription_jobs.remove(&session);
                     }
                     Some("failed") => {
-                        self.after_stop = Some(AfterStop::Failed(
-                            d["error"]["message"]
-                                .as_str()
-                                .unwrap_or("transcription failed")
-                                .to_string(),
-                        ));
+                        self.transcription_jobs.insert(
+                            session.clone(),
+                            (
+                                0.0,
+                                d["total_seconds"].as_f64().unwrap_or(0.0),
+                                Some(
+                                    d["error"]["message"]
+                                        .as_str()
+                                        .unwrap_or("transcription failed")
+                                        .to_string(),
+                                ),
+                            ),
+                        );
                     }
                     _ => {}
+                }
+                if self.live_session.as_deref() == Some(&session) {
+                    match d["state"].as_str() {
+                        Some("running") => self.after_stop = Some(AfterStop::Running),
+                        Some("done") => {
+                            self.after_stop = None;
+                            if let Some((lines, names)) = self.saved_lines(engine, &session) {
+                                self.live = lines;
+                                self.live_names = names;
+                            }
+                        }
+                        Some("failed") => {
+                            self.after_stop = Some(AfterStop::Failed(
+                                d["error"]["message"]
+                                    .as_str()
+                                    .unwrap_or("transcription failed")
+                                    .to_string(),
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
             }
             Some("session-saved") if d["change"] == "speaker-name" => {
@@ -1232,6 +1266,14 @@ mod tests {
             ),
         );
         assert_eq!(st.after_stop, Some(AfterStop::Running));
+        st.on_event(
+            &engine,
+            &ev(
+                "transcribe-progress",
+                json!({"session": "a", "state": "running", "processed_seconds": 2.5, "total_seconds": 10.0}),
+            ),
+        );
+        assert_eq!(st.transcription_jobs.get("a"), Some(&(2.5, 10.0, None)));
         // Another session's progress is not this one's.
         st.on_event(
             &engine,
@@ -1249,6 +1291,12 @@ mod tests {
             ),
         );
         assert_eq!(st.after_stop, Some(AfterStop::Failed("no model".into())));
+        assert_eq!(
+            st.transcription_jobs
+                .get("a")
+                .and_then(|job| job.2.as_deref()),
+            Some("no model")
+        );
         st.on_event(
             &engine,
             &ev(
@@ -1257,6 +1305,7 @@ mod tests {
             ),
         );
         assert_eq!(st.after_stop, None);
+        assert!(!st.transcription_jobs.contains_key("a"));
         // A recording that is not deferred says nothing of it.
         st.on_event(
             &engine,

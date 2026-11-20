@@ -1306,6 +1306,8 @@ fn final_channel(
     speaker: &str,
     language: &str,
     t: &Tuning,
+    completed: &mut f64,
+    progress: &mut dyn FnMut(f64),
 ) -> Result<Vec<Utt>> {
     let piece = t.final_piece_samples;
     let mut out = Vec::new();
@@ -1318,6 +1320,8 @@ fn final_channel(
             language,
             t,
         )?);
+        *completed += chunk.len() as f64 / f64::from(SAMPLE_RATE);
+        progress(*completed);
     }
     Ok(out)
 }
@@ -1326,9 +1330,35 @@ fn final_channel(
 /// (when diarization is on), echo of remote speech dropped from "you", in time order; and what
 /// became of the mic channel on the way.
 pub fn final_utts(asr: &dyn Asr, s: &Settings, chans: &Channels) -> Result<(Vec<Utt>, MicStages)> {
-    let mut all = final_channel(asr, &chans.you, &s.speaker_you, &s.language, &s.tuning)?;
+    final_utts_with_progress(asr, s, chans, &mut |_| {})
+}
+
+fn final_utts_with_progress(
+    asr: &dyn Asr,
+    s: &Settings,
+    chans: &Channels,
+    progress: &mut dyn FnMut(f64),
+) -> Result<(Vec<Utt>, MicStages)> {
+    let mut completed = 0.0;
+    let mut all = final_channel(
+        asr,
+        &chans.you,
+        &s.speaker_you,
+        &s.language,
+        &s.tuning,
+        &mut completed,
+        progress,
+    )?;
     let recognised = all.len();
-    let mut them = final_channel(asr, &chans.them, &s.speaker_them, &s.language, &s.tuning)?;
+    let mut them = final_channel(
+        asr,
+        &chans.them,
+        &s.speaker_them,
+        &s.language,
+        &s.tuning,
+        &mut completed,
+        progress,
+    )?;
     if let Some(d) = &s.diarize {
         diarize::label_final(d, &mut them, &chans.them, &s.speaker_them);
     }
@@ -1528,7 +1558,16 @@ fn passes(
         live_stages = Some(live.mic_stages());
     }
     if s.final_enabled {
-        let (all, stages) = final_utts(&**asr, s, chans)?;
+        let total_secs = chans.seconds();
+        let (all, stages) = final_utts_with_progress(&**asr, s, chans, &mut |processed| {
+            if let Some(bus) = bus {
+                bus.publish(
+                    "transcribe-progress",
+                    json!({"session": id, "mode": "deferred", "state": "running",
+                           "processed_seconds": processed.min(total_secs), "total_seconds": total_secs}),
+                );
+            }
+        })?;
         final_stages = Some(stages);
         let lines: Vec<Value> = all.iter().map(|u| utterance_json(u, started)).collect();
         store.write_transcript(id, "final", &lines)?;

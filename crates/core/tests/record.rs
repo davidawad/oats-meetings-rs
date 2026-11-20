@@ -35,6 +35,19 @@ impl Asr for ToneAsr {
     }
 }
 
+struct SlowToneAsr;
+
+impl Asr for SlowToneAsr {
+    fn name(&self) -> &'static str {
+        "slow-tone-asr"
+    }
+
+    fn transcribe(&self, pcm: &[f32], language: &str) -> oats_core::config::Result<Vec<Segment>> {
+        std::thread::sleep(Duration::from_millis(750));
+        ToneAsr.transcribe(pcm, language)
+    }
+}
+
 struct Rig {
     dir: tempfile::TempDir,
     engine: Arc<Engine>,
@@ -494,12 +507,13 @@ fn recording_writes_live_and_final_transcripts_with_the_stt_speakers() {
     });
     let done = stop(&r);
     let t = &done["transcription"];
-    assert_eq!(t["state"], "done", "{t}");
+    assert_eq!(t["state"], "running", "{t}");
     assert_eq!(
         (t["live"].as_str(), t["final"].as_str()),
-        (Some("ok"), Some("ok")),
+        (Some("ok"), Some("running")),
         "{t}"
     );
+    wait_until("final transcript", || !lines(&r, "t1", "final").is_empty());
     for kind in ["live", "final"] {
         let l = lines(&r, "t1", kind);
         let speakers: std::collections::BTreeSet<&str> =
@@ -528,6 +542,36 @@ fn recording_writes_live_and_final_transcripts_with_the_stt_speakers() {
     assert_eq!(tr["source"], "final");
 }
 
+#[test]
+fn auto_recording_can_restart_while_the_previous_final_pass_runs() {
+    let r = rig();
+    r.engine
+        .set("audio.transcribe", &json!("on"), "test")
+        .unwrap();
+    r.engine
+        .set("stt.live.enabled", &json!(false), "test")
+        .unwrap();
+    r.engine
+        .set_asr_factory(Box::new(|_| Ok(Arc::new(SlowToneAsr))));
+
+    start(&r, "first");
+    wait_until("first session audio", || {
+        meta(&r, "first")["duration_ms"].as_u64().unwrap_or(0) >= 1000
+    });
+    let stopped = stop(&r);
+    assert_eq!(stopped["transcription"]["final"], "running", "{stopped}");
+
+    let next = start(&r, "second");
+    assert_eq!(next["session"], "second");
+    wait_until("second session audio", || {
+        meta(&r, "second")["duration_ms"].as_u64().unwrap_or(0) >= 1000
+    });
+    stop(&r);
+    wait_until("both detached final passes", || {
+        !lines(&r, "first", "final").is_empty() && !lines(&r, "second", "final").is_empty()
+    });
+}
+
 /// audio.echo_cancel (default on, dot-4uzgol.65): the mic channel saying what the system
 /// channel says at the same time is speaker echo, so neither transcript attributes it to "you".
 #[test]
@@ -542,9 +586,12 @@ fn echo_cancel_drops_the_you_copy_of_simultaneous_remote_speech() {
     let t = &done["transcription"];
     assert_eq!(
         (t["live"].as_str(), t["final"].as_str()),
-        (Some("ok"), Some("ok")),
+        (Some("ok"), Some("running")),
         "{t}"
     );
+    wait_until("echo-filtered final transcript", || {
+        !lines(&r, "e1", "final").is_empty()
+    });
     for kind in ["live", "final"] {
         let l = lines(&r, "e1", kind);
         assert!(!l.is_empty(), "{kind}");
@@ -608,6 +655,11 @@ fn every_transcribe_value_and_the_stt_switches() {
         );
         std::thread::sleep(Duration::from_millis(2500));
         stop(&r);
+        if fin {
+            wait_until("configured final transcript", || {
+                !lines(&r, &id, "final").is_empty()
+            });
+        }
         assert_eq!(
             !lines(&r, &id, "live").is_empty(),
             live,
@@ -1127,8 +1179,8 @@ fn deferred_is_an_audio_transcribe_value() {
 }
 
 /// dot-4uzgol.111.5: a deferred recording loads no ASR and writes no live segment while it
-/// records; its stop runs exactly one final pass (one ASR build) and the hooks see exactly one
-/// transcript.final, after record.stop.
+/// records; its stop detaches one final pass per session (one ASR build each), and the hooks see
+/// one transcript.final per completed session, after record.stop.
 #[test]
 fn a_deferred_recording_transcribes_once_at_stop_and_never_while_recording() {
     let r = rig();
@@ -1136,8 +1188,11 @@ fn a_deferred_recording_transcribes_once_at_stop_and_never_while_recording() {
         .set("audio.transcribe", &json!("deferred"), "test")
         .unwrap();
     let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let present = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    r.engine.set_asr_factory(counting(&builds, &present));
+    let build_count = Arc::clone(&builds);
+    r.engine.set_asr_factory(Box::new(move |_| {
+        build_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Arc::new(SlowToneAsr) as Arc<dyn Asr>)
+    }));
     let rx = r.engine.bus.subscribe(vec![]);
     let s = start(&r, "d");
     assert_eq!(s["transcription"]["state"], "deferred", "{s}");
@@ -1162,10 +1217,20 @@ fn a_deferred_recording_transcribes_once_at_stop_and_never_while_recording() {
     let t = &done["transcription"];
     assert_eq!(
         (t["final"].as_str(), t["live"].as_str()),
-        (Some("ok"), Some("off")),
+        (Some("running"), Some("off")),
         "{t}"
     );
-    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // The final pass is detached from capture; the next session can start while it runs.
+    let next = start(&r, "d-next");
+    assert_eq!(next["session"], "d-next");
+    wait_until("next session audio", || {
+        meta(&r, "d-next")["duration_ms"].as_u64().unwrap_or(0) >= 1000
+    });
+    stop(&r);
+    wait_until("deferred final transcripts", || {
+        !lines(&r, "d", "final").is_empty() && !lines(&r, "d-next", "final").is_empty()
+    });
+    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert!(!lines(&r, "d", "final").is_empty());
     assert!(lines(&r, "d", "live").is_empty());
     let m = meta(&r, "d");
@@ -1177,7 +1242,7 @@ fn a_deferred_recording_transcribes_once_at_stop_and_never_while_recording() {
     let (topics, evs) = hook_events(&rx);
     assert_eq!(
         evs.iter().filter(|e| **e == "transcript.final").count(),
-        1,
+        2,
         "{evs:?}"
     );
     let at = |e: &str| evs.iter().position(|x| *x == e).unwrap();
@@ -1186,10 +1251,35 @@ fn a_deferred_recording_transcribes_once_at_stop_and_never_while_recording() {
         .iter()
         .filter(|t| *t == "transcribe-progress")
         .collect();
-    assert_eq!(progress.len(), 2, "running then done: {topics:?}");
+    assert!(
+        progress.len() >= 2,
+        "running progress and completion: {topics:?}"
+    );
+    let progress_events = r.engine.bus.events_since(0, 0);
+    for session in ["d", "d-next"] {
+        assert_eq!(
+            progress_events
+                .iter()
+                .filter(|event| event["event"] == "transcribe-progress"
+                    && event["data"]["session"] == session
+                    && event["data"]["state"] == "done")
+                .count(),
+            1,
+            "one completion event for {session}: {progress_events:?}"
+        );
+    }
+    assert!(
+        progress_events.iter().any(|event| {
+            event["event"] == "transcribe-progress"
+                && event["data"]["session"] == "d"
+                && event["data"]["processed_seconds"].as_f64().unwrap_or(0.0) > 0.0
+                && event["data"]["total_seconds"].as_f64().unwrap_or(0.0) > 0.0
+        }),
+        "per-session progress contains processed and total seconds: {progress_events:?}"
+    );
     // Nothing else transcribes it again.
     std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(builds.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(r.engine.transcribe_pending()["transcribed"], json!([]));
 }
 
@@ -1212,24 +1302,18 @@ fn a_deferred_stop_without_the_model_keeps_the_audio_and_is_transcribed_later() 
     start(&r, "nm");
     std::thread::sleep(Duration::from_millis(2500));
     let done = stop(&r);
-    let t = &done["transcription"];
-    assert_eq!(t["final"]["error"]["code"], "model_not_found", "{t}");
+    assert_eq!(done["transcription"]["final"], "running", "{done}");
+    let failed = events(&rx, "transcribe-progress", Duration::from_secs(3));
     assert!(
-        t["final"]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("session-transcribe"),
-        "{t}"
+        failed
+            .iter()
+            .any(|d| d["state"] == "failed" && d["error"]["code"] == "model_not_found"),
+        "{failed:?}"
     );
     assert!(r.dir.path().join("rec/nm/audio.wav").is_file());
     let m = meta(&r, "nm");
     assert_eq!(m["metadata"]["x_oats"]["transcribePending"], true, "{m}");
     assert!(m["ended_at"].is_string());
-    let states: Vec<Value> = events(&rx, "transcribe-progress", Duration::from_millis(300))
-        .into_iter()
-        .map(|d| d["state"].clone())
-        .collect();
-    assert_eq!(states, [json!("running"), json!("failed")]);
     present.store(true, std::sync::atomic::Ordering::SeqCst);
     let v = r
         .engine

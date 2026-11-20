@@ -15,7 +15,8 @@ use oats_audio::Source;
 use serde_json::{json, Value};
 
 use super::{
-    by_time, final_utts, record_stages, utterance_json, wav, Asr, Live, MicStages, Settings, Utt,
+    by_time, final_utts_with_progress, record_stages, utterance_json, wav, Asr, Live, MicStages,
+    Settings, Utt,
 };
 use crate::config::{ConfigError, Result};
 use crate::control::bus::Bus;
@@ -144,7 +145,9 @@ impl Transcriber {
         })
     }
 
-    /// Flush the live pass, run the final pass over `wav_path`, stamp the session as ended.
+    /// Flush the live pass, stamp the session as ended and detach the saved-audio final pass.
+    /// The worker remains in this process so recognisers use the process-wide model caches;
+    /// Parakeet's large model and runtime arenas are not loaded once per session.
     /// Transcription problems are reported in the result, never lost audio: the WAV is already saved.
     /// `cut_secs`: the WAV was cut there (an auto-stop's trailing silence); the live utterances
     /// from there on go too.
@@ -171,54 +174,150 @@ impl Transcriber {
                 Err(e) => l.error = l.error.take().or(Some(e)),
             }
         }
-        let s = &self.plan.settings;
-        let (final_state, final_n, final_stages) = if !s.final_enabled {
-            (json!("off"), 0, None)
-        } else if !split {
-            // One mixed channel cannot be attributed to a speaker.
-            (json!("skipped: audio.layout is mix"), 0, None)
-        } else {
-            match self.final_pass(wav_path) {
-                Ok((n, st)) => (json!("ok"), n, Some(st)),
-                Err(e) => (
-                    json!({"error": {"code": e.code, "message": e.message}}),
-                    0,
-                    None,
-                ),
-            }
+        let live_stages = live.as_ref().and_then(|l| l.stages);
+        let live_count = live.as_ref().map_or(0, |l| l.utterances);
+        let live_state = match &live {
+            None => json!("off"),
+            Some(l) => match &l.error {
+                None => json!("ok"),
+                Some(e) => json!({"error": {"code": e.code, "message": e.message}}),
+            },
         };
-        let stages = record_stages(
-            &self.store,
-            &self.id,
-            live.as_ref().and_then(|l| l.stages),
-            final_stages,
-        )
-        .unwrap_or(Value::Null);
         let _ = self.store.finish(
             &self.id,
             &ended.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         );
+        if !self.plan.settings.final_enabled || !split {
+            // A mixed recording cannot be attributed to speakers, so this is a cheap terminal state.
+            let final_state = if self.plan.settings.final_enabled {
+                json!("skipped: audio.layout is mix")
+            } else {
+                json!("off")
+            };
+            let stages =
+                record_stages(&self.store, &self.id, live_stages, None).unwrap_or(Value::Null);
+            return json!({"state": "done", "backend": self.plan.asr.name(),
+                "live": live_state, "live_utterances": live_count,
+                "final": final_state, "final_utterances": 0, "mic_stages": stages});
+        }
+
+        let id = self.id.clone();
+        let job_path = wav_path.to_path_buf();
+        let bus = Arc::clone(&self.plan.bus);
+        let total_seconds = hound::WavReader::open(wav_path)
+            .ok()
+            .map(|reader| {
+                let spec = reader.spec();
+                f64::from(reader.duration())
+                    / f64::from(spec.sample_rate)
+                    / f64::from(spec.channels)
+            })
+            .unwrap_or(0.0);
+        bus.publish(
+            "transcribe-progress",
+            json!({"session": id, "mode": "final",
+            "state": "running", "processed_seconds": 0.0, "total_seconds": total_seconds}),
+        );
+        let event_cursor = bus
+            .events_since(0, 0)
+            .last()
+            .and_then(|event| event["seq"].as_u64())
+            .unwrap_or(0);
+        let worker_id = id.clone();
+        let backend = self.plan.asr.name();
+        let fallback_store = self.store.sibling();
+        let spawned = std::thread::Builder::new()
+            .name(format!("oats-final-{id}"))
+            .spawn(move || {
+                // Wait until the recording's session-saved event, after record.stop hooks ran.
+                let mut cursor = event_cursor;
+                loop {
+                    let events = self.plan.bus.events_since(cursor, 100);
+                    if events.iter().any(|event| {
+                        event["event"] == "session-saved"
+                            && event["data"]["change"] == "record"
+                            && event["data"]["id"] == worker_id
+                    }) {
+                        break;
+                    }
+                    cursor = events
+                        .last()
+                        .and_then(|event| event["seq"].as_u64())
+                        .unwrap_or(cursor);
+                }
+                let result = self.final_pass(&job_path);
+                match result {
+                    Ok((count, stages)) => {
+                        let stages = record_stages(&self.store, &worker_id, live_stages, Some(stages))
+                            .unwrap_or(Value::Null);
+                        if let Err(error) = self.store.transcribed(&worker_id, &self.plan.settings.engine_label()) {
+                            let _ = self.store.write_transcript(&worker_id, "live", &[]);
+                            let _ = self.store.write_transcript(&worker_id, "final", &[]);
+                            let _ = self.store.set_pending(&worker_id, true);
+                            self.plan.bus.publish("transcribe-progress", json!({"session": worker_id,
+                                "mode": "final", "state": "failed", "total_seconds": total_seconds,
+                                "error": {"code": error.code, "message": error.message}}));
+                            return;
+                        }
+                        self.plan.bus.publish("session-saved", json!({"id": worker_id, "change": "transcribed"}));
+                        self.plan.bus.publish("transcribe-progress", json!({"session": worker_id,
+                            "mode": "final", "state": "done", "processed_seconds": total_seconds,
+                            "total_seconds": total_seconds, "final_utterances": count, "mic_stages": stages}));
+                    }
+                    Err(error) => {
+                        let _ = self.store.write_transcript(&worker_id, "live", &[]);
+                        let _ = self.store.write_transcript(&worker_id, "final", &[]);
+                        let _ = self.store.set_pending(&worker_id, true);
+                        self.plan.bus.publish("transcribe-progress", json!({"session": worker_id,
+                            "mode": "final", "state": "failed", "total_seconds": total_seconds,
+                            "error": {"code": error.code, "message": error.message}}));
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            let _ = fallback_store.write_transcript(&id, "live", &[]);
+            let _ = fallback_store.write_transcript(&id, "final", &[]);
+            let _ = fallback_store.set_pending(&id, true);
+            bus.publish(
+                "transcribe-progress",
+                json!({"session": id, "mode": "final",
+                "state": "failed", "total_seconds": total_seconds,
+                "error": {"code": "worker_start", "message": error.to_string()}}),
+            );
+            return json!({"state": "done", "backend": backend, "live": live_state,
+                "live_utterances": live_count, "final": {"error": {"code": "worker_start",
+                "message": "could not start final transcription worker"}}, "final_utterances": 0});
+        }
         json!({
-            "state": "done",
-            "backend": self.plan.asr.name(),
-            "live": match &live {
-                None => json!("off"),
-                Some(l) => match &l.error {
-                    None => json!("ok"),
-                    Some(e) => json!({"error": {"code": e.code, "message": e.message}}),
-                },
-            },
-            "live_utterances": live.map_or(0, |l| l.utterances),
-            "final": final_state,
-            "final_utterances": final_n,
-            "mic_stages": stages,
+            "state": "running",
+            "backend": backend,
+            "live": live_state,
+            "live_utterances": live_count,
+            "final": "running",
+            "final_utterances": 0,
         })
     }
 
     fn final_pass(&self, wav_path: &Path) -> Result<(usize, MicStages)> {
         let s = &self.plan.settings;
         let chans = wav::read(wav_path)?;
-        let (all, stages) = final_utts(&*self.plan.asr, s, &chans)?;
+        let total_seconds = chans.seconds();
+        self.plan.bus.publish(
+            "transcribe-progress",
+            json!({"session": self.id,
+            "mode": "final", "state": "running", "processed_seconds": 0.0,
+            "total_seconds": total_seconds}),
+        );
+        let (all, stages) = final_utts_with_progress(
+            &*self.plan.asr,
+            s,
+            &chans,
+            &mut |processed| {
+                self.plan.bus.publish("transcribe-progress", json!({"session": self.id,
+                "mode": "final", "state": "running", "processed_seconds": processed.min(total_seconds),
+                "total_seconds": total_seconds}));
+            },
+        )?;
         let lines: Vec<Value> = all
             .iter()
             .map(|u| utterance_json(u, self.started))

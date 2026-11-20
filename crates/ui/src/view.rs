@@ -807,6 +807,33 @@ impl MainWindow {
         (!rows.is_empty()).then(|| div().flex().flex_col().gap(px(8.)).children(rows))
     }
 
+    /// Compact progress and failure notices for detached session transcription jobs.
+    fn transcription_bars(&self) -> impl IntoElement {
+        let t = self.theme;
+        div()
+            .flex_col()
+            .children(self.state.transcription_jobs.iter().map(
+                |(session, (done, total, error))| {
+                    let message = if let Some(error) = error {
+                        format!("Transcription failed for {session}: {error}")
+                    } else {
+                        let percent = if *total > 0.0 {
+                            (*done / *total * 100.0).round() as u32
+                        } else {
+                            0
+                        };
+                        format!("Transcribing {session}, {percent}% of {:.0}s", total)
+                    };
+                    div()
+                        .px(px(12.))
+                        .py(px(5.))
+                        .text_size(px(11.))
+                        .text_color(rgb(t.dim))
+                        .child(message)
+                },
+            ))
+    }
+
     pub(crate) fn speaker_width(&self) -> f32 {
         self.engine.snapshot().config.ui.speaker_width as f32
     }
@@ -1193,6 +1220,7 @@ impl MainWindow {
                         .child(self.grid())
                         .children(banner)
                         .child(body)
+                        .child(self.transcription_bars())
                         .child(self.status_bar(source)),
                 ),
             )
