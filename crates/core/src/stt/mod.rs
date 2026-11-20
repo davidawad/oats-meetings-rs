@@ -1465,15 +1465,41 @@ pub fn run(
         &s.engine_label(),
     )?;
     store.set_meta(id, "language", json!(s.language))?;
+    #[cfg(unix)]
+    let mut monitor = Some(
+        SignalMonitor::new(id, duration, s.cloud_timeout)
+            .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
+    );
+    #[cfg(unix)]
+    if let Some(monitor) = &mut monitor {
+        let _ = monitor.progress("starting", 0.0, duration);
+    }
+    let mut progress = |phase: &str, processed_s: f64| {
+        #[cfg(unix)]
+        if let Some(monitor) = &mut monitor {
+            monitor.progress(phase, processed_s.min(duration), duration)?;
+        }
+        #[cfg(not(unix))]
+        let _ = (phase, processed_s);
+        Ok(())
+    };
     let (live_n, final_n, stages) =
-        match passes(store, bus, &asr, s, chans, id, started, &mut |_, _| Ok(())) {
+        match passes(store, bus, &asr, s, chans, id, started, &mut progress) {
             Ok(n) => n,
             Err(e) => {
+                #[cfg(unix)]
+                if let Some(monitor) = &mut monitor {
+                    monitor.finish("failed", "failed", duration);
+                }
                 // A failed run leaves no half-written session behind.
                 let _ = std::fs::remove_dir_all(&dir);
                 return Err(e);
             }
         };
+    #[cfg(unix)]
+    if let Some(monitor) = &mut monitor {
+        monitor.finish("completed", "completed", duration);
+    }
     let summary = store.finish(id, &now.to_rfc3339_opts(SecondsFormat::Secs, true))?;
     if let Some(b) = bus {
         b.publish("session-saved", json!({"id": id, "change": "transcribed"}));
@@ -1509,7 +1535,10 @@ pub fn into_session(
     };
     clear()?;
     #[cfg(unix)]
-    let mut monitor = SignalMonitor::new(id, chans.seconds(), s.cloud_timeout).ok();
+    let mut monitor = Some(
+        SignalMonitor::new(id, chans.seconds(), s.cloud_timeout)
+            .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
+    );
     #[cfg(unix)]
     if let Some(monitor) = &mut monitor {
         let _ = monitor.progress("starting", 0.0, chans.seconds());

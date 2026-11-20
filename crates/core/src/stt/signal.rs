@@ -1,6 +1,6 @@
 //! Signal-aware progress records for a transcription pass.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGQUIT, SIGTERM};
@@ -12,8 +12,10 @@ pub(super) struct SignalMonitor {
     session: String,
     started: Instant,
     last_progress: Instant,
+    last_progress_at_ms: u64,
     received: usize,
     deferred: bool,
+    last_signal: String,
     last_processed_s: f64,
     last_phase: String,
     stall_timeout: Duration,
@@ -30,8 +32,10 @@ impl SignalMonitor {
             session: session.to_owned(),
             started: Instant::now(),
             last_progress: Instant::now(),
+            last_progress_at_ms: unix_time_ms(),
             received: 0,
             deferred: false,
+            last_signal: String::new(),
             last_processed_s: 0.0,
             last_phase: "starting".to_owned(),
             stall_timeout,
@@ -42,6 +46,7 @@ impl SignalMonitor {
             "phase": "starting",
             "processed_s": 0.0,
             "total_s": total_s,
+            "stall_timeout_s": stall_timeout.as_secs_f64(),
             "pid": std::process::id(),
         }));
         Ok(monitor)
@@ -57,6 +62,7 @@ impl SignalMonitor {
             self.last_phase = phase.to_owned();
             self.last_processed_s = processed_s;
             self.last_progress = Instant::now();
+            self.last_progress_at_ms = unix_time_ms();
         }
         for signal in self.signals.pending() {
             self.received += 1;
@@ -68,6 +74,7 @@ impl SignalMonitor {
                 SIGQUIT => "SIGQUIT",
                 _ => "unknown",
             };
+            self.last_signal = signal_name.to_owned();
             self.log_progress(
                 "signal_decision",
                 signal_name,
@@ -81,7 +88,7 @@ impl SignalMonitor {
             let stalled = self.last_progress.elapsed() >= self.stall_timeout;
             self.log_progress(
                 "transcription_progress",
-                "",
+                &self.last_signal,
                 phase,
                 processed_s,
                 total_s,
@@ -139,7 +146,7 @@ impl SignalMonitor {
         let eta_s = if rate > 0.0 { remaining / rate } else { 0.0 };
         crate::log::line(json!({
             "event": event,
-            "signal": signal_name,
+            "signal": if signal_name.is_empty() { &self.last_signal } else { signal_name },
             "count": self.received,
             "session_id": self.session,
             "phase": phase,
@@ -149,10 +156,18 @@ impl SignalMonitor {
             "rate": rate,
             "eta_s": eta_s,
             "pid": std::process::id(),
+            "last_progress_at_ms": self.last_progress_at_ms,
             "last_progress_s_ago": self.last_progress.elapsed().as_secs_f64(),
             "decision": decision,
         }));
     }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }
 
 #[cfg(test)]

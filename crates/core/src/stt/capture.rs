@@ -311,7 +311,10 @@ impl Transcriber {
             "total_seconds": total_seconds}),
         );
         #[cfg(unix)]
-        let mut monitor = SignalMonitor::new(&self.id, total_seconds, s.cloud_timeout).ok();
+        let mut monitor = Some(
+            SignalMonitor::new(&self.id, total_seconds, s.cloud_timeout)
+                .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
+        );
         #[cfg(unix)]
         if let Some(monitor) = &mut monitor {
             let _ = monitor.progress("starting", 0.0, total_seconds);
