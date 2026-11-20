@@ -291,6 +291,9 @@ impl Engine {
     }
 
     pub fn new(opts: EngineOpts) -> Result<Arc<Engine>> {
+        #[cfg(unix)]
+        crate::stt::signal::install()
+            .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?;
         let text = read_user(&opts.user_config)?;
         let resolved = Self::resolve_with(&opts, text.as_deref(), &opts.user_config)?;
         let config = resolved.typed()?;
@@ -503,6 +506,115 @@ impl Engine {
     pub fn launched(&self) {
         use crate::config::typed::{AudioTranscribe, SttBackend};
         self.enable_monitor();
+        #[cfg(unix)]
+        {
+            let weak = self.me.clone();
+            let signal_watch = std::thread::Builder::new()
+                .name("oats-signal-shutdown".into())
+                .spawn(move || {
+                    if crate::stt::signal::watch_current_thread().is_err() {
+                        return;
+                    }
+                    let mut seen = 0;
+                    loop {
+                        let received = crate::stt::signal::received_count();
+                        if received <= seen {
+                            std::thread::park();
+                            continue;
+                        }
+                        seen = received;
+                        let Some(engine) = weak.upgrade() else {
+                            break;
+                        };
+                        if engine.recorder.active_id().is_some() {
+                            if let Err(error) = engine.stop_recording("signal", None, None) {
+                                crate::elog!(
+                                    "oats-meetings-rs: signal record-stop failed: {error}"
+                                );
+                            }
+                        }
+                        let (passes, changed) = &engine.final_passes;
+                        let mut running = passes.lock().expect("final passes");
+                        let force_window = engine
+                            .snapshot()
+                            .config
+                            .stt
+                            .signal_force_window
+                            .as_duration();
+                        let stall_timeout = engine
+                            .snapshot()
+                            .config
+                            .stt
+                            .signal_stall_timeout
+                            .as_duration();
+                        let mut force_exit = false;
+                        while !running.is_empty() {
+                            let (next, _) = changed
+                                .wait_timeout(running, force_window.min(stall_timeout))
+                                .expect("final passes");
+                            running = next;
+                            if crate::stt::signal::force_exit_requested_after(
+                                received,
+                                force_window,
+                            ) {
+                                let pending: Vec<String> = running.iter().cloned().collect();
+                                drop(running);
+                                let store = engine.store();
+                                for id in pending {
+                                    let _ = store.write_transcript(&id, "live", &[]);
+                                    let _ = store.write_transcript(&id, "final", &[]);
+                                    let _ = store.set_pending(&id, true);
+                                }
+                                crate::log::line(json!({
+                                    "event": "signal_shutdown",
+                                    "signal": crate::stt::signal::latest_signal(),
+                                    "count": crate::stt::signal::received_count(),
+                                    "pid": std::process::id(),
+                                    "decision": "force_exit_pending",
+                                }));
+                                engine.request_shutdown();
+                                force_exit = true;
+                                break;
+                            }
+                            let stalled = crate::stt::signal::stalled_sessions(stall_timeout);
+                            if !stalled.is_empty() {
+                                let pending: Vec<String> = running.iter().cloned().collect();
+                                drop(running);
+                                let store = engine.store();
+                                for id in pending {
+                                    let _ = store.write_transcript(&id, "live", &[]);
+                                    let _ = store.write_transcript(&id, "final", &[]);
+                                    let _ = store.set_pending(&id, true);
+                                }
+                                crate::log::line(json!({
+                                    "event": "signal_shutdown",
+                                    "signal": crate::stt::signal::latest_signal(),
+                                    "count": crate::stt::signal::received_count(),
+                                    "pid": std::process::id(),
+                                    "decision": "exit_stalled_pending",
+                                }));
+                                engine.request_shutdown();
+                                force_exit = true;
+                                break;
+                            }
+                        }
+                        if force_exit {
+                            continue;
+                        }
+                        crate::log::line(json!({
+                            "event": "signal_shutdown",
+                            "signal": crate::stt::signal::latest_signal(),
+                            "count": received,
+                            "pid": std::process::id(),
+                            "decision": "exit_after_transcription",
+                        }));
+                        engine.request_shutdown();
+                    }
+                });
+            if let Err(error) = signal_watch {
+                crate::elog!("oats-meetings-rs: start signal shutdown watcher: {error}");
+            }
+        }
         let cfg = self.snapshot().config.clone();
         if let Ok(s) = crate::stt::Settings::from_config(&cfg, self.default_sessions_dir()) {
             if cfg.audio.transcribe != AudioTranscribe::Off {

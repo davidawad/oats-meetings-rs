@@ -312,8 +312,13 @@ impl Transcriber {
         );
         #[cfg(unix)]
         let mut monitor = Some(
-            SignalMonitor::new(&self.id, total_seconds, s.cloud_timeout)
-                .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
+            SignalMonitor::new(
+                &self.id,
+                total_seconds,
+                s.signal_stall_timeout,
+                s.signal_force_window,
+            )
+            .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
         );
         #[cfg(unix)]
         if let Some(monitor) = &mut monitor {

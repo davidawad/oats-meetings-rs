@@ -2295,6 +2295,34 @@
           "x-reload": "live",
           "x-ui": false
         },
+        "signal_force_window": {
+          "default": "2s",
+          "description": "A second SIGINT or SIGTERM within this window forces transcription to stop and stay pending.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1m",
+          "x-max-ms": 60000,
+          "x-min": "1ms",
+          "x-min-ms": 1,
+          "x-reload": "live",
+          "x-ui": false
+        },
+        "signal_stall_timeout": {
+          "default": "1m",
+          "description": "How long a transcription may stop advancing after a termination signal before it is marked pending for session-transcribe.",
+          "format": "duration",
+          "pattern": "^[0-9]+(ms|s|m|h|d)$",
+          "type": "string",
+          "x-kind": "duration",
+          "x-max": "1h",
+          "x-max-ms": 3600000,
+          "x-min": "1s",
+          "x-min-ms": 1000,
+          "x-reload": "live",
+          "x-ui": false
+        },
         "speech_peak": {
           "default": 10,
           "description": "Per-mille of full scale: a 10 ms frame whose peak is below this is silence (10 = 0.01).",

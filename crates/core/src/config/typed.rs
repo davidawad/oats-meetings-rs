@@ -554,6 +554,8 @@ pub struct Stt {
     pub final_piece: Dur,
     pub pad: Dur,
     pub speech_peak: u32,
+    pub signal_stall_timeout: Dur,
+    pub signal_force_window: Dur,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

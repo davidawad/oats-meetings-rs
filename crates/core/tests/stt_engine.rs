@@ -13,6 +13,7 @@ use std::time::Duration;
 use oats_core::action::Action;
 use oats_core::config::ConfigError;
 use oats_core::control::engine::{Engine, EngineOpts};
+use oats_core::sessions::Store;
 use oats_core::stt::wav;
 use serde_json::{json, Value};
 
@@ -113,6 +114,340 @@ fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/stt")
         .join(name)
+}
+
+#[cfg(unix)]
+#[test]
+fn process_signal_child() {
+    let Some(root) = std::env::var_os("OATS_SIGNAL_CHILD_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    let config = root.join("config.toml");
+    let sessions = root.join("sessions");
+    std::env::set_var("OATS_SECRET_STT_SIGNAL_TEST", "test-token");
+    let engine = Engine::new(EngineOpts {
+        user_config: config,
+        pack: None,
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        machine: "default".into(),
+        sessions_dir: sessions.clone(),
+        secrets: None,
+    })
+    .expect("create child engine");
+    engine.launched();
+    let audio = sessions.join("signal-session").join("audio.wav");
+    Store::new(sessions)
+        .create(
+            "signal-session",
+            "2026-01-01T00:00:00Z",
+            "Signal test",
+            "test",
+        )
+        .expect("create audio-only session");
+    std::fs::copy(call_wav(&root), &audio).expect("copy test audio");
+    engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "signal-session".into(),
+            overwrite: None,
+        })
+        .expect("transcribe session");
+    while !engine.is_shutdown() {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn process_idle_signal_child() {
+    let Some(root) = std::env::var_os("OATS_SIGNAL_IDLE_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    let config = root.join("config.toml");
+    std::fs::write(&config, "").expect("write idle config");
+    let engine = Engine::new(EngineOpts {
+        user_config: config,
+        pack: None,
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        machine: "default".into(),
+        sessions_dir: root.join("sessions"),
+        secrets: None,
+    })
+    .expect("create idle engine");
+    engine.launched();
+    std::fs::write(root.join("ready"), "ready").expect("signal readiness");
+    while !engine.is_shutdown() {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn process_after_pass_signal_child() {
+    let Some(root) = std::env::var_os("OATS_SIGNAL_AFTER_PASS_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    std::env::set_var("OATS_SECRET_STT_SIGNAL_TEST", "test-token");
+    let config = root.join("config.toml");
+    let sessions = root.join("sessions");
+    let engine = Engine::new(EngineOpts {
+        user_config: config,
+        pack: None,
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        machine: "default".into(),
+        sessions_dir: sessions.clone(),
+        secrets: None,
+    })
+    .expect("create post-pass engine");
+    engine.launched();
+    let store = Store::new(sessions.clone());
+    let dir = store
+        .create(
+            "signal-session",
+            "2026-01-01T00:00:00Z",
+            "Signal test",
+            "test",
+        )
+        .expect("create audio-only session");
+    std::fs::copy(call_wav(&root), dir.join("audio.wav")).expect("copy test audio");
+    engine
+        .dispatch(&Action::SessionTranscribe {
+            session: "signal-session".into(),
+            overwrite: None,
+        })
+        .expect("complete first transcription");
+    std::fs::write(root.join("ready"), "ready").expect("signal readiness");
+    while !engine.is_shutdown() {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn process_stalled_signal_child() {
+    let Some(root) = std::env::var_os("OATS_SIGNAL_STALLED_ROOT").map(PathBuf::from) else {
+        return;
+    };
+    std::env::set_var("OATS_SECRET_STT_SIGNAL_TEST", "test-token");
+    let sessions = root.join("sessions");
+    let engine = Engine::new(EngineOpts {
+        user_config: root.join("config.toml"),
+        pack: None,
+        os: "linux".into(),
+        arch: "x86_64".into(),
+        machine: "default".into(),
+        sessions_dir: sessions.clone(),
+        secrets: None,
+    })
+    .expect("create stalled engine");
+    engine.launched();
+    let store = Store::new(sessions.clone());
+    let dir = store
+        .create(
+            "signal-session",
+            "2026-01-01T00:00:00Z",
+            "Signal test",
+            "test",
+        )
+        .expect("create audio-only session");
+    std::fs::copy(call_wav(&root), dir.join("audio.wav")).expect("copy test audio");
+    let worker = Arc::clone(&engine);
+    thread::spawn(move || {
+        let _ = worker.dispatch(&Action::SessionTranscribe {
+            session: "signal-session".into(),
+            overwrite: None,
+        });
+    });
+    std::fs::write(root.join("ready"), "ready").expect("signal readiness");
+    while !engine.is_shutdown() {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_during_a_session_transcription_finishes_then_exits() {
+    let root = tempfile::tempdir().expect("create child data directory");
+    let mock = Mock::start(Arc::new(|| {
+        (
+            200,
+            r#"{"text":"finished after signal","segments":[{"start":0.0,"end":1.0,"text":" finished after signal "}]}"#.to_string(),
+            Duration::from_millis(400),
+        )
+    }));
+    let config = root.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[network]\nallow = true\n[secrets]\nbackend = \"env\"\n[stt]\nbackend = \"cloud\"\n[stt.cloud]\nadapter = \"openai-compatible\"\nurl = \"{}\"\nkey = \"secret:stt/signal-test\"\n[stt.final]\nenabled = true\n",
+            mock.url()
+        ),
+    )
+    .expect("write child config");
+    let log = std::fs::File::create(root.path().join("child.log")).expect("create child log");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "process_signal_child", "--nocapture"])
+        .env("OATS_SIGNAL_CHILD_ROOT", root.path())
+        .stdout(std::process::Stdio::from(
+            log.try_clone().expect("clone child log"),
+        ))
+        .stderr(std::process::Stdio::from(log))
+        .spawn()
+        .expect("start child process");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while mock.hits() == 0 && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        mock.hits() > 0,
+        "child reached the fake transcription service"
+    );
+    // SAFETY: `child.id()` is a live child process owned by this test.
+    let signal_result = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "send SIGTERM to the child process");
+    let status = child.wait().expect("wait for signal-aware child");
+    assert!(
+        status.success(),
+        "child exits through normal shutdown: {status}"
+    );
+    let transcript = root
+        .path()
+        .join("sessions/signal-session/transcript.final.jsonl");
+    let text = std::fs::read_to_string(&transcript).expect("read final transcript");
+    assert!(text.contains("finished after signal"), "{text}");
+    let log = std::fs::read_to_string(root.path().join("child.log")).expect("read child log");
+    assert!(log.contains("signal_decision"), "{log}");
+    assert!(log.contains("exit_after_transcription"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_while_idle_exits_normally() {
+    let root = tempfile::tempdir().expect("create child data directory");
+    let log = std::fs::File::create(root.path().join("child.log")).expect("create child log");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "process_idle_signal_child", "--nocapture"])
+        .env("OATS_SIGNAL_IDLE_ROOT", root.path())
+        .stdout(std::process::Stdio::from(
+            log.try_clone().expect("clone child log"),
+        ))
+        .stderr(std::process::Stdio::from(log))
+        .spawn()
+        .expect("start idle child process");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !root.path().join("ready").is_file() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(root.path().join("ready").is_file(), "idle child is ready");
+    // SAFETY: `child.id()` is a live child process owned by this test.
+    let signal_result = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "send SIGTERM to the idle child");
+    let status = child.wait().expect("wait for idle child");
+    assert!(status.success(), "idle child exits normally: {status}");
+    let log = std::fs::read_to_string(root.path().join("child.log")).expect("read child log");
+    assert!(log.contains("exit_after_transcription"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_after_a_completed_pass_still_exits_normally() {
+    let root = tempfile::tempdir().expect("create child data directory");
+    let mock = Mock::ok();
+    std::fs::write(
+        root.path().join("config.toml"),
+        format!(
+            "[network]\nallow = true\n[secrets]\nbackend = \"env\"\n[stt]\nbackend = \"cloud\"\n[stt.cloud]\nadapter = \"openai-compatible\"\nurl = \"{}\"\nkey = \"secret:stt/signal-test\"\n[stt.final]\nenabled = true\n",
+            mock.url()
+        ),
+    )
+    .expect("write child config");
+    let log = std::fs::File::create(root.path().join("child.log")).expect("create child log");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "process_after_pass_signal_child", "--nocapture"])
+        .env("OATS_SIGNAL_AFTER_PASS_ROOT", root.path())
+        .stdout(std::process::Stdio::from(
+            log.try_clone().expect("clone child log"),
+        ))
+        .stderr(std::process::Stdio::from(log))
+        .spawn()
+        .expect("start post-pass child process");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !root.path().join("ready").is_file() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(root.path().join("ready").is_file(), "first pass completed");
+    // SAFETY: `child.id()` is a live child process owned by this test.
+    let signal_result = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "send SIGTERM after the first pass");
+    let status = child.wait().expect("wait for post-pass child");
+    assert!(status.success(), "post-pass child exits normally: {status}");
+    let transcript = root
+        .path()
+        .join("sessions/signal-session/transcript.final.jsonl");
+    assert!(transcript.is_file(), "first transcript was completed");
+    let log = std::fs::read_to_string(root.path().join("child.log")).expect("read child log");
+    assert!(log.contains("transcription_end"), "{log}");
+    assert!(log.contains("exit_after_transcription"), "{log}");
+}
+
+#[cfg(unix)]
+#[test]
+fn stalled_fake_transcription_is_pending_then_exits() {
+    let root = tempfile::tempdir().expect("create child data directory");
+    let mock = Mock::start(Arc::new(|| {
+        (
+            200,
+            r#"{"text":"late response","segments":[{"start":0.0,"end":1.0,"text":" late response "}]}"#.to_string(),
+            Duration::from_secs(4),
+        )
+    }));
+    std::fs::write(
+        root.path().join("config.toml"),
+        format!(
+            "[network]\nallow = true\n[secrets]\nbackend = \"env\"\n[stt]\nbackend = \"cloud\"\nsignal_stall_timeout = \"1s\"\n[stt.cloud]\nadapter = \"openai-compatible\"\nurl = \"{}\"\nkey = \"secret:stt/signal-test\"\ntimeout = \"10s\"\n[stt.final]\nenabled = true\n",
+            mock.url()
+        ),
+    )
+    .expect("write child config");
+    let log = std::fs::File::create(root.path().join("child.log")).expect("create child log");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "process_stalled_signal_child", "--nocapture"])
+        .env("OATS_SIGNAL_STALLED_ROOT", root.path())
+        .stdout(std::process::Stdio::from(
+            log.try_clone().expect("clone child log"),
+        ))
+        .stderr(std::process::Stdio::from(log))
+        .spawn()
+        .expect("start stalled child process");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while mock.hits() == 0 && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        mock.hits() > 0,
+        "child reached the fake transcription service"
+    );
+    // SAFETY: `child.id()` is a live child process owned by this test.
+    let signal_result = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    assert_eq!(signal_result, 0, "send SIGTERM to the stalled child");
+    let status = child.wait().expect("wait for stalled child");
+    assert!(status.success(), "stalled child exits normally: {status}");
+    let session_dir = root.path().join("sessions/signal-session");
+    let metadata: Value = serde_json::from_slice(
+        &std::fs::read(session_dir.join("session.json")).expect("read pending metadata"),
+    )
+    .expect("parse pending metadata");
+    assert_eq!(metadata["x_oats"]["transcribePending"], true, "{metadata}");
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join("transcript.final.jsonl")).unwrap_or_default(),
+        "",
+        "a stalled pass leaves no partial final transcript"
+    );
+    let log = std::fs::read_to_string(root.path().join("child.log")).expect("read child log");
+    assert!(log.contains("signal_stalled"), "{log}");
+    assert!(log.contains("exit_stalled_pending"), "{log}");
 }
 
 /// you.wav on the left, them.wav on the right starting one second after "you" ends.

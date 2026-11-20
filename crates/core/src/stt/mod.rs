@@ -45,7 +45,7 @@ pub mod wer;
 #[cfg(unix)]
 use signal::SignalMonitor;
 #[cfg(unix)]
-mod signal;
+pub(crate) mod signal;
 #[cfg(feature = "parakeet")]
 pub mod worker;
 
@@ -589,6 +589,8 @@ pub struct Settings {
     pub cloud_model: String,
     pub cloud_key: String,
     pub cloud_timeout: std::time::Duration,
+    pub signal_stall_timeout: std::time::Duration,
+    pub signal_force_window: std::time::Duration,
     pub max_key_len: usize,
     pub error_snippet: usize,
     pub max_response: u64,
@@ -662,6 +664,8 @@ impl Settings {
             cloud_model: c.cloud.model.trim().to_string(),
             cloud_key: c.cloud.key.trim().to_string(),
             cloud_timeout: c.cloud.timeout.as_duration(),
+            signal_stall_timeout: c.signal_stall_timeout.as_duration(),
+            signal_force_window: c.signal_force_window.as_duration(),
             max_key_len: cfg.secrets.max_key_len as usize,
             error_snippet: cfg.network.error_snippet as usize,
             max_response: c.cloud.max_response,
@@ -1467,7 +1471,7 @@ pub fn run(
     store.set_meta(id, "language", json!(s.language))?;
     #[cfg(unix)]
     let mut monitor = Some(
-        SignalMonitor::new(id, duration, s.cloud_timeout)
+        SignalMonitor::new(id, duration, s.signal_stall_timeout, s.signal_force_window)
             .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
     );
     #[cfg(unix)]
@@ -1536,8 +1540,13 @@ pub fn into_session(
     clear()?;
     #[cfg(unix)]
     let mut monitor = Some(
-        SignalMonitor::new(id, chans.seconds(), s.cloud_timeout)
-            .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
+        SignalMonitor::new(
+            id,
+            chans.seconds(),
+            s.signal_stall_timeout,
+            s.signal_force_window,
+        )
+        .map_err(|error| ConfigError::new("signal_handler", error.to_string()))?,
     );
     #[cfg(unix)]
     if let Some(monitor) = &mut monitor {

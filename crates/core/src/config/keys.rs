@@ -1870,6 +1870,22 @@ pub const KEYS: &[Key] = &[
         reload: Reload::Live,
     },
     Key {
+        path: "stt.signal_stall_timeout",
+        kind: Kind::Duration { min_ms: SEC, max_ms: HOUR },
+        default: Def::D(60 * SEC),
+        doc: "How long a transcription may stop advancing after a termination signal before it is marked pending for session-transcribe.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
+        path: "stt.signal_force_window",
+        kind: Kind::Duration { min_ms: MS, max_ms: MIN },
+        default: Def::D(2 * SEC),
+        doc: "A second SIGINT or SIGTERM within this window forces transcription to stop and stay pending.",
+        ui: false,
+        reload: Reload::Live,
+    },
+    Key {
         path: "stt.cloud.url",
         kind: Kind::Str,
         default: Def::S("https://api.openai.com/v1"),

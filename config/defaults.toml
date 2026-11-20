@@ -394,6 +394,10 @@ final_piece = "10m"
 language = "en"
 # Silence kept around the speech that is sent to the recogniser.
 pad = "250ms"
+# A second SIGINT or SIGTERM within this window forces transcription to stop and stay pending.
+signal_force_window = "2s"
+# How long a transcription may stop advancing after a termination signal before it is marked pending for session-transcribe.
+signal_stall_timeout = "1m"
 # Per-mille of full scale: a 10 ms frame whose peak is below this is silence (10 = 0.01).
 speech_peak = 10
 
