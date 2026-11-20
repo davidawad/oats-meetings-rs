@@ -1046,6 +1046,8 @@ pub struct Live {
     held: Vec<Utt>,
     /// Recent remote utterances, to check the held ones against.
     heard: Vec<Utt>,
+    /// Recent remote audio, used to distinguish a silent captured channel from one not seen yet.
+    recent_remote: Vec<f32>,
     /// Splits the remote channel by voice (`with_diarization`).
     diarizer: Option<diarize::Diarizer>,
     /// Splits the mic channel by voice (`with_mic_diarization`).
@@ -1137,6 +1139,7 @@ impl Live {
             bufs: [ChanBuf::default(), ChanBuf::default()],
             held: Vec::new(),
             heard: Vec::new(),
+            recent_remote: Vec::new(),
             diarizer: None,
             mic_diarizer: None,
             stages: MicStages {
@@ -1221,7 +1224,8 @@ impl Live {
             out = fresh;
         }
         let them_at = Self::secs(self.bufs[1].base);
-        let them_silent = self.bufs[1].base + self.bufs[1].pcm.len() == 0;
+        let them_silent = self.recent_remote.is_empty()
+            || speech_bounds(&self.recent_remote, &self.tuning).is_none();
         let you_at = Self::secs(self.bufs[0].base);
         let max_lag = 2.0 * Self::secs(self.window) + d.window;
         let (ready, wait): (Vec<Utt>, Vec<Utt>) =
@@ -1267,6 +1271,11 @@ impl Live {
     /// `channel` 0 = you, 1 = them. Returns the utterances of every window this push completed.
     pub fn push(&mut self, channel: usize, samples: &[f32]) -> Result<Vec<Utt>> {
         let ch = channel.min(1);
+        if ch == 1 {
+            self.recent_remote.extend_from_slice(samples);
+            let excess = self.recent_remote.len().saturating_sub(self.window);
+            self.recent_remote.drain(..excess);
+        }
         self.bufs[ch].pcm.extend_from_slice(samples);
         if self.tuning.echo.is_some_and(|d| d.track > 0.0) {
             self.audio[ch].extend_from_slice(samples);
@@ -2800,6 +2809,26 @@ mod tests {
         let us = live_run(off, &tone(5.0));
         assert!(us.iter().any(|u| u.speaker == "you"));
         assert!(us.iter().any(|u| u.speaker == "remote_1"));
+    }
+
+    #[test]
+    fn live_releases_mic_speech_after_a_short_silent_system_window() {
+        let mut live = Live::new(
+            Arc::new(Parrot),
+            "en",
+            2.0,
+            tuning_with(&[]),
+            "you",
+            "remote_1",
+        );
+        assert!(live
+            .push(1, &vec![0.0; SAMPLE_RATE as usize / 10])
+            .unwrap()
+            .is_empty());
+
+        let released = live.push(0, &tone(2.0)).unwrap();
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].speaker, "you");
     }
 
     #[test]

@@ -450,6 +450,7 @@ impl Engine {
                 ));
             }
             let secrets = self.secret_store(cfg);
+            let load_started = std::time::Instant::now();
             let asr = match self.recorder.make_asr(&settings, &|s| {
                 crate::stt::make_asr(s, cfg.network.allow, &*secrets)
             }) {
@@ -463,6 +464,10 @@ impl Engine {
                     return Err(e);
                 }
             };
+            crate::elog!(
+                "oats-meetings-rs: ASR ready in {:?}",
+                load_started.elapsed()
+            );
             Ok(crate::stt::capture::Plan {
                 asr,
                 settings,
@@ -516,6 +521,32 @@ impl Engine {
                     self.on_model_arrived(),
                 );
                 return;
+            }
+            if s.live_enabled && s.backend == SttBackend::Local {
+                let secrets = self.secret_store(&cfg);
+                let network_allow = cfg.network.allow;
+                let warm_settings = s.clone();
+                let spawn = std::thread::Builder::new()
+                    .name("oats-stt-warm".into())
+                    .spawn(move || {
+                        let load_started = std::time::Instant::now();
+                        match crate::stt::make_asr(&warm_settings, network_allow, &*secrets) {
+                            Ok(asr) => {
+                                crate::elog!(
+                                    "oats-meetings-rs: startup ASR warm in {:?}",
+                                    load_started.elapsed()
+                                );
+                                drop(asr);
+                            }
+                            Err(e) => crate::elog!(
+                                "oats-meetings-rs: startup ASR warm failed in {:?}: {e}",
+                                load_started.elapsed()
+                            ),
+                        }
+                    });
+                if let Err(e) = spawn {
+                    crate::elog!("oats-meetings-rs: start ASR warm worker: {e}");
+                }
             }
         }
         if !self.store().pending().is_empty() {
