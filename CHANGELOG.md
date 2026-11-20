@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 (2026-11-19)
+
+### Features
+
+- stt: defer signals during transcription (dot-ua2s9)
+- stt: warm live ASR and release silent mic holds (dot-2dcu5)
+- record: detach final transcription per session (dot-av6le)
+
+### Fixes
+
+- stt: keep the live transcript when a final pass fails or a signal exits (dot-ua2s9)
+- stt: wait for every active transcription (dot-ua2s9)
+- stt: finalize process signal handling (dot-ua2s9)
+- stt: cover transcribe signals consistently (dot-ua2s9)
+- stt: recover stalled signal deferrals (dot-ua2s9)
+
+### Other
+
+- isolate host state in rigs (dot-bb25l)
+- record: wait for the detached final pass; record.stop carries the live transcript (dot-av6le)
+- cask: non-deprecated depends_on macos
+- readme: install with brew cask
 ## 0.1.0 (2026-11-15)
 
 ### Features
