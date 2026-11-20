@@ -542,7 +542,9 @@ impl Rig {
 
 #[test]
 fn local_backend_reports_what_this_build_can_do() {
-    let rig = Rig::with_config("");
+    // Pin Whisper so the expectation follows this build's Whisper feature, independent of the
+    // machine profile's default model (CoreML on macOS, Parakeet elsewhere).
+    let rig = Rig::with_config("[stt.local]\nmodel = \"small.en\"\nauto_download = false\n");
     let call = call_wav(rig.dir.path());
     let s = rig.engine.dispatch(&Action::SttStatus {}).unwrap();
     assert_eq!(s["backend"], "local");

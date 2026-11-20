@@ -587,14 +587,30 @@ impl Engine {
             if !store.pending().contains(&id) {
                 continue;
             }
-            match self.session_transcribe(&id, false, false) {
-                Ok(_) => done.push(id),
-                Err(e) if matches!(e.code, "exists" | "no_audio" | "not_found") => {
-                    let _ = store.set_pending(&id, false);
-                }
-                Err(e) => {
-                    crate::elog!("oats-meetings-rs: transcribing {id}: {e}");
-                    failed.push(json!({"session": id, "code": e.code, "message": e.message}));
+            loop {
+                match self.session_transcribe(&id, false, false) {
+                    Ok(_) => {
+                        done.push(id);
+                        break;
+                    }
+                    Err(e) if e.code == "transcribing" => {
+                        // A model-arrival worker can claim this session after the wait above.
+                        // Join that pass, then retry with its result instead of reporting a race
+                        // as a failed pending transcription.
+                        self.wait_final_pass(&id);
+                        if !store.pending().contains(&id) {
+                            break;
+                        }
+                    }
+                    Err(e) if matches!(e.code, "exists" | "no_audio" | "not_found") => {
+                        let _ = store.set_pending(&id, false);
+                        break;
+                    }
+                    Err(e) => {
+                        crate::elog!("oats-meetings-rs: transcribing {id}: {e}");
+                        failed.push(json!({"session": id, "code": e.code, "message": e.message}));
+                        break;
+                    }
                 }
             }
         }

@@ -81,10 +81,8 @@ fn rig(toml: &str) -> Rig {
     }
 }
 
-/// Writes every OATS_* variable to `<out>/<event>.env` (one per line), stdin to `<event>.json` and
-/// the OATS_EVENT_FILE to `<event>.file.json`, each replaced whole (two runs of one event may
-/// overlap).
-const SPY: &str = r#"t="$1/$OATS_EVENT.$$"; printf '%s\n' "$OATS_EVENT" "$OATS_SESSION_ID" "$OATS_SESSION_DIR" "$OATS_TITLE" "$OATS_AUDIO" "$OATS_TRANSCRIPT" "$OATS_HOOK" "$PWD" "$OATS_RUN_ID" "$OATS_SEQ" "$OATS_EVENT_FILE" > "$t.env"; cp "$OATS_EVENT_FILE" "$t.file"; cat > "$t.json"; mv "$t.file" "$1/$OATS_EVENT.file.json"; mv "$t.json" "$1/$OATS_EVENT.json"; mv "$t.env" "$1/$OATS_EVENT.env""#;
+/// Writes one immutable set of spy files per hook run. Two runs of the same event may overlap.
+const SPY: &str = r#"d="$1/$OATS_EVENT/$OATS_RUN_ID"; mkdir -p "$d"; printf '%s\n' "$OATS_EVENT" "$OATS_SESSION_ID" "$OATS_SESSION_DIR" "$OATS_TITLE" "$OATS_AUDIO" "$OATS_TRANSCRIPT" "$OATS_HOOK" "$PWD" "$OATS_RUN_ID" "$OATS_SEQ" "$OATS_EVENT_FILE" > "$d/env"; cp "$OATS_EVENT_FILE" "$d/file.json"; cat > "$d/stdin.json""#;
 
 fn spy_hooks(out: &Path) -> String {
     hooks::names()
@@ -114,35 +112,60 @@ fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
 
 /// What the spy saw for `event`: (env lines, stdin JSON).
 fn seen(out: &Path, event: &str) -> (Vec<String>, Value) {
-    let env = out.join(format!("{event}.env"));
-    wait_until(&format!("the {event} hook"), || env.exists());
-    let lines = std::fs::read_to_string(&env)
-        .unwrap()
-        .lines()
-        .map(str::to_string)
-        .collect();
-    let stdin = std::fs::read_to_string(out.join(format!("{event}.json"))).unwrap();
-    (lines, serde_json::from_str(&stdin).unwrap())
+    seen_where(out, event, |_, _| true)
 }
 
-/// The envelope a spy saw holds to the event's schema, the OATS_EVENT_FILE held the same JSON
-/// and OATS_RUN_ID / OATS_SEQ are the envelope's. Two runs of one event may overlap, so the spy's
-/// three files are read again until they are one run's.
-fn check_envelope(out: &Path, event: &str) {
-    let mut got = (vec![], Value::Null);
-    wait_until(&format!("one {event} run's spy files"), || {
-        let (env, stdin) = seen(out, event);
-        let file = std::fs::read_to_string(out.join(format!("{event}.file.json")))
-            .ok()
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok());
-        let same = env.get(8).map(String::as_str) == stdin["run_id"].as_str()
-            && file.as_ref() == Some(&stdin);
-        got = (env, stdin);
-        same
+fn seen_where(
+    out: &Path,
+    event: &str,
+    mut matches: impl FnMut(&[String], &Value) -> bool,
+) -> (Vec<String>, Value) {
+    let event_dir = out.join(event);
+    let mut seen_run = None;
+    wait_until(&format!("the {event} hook"), || {
+        let Ok(runs) = std::fs::read_dir(&event_dir) else {
+            return false;
+        };
+        for run in runs.flatten() {
+            let dir = run.path();
+            let Ok(env) = std::fs::read_to_string(dir.join("env")) else {
+                continue;
+            };
+            let Ok(stdin) = std::fs::read_to_string(dir.join("stdin.json")) else {
+                continue;
+            };
+            let Ok(file) = std::fs::read_to_string(dir.join("file.json")) else {
+                continue;
+            };
+            let (Ok(stdin), Ok(file)) = (
+                serde_json::from_str::<Value>(&stdin),
+                serde_json::from_str::<Value>(&file),
+            ) else {
+                continue;
+            };
+            let lines: Vec<String> = env.lines().map(str::to_string).collect();
+            if lines.get(8).map(String::as_str) == stdin["run_id"].as_str()
+                && file == stdin
+                && matches(&lines, &stdin)
+            {
+                seen_run = Some((lines, stdin));
+                return true;
+            }
+        }
+        false
     });
-    let (env, stdin) = got;
+    seen_run.expect("wait_until returns only after finding a complete hook run")
+}
+
+/// The envelope a spy saw holds to the event's schema, and both recorded JSON files match it.
+fn check_envelope(out: &Path, event: &str) {
+    let (env, stdin) = seen(out, event);
+    validate_envelope(event, &env, &stdin);
+}
+
+fn validate_envelope(event: &str, env: &[String], stdin: &Value) {
     let spec = hooks::events::find(event).unwrap();
-    hooks::events::validate(&hooks::events::envelope_schema(Some(spec)), &stdin)
+    hooks::events::validate(&hooks::events::envelope_schema(Some(spec)), stdin)
         .unwrap_or_else(|e| panic!("{event}: {e}\n{stdin}"));
     assert_eq!(stdin["schema"], "oats.hook-event/1");
     assert_eq!(stdin["event"], event);
@@ -261,13 +284,11 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
     }
     let (_, pause) = seen(&out, "record.pause");
     assert!(pause["data"]["paused"].is_boolean(), "{pause}");
-    // seq is monotonic within the session: start, pause, stop (one message: transcript.final
-    // shares its seq), then the save.
+    // The detached final pass publishes its own later `session-saved` event after stop.
     let seq = |e: &str| seen(&out, e).1["seq"].as_u64().unwrap();
     assert!(seq("record.start") < seq("record.pause"));
     assert!(seq("record.pause") < seq("record.stop"));
-    assert_eq!(seq("record.stop"), seq("transcript.final"));
-    assert!(seq("record.stop") < seq("session.saved"));
+    assert!(seq("record.stop") < seq("transcript.final"));
     // A recording that matched a calendar event: the engine publishes the match in the
     // recording-started / -stopped payload (calendar.event), which is what calendar.matched follows.
     r.engine.bus.publish(
@@ -296,22 +317,33 @@ fn each_recording_event_fires_its_hook_with_the_session_in_env_and_stdin() {
         assert_eq!(seen(&out, event).0[1], "hooked");
     }
     // A re-transcription saves the session as transcribed: transcript.final again.
-    std::fs::remove_file(out.join("transcript.final.env")).unwrap();
+    let previous_final_seq = seen(&out, "transcript.final").1["seq"].as_u64().unwrap();
     r.engine
         .dispatch(&Action::SessionTranscribe {
             session: "hooked".into(),
             overwrite: Some(true),
         })
         .unwrap();
-    let (env, stdin) = seen(&out, "transcript.final");
+    let (env, stdin) = seen_where(&out, "transcript.final", |_, stdin| {
+        stdin["data"]["change"] == "transcribed"
+            && stdin["seq"]
+                .as_u64()
+                .is_some_and(|seq| seq > previous_final_seq)
+    });
     assert_eq!(env[1], "hooked");
     assert_eq!(stdin["data"]["change"], "transcribed");
-    check_envelope(&out, "transcript.final");
+    validate_envelope("transcript.final", &env, &stdin);
     // Every run is over: their event files are gone.
     wait_until("the event files removed", || {
         hooks::names().iter().all(|e| {
-            std::fs::read_to_string(out.join(format!("{e}.env")))
-                .map(|s| s.lines().nth(10).is_some_and(|f| !Path::new(f).exists()))
+            std::fs::read_dir(out.join(e))
+                .map(|runs| {
+                    runs.flatten().all(|run| {
+                        std::fs::read_to_string(run.path().join("env"))
+                            .map(|s| s.lines().nth(10).is_some_and(|f| !Path::new(f).exists()))
+                            .unwrap_or(true)
+                    })
+                })
                 .unwrap_or(true)
         })
     });

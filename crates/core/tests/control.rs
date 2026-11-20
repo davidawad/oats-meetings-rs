@@ -433,7 +433,16 @@ fn privacy_toggle_warns_when_hide_method_is_none() {
 
 #[test]
 fn privacy_toggle_and_window_actions() {
-    let rig = Rig::new();
+    let hide_method = if cfg!(target_os = "macos") {
+        "sharing_type"
+    } else if cfg!(target_os = "windows") {
+        "display_affinity"
+    } else {
+        "none"
+    };
+    let rig = Rig::with_config(Some(&format!(
+        "[privacy]\nhide_method = \"{hide_method}\"\n"
+    )));
     let mut c = rig.client();
     let r = c.call("privacy-toggle", Map::new()).unwrap();
     assert_eq!(r["data"]["value"], false); // default is true
